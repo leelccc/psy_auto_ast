@@ -84,3 +84,9 @@
 - Updated internal naming from report editor/sections to record editor/sections for single-session record editing.
 - Kept `生成个案报告` as a full-profile action instead of routing it into the single-session consultation record editor.
 - Updated `docs/prd/session-memory.md` and `task_plan.md` with the single-session record vs full-profile case report distinction.
+- User clarified that every button must form a functional closed loop and no visible button should be meaningless.
+- Added a shared mobile action feedback notice so lightweight prototype actions still explain the resulting state and next step.
+- Wired previously empty controls to navigation, state changes, focused decision flows, or specific feedback: reminder cards, recording cancel/pause, archive steps, archive confirmation, profile segment filters, profile creation, legal files, per-session action buttons, case report generation, transcript editing actions, record editor draft/formal/save actions, authorization actions, intelligent supervision, information articles, account settings, and data/privacy rows.
+- Converted several visually actionable rows/cards from static views into pressable controls where appropriate.
+- Audited `App.tsx` for empty `onPress={() => undefined}` handlers; none remain.
+- Verified via browser DOM checks that representative buttons show feedback: home reminder, recording cancel, session scale entry, and case report generation.

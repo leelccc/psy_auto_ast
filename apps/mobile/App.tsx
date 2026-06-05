@@ -27,6 +27,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  X,
   Trash2,
   UserRound,
 } from "lucide-react-native";
@@ -66,6 +67,7 @@ type QuickView =
   | "recordingDetail"
   | "recordEditor"
   | "privacyConsent";
+type Notice = { title: string; detail: string };
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
   { key: "home", label: "首页", icon: Home },
@@ -77,8 +79,10 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
 export default function App() {
   const [tab, setTab] = useState<TabKey>("home");
   const [quickView, setQuickView] = useState<QuickView>("overview");
+  const [notice, setNotice] = useState<Notice | null>(null);
   const { width } = useWindowDimensions();
   const isCompact = width < 430;
+  const showNotice = (title: string, detail: string) => setNotice({ title, detail });
 
   const title = useMemo(() => {
     if (quickView === "recording") return "正在录音";
@@ -100,21 +104,21 @@ export default function App() {
     <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
       <View style={[styles.phoneShell, isCompact && styles.phoneShellCompact]}>
-        <Header title={title} quickView={quickView} onBack={() => setQuickView("overview")} />
+        <Header title={title} quickView={quickView} onBack={() => setQuickView("overview")} onNotice={showNotice} />
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {tab === "home" && quickView === "overview" ? <HomeScreen onOpen={setQuickView} onOpenProfiles={() => setTab("profiles")} /> : null}
-          {quickView === "recording" ? <RecordingScreen onArchive={() => setQuickView("archive")} /> : null}
-          {quickView === "recordingRecords" ? <RecordingRecordsScreen onOpenDetail={() => setQuickView("recordingDetail")} /> : null}
-          {quickView === "archive" ? <ArchiveScreen /> : null}
-          {quickView === "supervision" ? <SupervisionScreen /> : null}
-          {quickView === "profileDetail" ? <ProfileDetailScreen onOpenRecord={() => setQuickView("recordEditor")} /> : null}
-          {quickView === "profileCreate" ? <ProfileCreateScreen /> : null}
-          {quickView === "recordingDetail" ? <RecordingDetailScreen onOpenRecord={() => setQuickView("recordEditor")} /> : null}
-          {quickView === "recordEditor" ? <RecordEditorScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
-          {quickView === "privacyConsent" ? <PrivacyConsentScreen /> : null}
-          {tab === "profiles" && quickView === "overview" ? <ProfilesScreen onOpenDetail={() => setQuickView("profileDetail")} onCreate={() => setQuickView("profileCreate")} /> : null}
-          {tab === "recordings" && quickView === "overview" ? <ContentScreen /> : null}
-          {tab === "account" && quickView === "overview" ? <AccountScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
+          {tab === "home" && quickView === "overview" ? <HomeScreen onOpen={setQuickView} onOpenProfiles={() => setTab("profiles")} onNotice={showNotice} /> : null}
+          {quickView === "recording" ? <RecordingScreen onArchive={() => setQuickView("archive")} onNotice={showNotice} /> : null}
+          {quickView === "recordingRecords" ? <RecordingRecordsScreen onOpenDetail={() => setQuickView("recordingDetail")} onNotice={showNotice} /> : null}
+          {quickView === "archive" ? <ArchiveScreen onNotice={showNotice} /> : null}
+          {quickView === "supervision" ? <SupervisionScreen onNotice={showNotice} /> : null}
+          {quickView === "profileDetail" ? <ProfileDetailScreen onOpenRecord={() => setQuickView("recordEditor")} onNotice={showNotice} /> : null}
+          {quickView === "profileCreate" ? <ProfileCreateScreen onNotice={showNotice} /> : null}
+          {quickView === "recordingDetail" ? <RecordingDetailScreen onOpenRecord={() => setQuickView("recordEditor")} onNotice={showNotice} onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
+          {quickView === "recordEditor" ? <RecordEditorScreen onOpenPrivacy={() => setQuickView("privacyConsent")} onNotice={showNotice} /> : null}
+          {quickView === "privacyConsent" ? <PrivacyConsentScreen onNotice={showNotice} /> : null}
+          {tab === "profiles" && quickView === "overview" ? <ProfilesScreen onOpenDetail={() => setQuickView("profileDetail")} onCreate={() => setQuickView("profileCreate")} onNotice={showNotice} /> : null}
+          {tab === "recordings" && quickView === "overview" ? <ContentScreen onNotice={showNotice} /> : null}
+          {tab === "account" && quickView === "overview" ? <AccountScreen onOpenPrivacy={() => setQuickView("privacyConsent")} onNotice={showNotice} /> : null}
         </ScrollView>
         {quickView !== "privacyConsent" ? (
           <BottomTabs
@@ -125,12 +129,13 @@ export default function App() {
             }}
           />
         ) : null}
+        {notice ? <ActionNotice notice={notice} onClose={() => setNotice(null)} /> : null}
       </View>
     </SafeAreaView>
   );
 }
 
-function Header({ title, quickView, onBack }: { title: string; quickView: QuickView; onBack: () => void }) {
+function Header({ title, quickView, onBack, onNotice }: { title: string; quickView: QuickView; onBack: () => void; onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.header}>
       <View>
@@ -138,7 +143,7 @@ function Header({ title, quickView, onBack }: { title: string; quickView: QuickV
         <Text style={styles.screenTitle}>{title}</Text>
       </View>
       {quickView === "overview" ? (
-        <TouchableOpacity style={styles.roundButton} activeOpacity={0.75}>
+        <TouchableOpacity style={styles.roundButton} activeOpacity={0.75} onPress={() => onNotice("提醒中心", "今日还有 2 个安排待处理，可从首页近期任务继续查看。")}>
           <Bell size={19} color={colors.clayDark} />
         </TouchableOpacity>
       ) : (
@@ -150,7 +155,7 @@ function Header({ title, quickView, onBack }: { title: string; quickView: QuickV
   );
 }
 
-function HomeScreen({ onOpen, onOpenProfiles }: { onOpen: (view: QuickView) => void; onOpenProfiles: () => void }) {
+function HomeScreen({ onOpen, onOpenProfiles, onNotice }: { onOpen: (view: QuickView) => void; onOpenProfiles: () => void; onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.hero}>
@@ -173,7 +178,7 @@ function HomeScreen({ onOpen, onOpenProfiles }: { onOpen: (view: QuickView) => v
         <QuickAction icon={Sparkles} label="智能督导" detail="仅读取已选资料" onPress={() => onOpen("supervision")} />
       </View>
 
-      <SectionHeader title="本周统计" action="全部" />
+      <SectionHeader title="本周统计" action="全部" onAction={() => onNotice("本周统计", "正式版本会进入统计明细，按咨询、受督、督导维度查看时长。")} />
       <View style={styles.metricRow}>
         {metrics.map((item) => (
           <View key={item.label} style={styles.metricCard}>
@@ -183,10 +188,10 @@ function HomeScreen({ onOpen, onOpenProfiles }: { onOpen: (view: QuickView) => v
         ))}
       </View>
 
-      <SectionHeader title="近期任务" action="7 天" />
+      <SectionHeader title="近期任务" action="7 天" onAction={() => onNotice("近期任务筛选", "当前显示未来 7 天安排，可在日程页切换更长范围。")} />
       <View style={styles.cardStack}>
         {reminders.map((item) => (
-          <View key={item.title} style={styles.listCard}>
+          <TouchableOpacity key={item.title} style={styles.listCard} activeOpacity={0.78} onPress={() => onNotice("打开日程详情", `${item.title}：${item.kind}，${item.privacy}。`)}>
             <View style={styles.timePill}>
               <Text style={styles.timePillText}>{item.time}</Text>
             </View>
@@ -195,27 +200,31 @@ function HomeScreen({ onOpen, onOpenProfiles }: { onOpen: (view: QuickView) => v
               <Text style={styles.listMeta}>{item.kind} · {item.privacy}</Text>
             </View>
             <ChevronRight size={18} color={colors.subtle} />
-          </View>
+          </TouchableOpacity>
         ))}
       </View>
     </View>
   );
 }
 
-function RecordingScreen({ onArchive }: { onArchive: () => void }) {
+function RecordingScreen({ onArchive, onNotice }: { onArchive: () => void; onNotice: (title: string, detail: string) => void }) {
+  const [paused, setPaused] = useState(true);
   return (
     <View style={styles.stack}>
       <View style={styles.recorderPanel}>
         <View style={styles.recorderRing}>
           <View style={styles.recorderDot} />
           <Text style={styles.recorderTime}>00:42:18</Text>
-          <Text style={styles.recorderState}>暂停中</Text>
+          <Text style={styles.recorderState}>{paused ? "暂停中" : "录音中"}</Text>
         </View>
         <View style={styles.controlRow}>
-          <TouchableOpacity style={styles.cancelButton} activeOpacity={0.75}>
+          <TouchableOpacity style={styles.cancelButton} activeOpacity={0.75} onPress={() => onNotice("取消录音确认", "当前录音尚未保存；正式版本会弹出二次确认，避免误删原始资料。")}>
             <Text style={styles.cancelButtonText}>取消</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.pauseButton} activeOpacity={0.75}>
+          <TouchableOpacity style={styles.pauseButton} activeOpacity={0.75} onPress={() => {
+            setPaused((current) => !current);
+            onNotice(paused ? "继续录音" : "录音已暂停", paused ? "计时继续，保存后进入归档确认。" : "可继续录制、取消或保存进入归档。");
+          }}>
             <Pause size={22} color="#FFF9F3" fill="#FFF9F3" />
           </TouchableOpacity>
           <TouchableOpacity style={styles.saveButton} activeOpacity={0.75} onPress={onArchive}>
@@ -239,7 +248,7 @@ function RecordingScreen({ onArchive }: { onArchive: () => void }) {
   );
 }
 
-function RecordingRecordsScreen({ onOpenDetail }: { onOpenDetail: () => void }) {
+function RecordingRecordsScreen({ onOpenDetail, onNotice }: { onOpenDetail: () => void; onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.poster}>
@@ -247,7 +256,7 @@ function RecordingRecordsScreen({ onOpenDetail }: { onOpenDetail: () => void }) 
         <Text style={styles.posterTitle}>录音记录</Text>
         <Text style={styles.posterCopy}>集中查看待归档、生成中和可查看的录音，不和正在录音流程混在一起。</Text>
       </View>
-      <SectionHeader title="录音列表" action="上传" />
+      <SectionHeader title="录音列表" action="上传" onAction={() => onNotice("上传录音", "上传后会进入录音记录列表，归档前不读取任何档案资料。")} />
       <View style={styles.cardStack}>
         {recordings.map((item) => (
           <TouchableOpacity key={item.title} style={styles.recordingCard} activeOpacity={0.78} onPress={onOpenDetail}>
@@ -270,7 +279,7 @@ function RecordingRecordsScreen({ onOpenDetail }: { onOpenDetail: () => void }) 
   );
 }
 
-function ArchiveScreen() {
+function ArchiveScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.noticeCard}>
@@ -280,19 +289,19 @@ function ArchiveScreen() {
           <Text style={styles.listMeta}>52:18 · AI 正在生成章节速览</Text>
         </View>
       </View>
-      <StepRow index="1" title="身份类型" value="来访者档案" />
-      <StepRow index="2" title="目标档案" value="陈雨 · 进行中" />
-      <StepRow index="3" title="记录次数" value="第 6 次咨询" />
+      <StepRow index="1" title="身份类型" value="来访者档案" onPress={() => onNotice("选择身份类型", "可切换为来访者、督导师或受督者；不同身份会影响归档字段。")} />
+      <StepRow index="2" title="目标档案" value="陈雨 · 进行中" onPress={() => onNotice("选择目标档案", "可搜索并选择已有档案，或先创建新档案再归档。")} />
+      <StepRow index="3" title="记录次数" value="第 6 次咨询" onPress={() => onNotice("确认记录次数", "可调整为对应咨询/督导/受督次数，保存后仍可在档案详情中修改。")} />
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>保存与隐私</Text>
         <Text style={styles.privacyCopy}>原始录音云端仅保存 14 天，不支持长期保存。转写和纪要可在生成后单独授权长期保存。</Text>
       </View>
-      <PrimaryButton icon={FolderOpen} label="确认归档" onPress={() => undefined} wide />
+      <PrimaryButton icon={FolderOpen} label="确认归档" onPress={() => onNotice("已进入归档队列", "录音将归入陈雨第 6 次咨询，并开始异步生成转写、纪要和咨询记录材料。")} wide />
     </View>
   );
 }
 
-function ProfilesScreen({ onOpenDetail, onCreate }: { onOpenDetail: () => void; onCreate: () => void }) {
+function ProfilesScreen({ onOpenDetail, onCreate, onNotice }: { onOpenDetail: () => void; onCreate: () => void; onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
       <TouchableOpacity style={styles.createProfileButton} activeOpacity={0.78} onPress={onCreate}>
@@ -304,9 +313,15 @@ function ProfilesScreen({ onOpenDetail, onCreate }: { onOpenDetail: () => void; 
         <Text style={styles.searchPlaceholder}>搜索姓名、编号、状态</Text>
       </View>
       <View style={styles.segmented}>
-        <Text style={[styles.segmentText, styles.segmentActive]}>来访者</Text>
-        <Text style={styles.segmentText}>督导师</Text>
-        <Text style={styles.segmentText}>受督者</Text>
+        <TouchableOpacity style={[styles.segmentButton, styles.segmentActive]} activeOpacity={0.75} onPress={() => onNotice("已筛选来访者", "当前列表显示来访者档案。")}>
+          <Text style={[styles.segmentText, styles.segmentTextActive]}>来访者</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.segmentButton} activeOpacity={0.75} onPress={() => onNotice("已切换到督导师", "正式版本会显示督导师档案列表和受督记录。")}>
+          <Text style={styles.segmentText}>督导师</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.segmentButton} activeOpacity={0.75} onPress={() => onNotice("已切换到受督者", "正式版本会显示受督者档案列表和督导记录。")}>
+          <Text style={styles.segmentText}>受督者</Text>
+        </TouchableOpacity>
       </View>
       <View style={styles.cardStack}>
         {profiles.map((item) => (
@@ -330,7 +345,7 @@ function ProfilesScreen({ onOpenDetail, onCreate }: { onOpenDetail: () => void; 
   );
 }
 
-function ProfileCreateScreen() {
+function ProfileCreateScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
   const [kind, setKind] = useState<"client" | "supervisor" | "supervisee">("client");
   const fields = {
     client: ["姓名 / 昵称", "联系方式", "主诉与来访目标", "紧急联系人", "知情同意书"],
@@ -358,12 +373,12 @@ function ProfileCreateScreen() {
         <Text style={styles.privacyTitle}>基础档案长期保存</Text>
         <Text style={styles.privacyCopy}>基础档案信息会长期保存在云端；录音、咨询记录、个案报告、附件等敏感资料仍按 14 天临时保存与主动授权规则处理。</Text>
       </View>
-      <PrimaryButton icon={FolderOpen} label="创建档案" onPress={() => undefined} wide />
+      <PrimaryButton icon={FolderOpen} label="创建档案" onPress={() => onNotice("档案草稿已创建", `已按当前身份生成字段清单，下一步进入完整${kind === "client" ? "来访者" : kind === "supervisor" ? "督导师" : "受督者"}档案表单。`)} wide />
     </View>
   );
 }
 
-function ProfileDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
+function ProfileDetailScreen({ onOpenRecord, onNotice }: { onOpenRecord: () => void; onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.profileHeaderCard}>
@@ -384,13 +399,13 @@ function ProfileDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
         </View>
       </View>
 
-      <SectionHeader title="法律及伦理文件" action="上传" />
+      <SectionHeader title="法律及伦理文件" action="上传" onAction={() => onNotice("上传伦理文件", "可上传知情同意书、咨询协议等覆盖型文件，新版本会替换旧版本。")} />
       <View style={styles.legalGrid}>
-        <LegalFile title="知情同意书" meta="已签署 · 第 2 版" icon={FileText} />
-        <LegalFile title="咨询协议" meta="已签署 · 6月3日" icon={ClipboardList} />
+        <LegalFile title="知情同意书" meta="已签署 · 第 2 版" icon={FileText} onPress={() => onNotice("查看知情同意书", "可查看当前版本，也可从上传入口覆盖为新版本。")} />
+        <LegalFile title="咨询协议" meta="已签署 · 6月3日" icon={ClipboardList} onPress={() => onNotice("查看咨询协议", "可查看协议文件；重新上传会覆盖旧文件。")} />
       </View>
 
-      <SectionHeader title="咨询历程" action="新增记录" />
+      <SectionHeader title="咨询历程" action="新增记录" onAction={() => onNotice("新增咨询记录", "将创建下一次咨询卡片，可继续添加录音、量表、作业和其他材料。")} />
       <SessionCard
         index="第 6 次"
         time="2026年6月5日 10:00"
@@ -402,6 +417,7 @@ function ProfileDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
         homework="已布置"
         other="1 项"
         onOpenRecord={onOpenRecord}
+        onNotice={onNotice}
       />
       <SessionCard
         index="第 5 次"
@@ -414,6 +430,7 @@ function ProfileDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
         homework="已提交"
         other="无"
         onOpenRecord={onOpenRecord}
+        onNotice={onNotice}
       />
 
       <View style={styles.privacyPanel}>
@@ -421,12 +438,12 @@ function ProfileDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
         <Text style={styles.privacyCopy}>录音只能临时保存 14 天；记录、量表、作业和其他附件可在对应卡片内主动授权长期保存。草稿保存为正式版后，正式版不可直接编辑。</Text>
       </View>
 
-      <PrimaryButton icon={Sparkles} label="生成个案报告" onPress={() => undefined} wide />
+      <PrimaryButton icon={Sparkles} label="生成个案报告" onPress={() => onNotice("个案报告生成范围", "将基于该档案下所有咨询记录、量表变化、作业和附件生成，不属于单次咨询。")} wide />
     </View>
   );
 }
 
-function RecordingDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
+function RecordingDetailScreen({ onOpenRecord, onNotice, onOpenPrivacy }: { onOpenRecord: () => void; onNotice: (title: string, detail: string) => void; onOpenPrivacy: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.noticeCard}>
@@ -444,19 +461,19 @@ function RecordingDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
         </View>
         <Text style={styles.summaryCopy}>本次来访者主要围绕睡眠下降、工作评价焦虑和关系议题展开。咨询师进行了事实、推测与情绪反应的区分。</Text>
         <View style={styles.inlineActions}>
-          <GhostButton icon={RefreshCcw} label="重新生成" onPress={() => undefined} />
+          <GhostButton icon={RefreshCcw} label="重新生成" onPress={() => onNotice("纪要重新生成", "会基于最新转写、发言人和章节校对结果覆盖当前纪要。")} />
           <PrimaryButton icon={Edit3} label="生成咨询记录" onPress={onOpenRecord} />
         </View>
       </View>
 
-      <SectionHeader title="章节速览" action="编辑" />
+      <SectionHeader title="章节速览" action="编辑" onAction={() => onNotice("章节编辑", "可调整章节标题、时间段和摘要；保存后同步到录音纪要。")} />
       <View style={styles.cardStack}>
         {summaryChapters.map((item) => (
           <ChapterRow key={item.time} time={item.time} title={item.title} current={item.current} />
         ))}
       </View>
 
-      <SectionHeader title="转写片段" action="完整文本" />
+      <SectionHeader title="转写片段" action="完整文本" onAction={() => onNotice("打开完整转写", "完整文本页可逐段校对发言人和内容，并作为咨询记录生成材料。")} />
       <View style={styles.transcriptTools}>
         <View style={styles.transcriptToolHeader}>
           <Text style={styles.transcriptToolTitle}>转写校对</Text>
@@ -478,14 +495,14 @@ function RecordingDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
       </View>
 
       <View style={styles.exportPanel}>
-        <DataRow icon={Download} title="导出 PDF / Word" value="纪要与转写均可导出" />
-        <DataRow icon={ShieldCheck} title="长期保存授权" value="转写与纪要可授权，原始录音不可授权" />
+        <DataRow icon={Download} title="导出 PDF / Word" value="纪要与转写均可导出" onPress={() => onNotice("导出已准备", "将导出当前纪要和转写，不包含原始录音文件。")} />
+        <DataRow icon={ShieldCheck} title="长期保存授权" value="转写与纪要可授权，原始录音不可授权" onPress={onOpenPrivacy} />
       </View>
     </View>
   );
 }
 
-function RecordEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
+function RecordEditorScreen({ onOpenPrivacy, onNotice }: { onOpenPrivacy: () => void; onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.editorHeader}>
@@ -501,8 +518,8 @@ function RecordEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
       </View>
 
       <View style={styles.editorToolbar}>
-        <GhostButton icon={History} label="草稿" onPress={() => undefined} />
-        <GhostButton icon={FileText} label="正式版" onPress={() => undefined} />
+        <GhostButton icon={History} label="草稿" onPress={() => onNotice("当前为草稿", "草稿可继续编辑，保存为正式版前不会替换正式记录。")} />
+        <GhostButton icon={FileText} label="正式版" onPress={() => onNotice("正式版规则", "正式版不可直接编辑；修改正式版时会先复制为草稿。")} />
       </View>
 
       <View style={styles.editorStatusGrid}>
@@ -522,14 +539,14 @@ function RecordEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
       ))}
 
       <View style={styles.savePanel}>
-        <PrimaryButton icon={Save} label="保存为正式版" onPress={() => undefined} wide />
+        <PrimaryButton icon={Save} label="保存为正式版" onPress={() => onNotice("咨询记录已保存为正式版", "本次咨询记录会进入档案；后续修改需先复制为草稿。")} wide />
         <GhostButton icon={ShieldCheck} label="授权长期保存草稿与正式版" onPress={onOpenPrivacy} />
       </View>
     </View>
   );
 }
 
-function PrivacyConsentScreen() {
+function PrivacyConsentScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
   const [selected, setSelected] = useState<string[]>([]);
   const toggleConsent = (title: string) => {
     setSelected((current) => (current.includes(title) ? current.filter((item) => item !== title) : [...current, title]));
@@ -566,10 +583,15 @@ function PrivacyConsentScreen() {
         </View>
 
         <View style={styles.consentFooter}>
-          <TouchableOpacity style={styles.secondaryWideButton} activeOpacity={0.78}>
+          <TouchableOpacity style={styles.secondaryWideButton} activeOpacity={0.78} onPress={() => onNotice("暂不授权", "资料仍按 14 天临时保存规则处理，可在销毁前回到数据与隐私重新授权。")}>
             <Text style={styles.secondaryWideText}>暂不授权</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.disabledWideButton, hasSelected && styles.enabledWideButton]} activeOpacity={0.78} disabled={!hasSelected}>
+          <TouchableOpacity
+            style={[styles.disabledWideButton, hasSelected && styles.enabledWideButton]}
+            activeOpacity={0.78}
+            disabled={!hasSelected}
+            onPress={() => onNotice("授权已记录", `已授权 ${selected.length} 项资料长期保存，可在数据与隐私中撤回。`)}
+          >
             <Text style={[styles.disabledWideText, hasSelected && styles.enabledWideText]}>{hasSelected ? `确认授权 ${selected.length} 项` : "需手动勾选"}</Text>
           </TouchableOpacity>
         </View>
@@ -578,20 +600,20 @@ function PrivacyConsentScreen() {
   );
 }
 
-function SupervisionScreen() {
+function SupervisionScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.aiPanel}>
         <Sparkles size={24} color={colors.clayDark} />
         <Text style={styles.aiTitle}>本次会话未添加资料</Text>
         <Text style={styles.aiCopy}>AI 不会读取任何档案内容。添加资料后，回答会显示引用来源。</Text>
-        <GhostButton icon={Plus} label="添加资料" onPress={() => undefined} />
+        <GhostButton icon={Plus} label="添加资料" onPress={() => onNotice("选择督导上下文", "可从档案、咨询记录、量表、作业和附件中手动选择；未选择时 AI 不读取资料。")} />
       </View>
       <ChatBubble align="left" text="可以帮我整理一个适合带去督导的问题清单吗？" />
       <ChatBubble align="right" text="可以。请先选择要参考的档案、咨询记录、个案报告或附件；未添加资料时，我只能提供通用整理框架。" />
       <View style={styles.composer}>
         <Text style={styles.composerText}>输入想讨论的主题</Text>
-        <TouchableOpacity style={styles.sendButton} activeOpacity={0.75}>
+        <TouchableOpacity style={styles.sendButton} activeOpacity={0.75} onPress={() => onNotice("已发送到智能督导", "当前未添加资料，AI 将只提供通用督导准备框架。")}>
           <Play size={17} color="#FFF9F3" fill="#FFF9F3" />
         </TouchableOpacity>
       </View>
@@ -599,7 +621,7 @@ function SupervisionScreen() {
   );
 }
 
-function ContentScreen() {
+function ContentScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.poster}>
@@ -607,18 +629,18 @@ function ContentScreen() {
         <Text style={styles.posterTitle}>专业资讯</Text>
         <Text style={styles.posterCopy}>记录书写、隐私伦理、督导准备和风险识别的轻量参考。</Text>
       </View>
-      <SectionHeader title="书写参考" action="更多" />
-      <ArticleRow title="如何准备一次有效督导" tag="督导" />
-      <ArticleRow title="咨询资料保存的边界" tag="隐私" />
-      <ArticleRow title="危机风险记录的提醒" tag="安全" />
+      <SectionHeader title="书写参考" action="更多" onAction={() => onNotice("资讯列表", "正式版本会进入完整资讯栏目，前期保留轻量内容。")} />
+      <ArticleRow title="如何准备一次有效督导" tag="督导" onPress={() => onNotice("打开资讯", "文章将说明如何从咨询记录中提炼督导问题。")} />
+      <ArticleRow title="咨询资料保存的边界" tag="隐私" onPress={() => onNotice("打开资讯", "文章将解释 14 天临时保存、长期授权和撤回授权。")} />
+      <ArticleRow title="危机风险记录的提醒" tag="安全" onPress={() => onNotice("打开资讯", "文章将提示危机风险记录的必要字段和边界。")} />
     </View>
   );
 }
 
-function AccountScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
+function AccountScreen({ onOpenPrivacy, onNotice }: { onOpenPrivacy: () => void; onNotice: (title: string, detail: string) => void }) {
   return (
     <View style={styles.stack}>
-      <View style={styles.accountCard}>
+      <TouchableOpacity style={styles.accountCard} activeOpacity={0.78} onPress={() => onNotice("个人资料", "可编辑展示身份、专业方向和账号资料；身份展示不影响功能权限。")}>
         <View style={styles.avatarLarge}>
           <Text style={styles.avatarLargeText}>林</Text>
         </View>
@@ -627,8 +649,8 @@ function AccountScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
           <Text style={styles.listMeta}>心理咨询师 · 个人版</Text>
         </View>
         <Settings size={20} color={colors.subtle} />
-      </View>
-      <SectionHeader title="数据与隐私" action="查看" />
+      </TouchableOpacity>
+      <SectionHeader title="数据与隐私" action="查看" onAction={onOpenPrivacy} />
       <View style={styles.cardStack}>
         {privacyResources.map((item) => (
           <TouchableOpacity key={item.title} style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
@@ -641,11 +663,11 @@ function AccountScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
           </TouchableOpacity>
         ))}
       </View>
-      <SectionHeader title="安全" action="设置" />
+      <SectionHeader title="安全" action="设置" onAction={() => onNotice("安全设置", "可设置档案访问密码、日历隐私标题和账号安全选项。")} />
       <View style={styles.settingsList}>
-        <SettingsRow icon={LockKeyhole} title="档案访问密码" value="三类档案独立设置" />
-        <SettingsRow icon={CalendarDays} title="手机日历同步" value="隐私标题模式关闭" />
-        <SettingsRow icon={ShieldCheck} title="账号安全" value="邮箱登录" />
+        <SettingsRow icon={LockKeyhole} title="档案访问密码" value="三类档案独立设置" onPress={() => onNotice("档案访问密码", "可为来访者、督导师、受督者档案分别设置访问密码。")} />
+        <SettingsRow icon={CalendarDays} title="手机日历同步" value="隐私标题模式关闭" onPress={() => onNotice("手机日历同步", "可开启全局同步，也可为单条日程关闭同步或使用隐私标题。")} />
+        <SettingsRow icon={ShieldCheck} title="账号安全" value="邮箱登录" onPress={() => onNotice("账号安全", "可管理邮箱登录、账号注销和全部云端资料删除。")} />
       </View>
     </View>
   );
@@ -668,11 +690,17 @@ function BottomTabs({ active, onChange }: { active: TabKey; onChange: (key: TabK
   );
 }
 
-function SectionHeader({ title, action }: { title: string; action: string }) {
+function SectionHeader({ title, action, onAction }: { title: string; action: string; onAction?: () => void }) {
   return (
     <View style={styles.sectionHeader}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <Text style={styles.sectionAction}>{action}</Text>
+      {onAction ? (
+        <TouchableOpacity activeOpacity={0.75} onPress={onAction}>
+          <Text style={styles.sectionAction}>{action}</Text>
+        </TouchableOpacity>
+      ) : (
+        <Text style={styles.sectionAction}>{action}</Text>
+      )}
     </View>
   );
 }
@@ -705,13 +733,28 @@ function QuickAction({ icon: Icon, label, detail, onPress }: { icon: typeof Mic;
   );
 }
 
+function ActionNotice({ notice, onClose }: { notice: Notice; onClose: () => void }) {
+  return (
+    <View style={styles.noticeToast}>
+      <CheckCircle2 size={19} color={colors.sageDark} />
+      <View style={styles.listBody}>
+        <Text style={styles.noticeToastTitle}>{notice.title}</Text>
+        <Text style={styles.noticeToastDetail}>{notice.detail}</Text>
+      </View>
+      <TouchableOpacity style={styles.noticeToastClose} activeOpacity={0.75} onPress={onClose}>
+        <X size={16} color={colors.muted} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function Badge({ label, tone }: { label: string; tone: "warm" | "green" | "blue" }) {
   return <Text style={[styles.badge, styles[`badge_${tone}`]]}>{label}</Text>;
 }
 
-function StepRow({ index, title, value }: { index: string; title: string; value: string }) {
+function StepRow({ index, title, value, onPress }: { index: string; title: string; value: string; onPress: () => void }) {
   return (
-    <View style={styles.stepRow}>
+    <TouchableOpacity style={styles.stepRow} activeOpacity={0.78} onPress={onPress}>
       <View style={styles.stepIndex}>
         <Text style={styles.stepIndexText}>{index}</Text>
       </View>
@@ -720,7 +763,7 @@ function StepRow({ index, title, value }: { index: string; title: string; value:
         <Text style={styles.listTitle}>{value}</Text>
       </View>
       <ChevronRight size={18} color={colors.subtle} />
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -732,25 +775,25 @@ function ChatBubble({ align, text }: { align: "left" | "right"; text: string }) 
   );
 }
 
-function ArticleRow({ title, tag }: { title: string; tag: string }) {
+function ArticleRow({ title, tag, onPress }: { title: string; tag: string; onPress: () => void }) {
   return (
-    <View style={styles.articleRow}>
+    <TouchableOpacity style={styles.articleRow} activeOpacity={0.78} onPress={onPress}>
       <Badge label={tag} tone="blue" />
       <Text style={styles.articleTitle}>{title}</Text>
       <ChevronRight size={18} color={colors.subtle} />
-    </View>
+    </TouchableOpacity>
   );
 }
 
-function SettingsRow({ icon: Icon, title, value }: { icon: typeof LockKeyhole; title: string; value: string }) {
+function SettingsRow({ icon: Icon, title, value, onPress }: { icon: typeof LockKeyhole; title: string; value: string; onPress: () => void }) {
   return (
-    <View style={styles.settingsRow}>
+    <TouchableOpacity style={styles.settingsRow} activeOpacity={0.78} onPress={onPress}>
       <Icon size={19} color={colors.clayDark} />
       <View style={styles.listBody}>
         <Text style={styles.listTitle}>{title}</Text>
         <Text style={styles.listMeta}>{value}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -763,9 +806,9 @@ function IdentityOption({ active, title, detail, onPress }: { active: boolean; t
   );
 }
 
-function LegalFile({ title, meta, icon: Icon }: { title: string; meta: string; icon: typeof FileText }) {
+function LegalFile({ title, meta, icon: Icon, onPress }: { title: string; meta: string; icon: typeof FileText; onPress: () => void }) {
   return (
-    <View style={styles.legalFile}>
+    <TouchableOpacity style={styles.legalFile} activeOpacity={0.78} onPress={onPress}>
       <View style={styles.legalIcon}>
         <Icon size={19} color={colors.clayDark} />
       </View>
@@ -773,7 +816,7 @@ function LegalFile({ title, meta, icon: Icon }: { title: string; meta: string; i
         <Text style={styles.listTitle}>{title}</Text>
         <Text style={styles.listMeta}>{meta}</Text>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -788,6 +831,7 @@ function SessionCard({
   homework,
   other,
   onOpenRecord,
+  onNotice,
 }: {
   index: string;
   time: string;
@@ -799,6 +843,7 @@ function SessionCard({
   homework: string;
   other: string;
   onOpenRecord: () => void;
+  onNotice: (title: string, detail: string) => void;
 }) {
   return (
     <View style={styles.sessionCard}>
@@ -818,11 +863,11 @@ function SessionCard({
       </View>
 
       <View style={styles.sessionActionGrid}>
-        <SessionAction icon={Mic} label="录音" status={recording} tone={recording.includes("剩余") ? "warm" : "muted"} />
-        <SessionAction icon={Edit3} label="记录" status={record} tone={record === "草稿" ? "blue" : "green"} />
-        <SessionAction icon={ChartNoAxesColumn} label="量表" status={scale} tone={scale === "未上传" ? "muted" : "green"} />
-        <SessionAction icon={ClipboardList} label="作业" status={homework} tone={homework.includes("已") ? "green" : "muted"} />
-        <SessionAction icon={Plus} label="其他" status={other} tone={other === "无" ? "muted" : "blue"} />
+        <SessionAction icon={Mic} label="录音" status={recording} tone={recording.includes("剩余") ? "warm" : "muted"} onPress={() => onNotice("录音资料", recording.includes("剩余") ? "可查看纪要、下载原始录音；原始录音到期自动销毁。" : "原始录音已按规则销毁，保留记录与授权资料。")} />
+        <SessionAction icon={Edit3} label="记录" status={record} tone={record === "草稿" ? "blue" : "green"} onPress={onOpenRecord} />
+        <SessionAction icon={ChartNoAxesColumn} label="量表" status={scale} tone={scale === "未上传" ? "muted" : "green"} onPress={() => onNotice("量表资料", scale === "未上传" ? "可上传本次量表，之后参与本次咨询记录生成。" : "可查看量表结果，并纳入本次咨询记录材料。")} />
+        <SessionAction icon={ClipboardList} label="作业" status={homework} tone={homework.includes("已") ? "green" : "muted"} onPress={() => onNotice("作业资料", homework.includes("已") ? "可查看作业内容，并纳入本次咨询记录材料。" : "可添加本次咨询作业，后续可参与记录生成。")} />
+        <SessionAction icon={Plus} label="其他" status={other} tone={other === "无" ? "muted" : "blue"} onPress={() => onNotice("其他资料", other === "无" ? "可添加图片、PDF 或备注作为本次材料。" : "可查看其他附件/备注，并选择是否授权长期保存。")} />
       </View>
 
       <View style={styles.sessionFooter}>
@@ -836,9 +881,9 @@ function SessionCard({
   );
 }
 
-function SessionAction({ icon: Icon, label, status, tone }: { icon: typeof Mic; label: string; status: string; tone: "warm" | "green" | "blue" | "muted" }) {
+function SessionAction({ icon: Icon, label, status, tone, onPress }: { icon: typeof Mic; label: string; status: string; tone: "warm" | "green" | "blue" | "muted"; onPress: () => void }) {
   return (
-    <TouchableOpacity style={styles.sessionAction} activeOpacity={0.78}>
+    <TouchableOpacity style={styles.sessionAction} activeOpacity={0.78} onPress={onPress}>
       <View style={[styles.sessionActionIcon, styles[`sessionActionIcon_${tone}`]]}>
         <Icon size={18} color={tone === "muted" ? colors.subtle : colors.clayDark} />
       </View>
@@ -857,14 +902,26 @@ function MiniStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DataRow({ icon: Icon, title, value }: { icon: typeof FileText; title: string; value: string }) {
-  return (
-    <View style={styles.dataRow}>
+function DataRow({ icon: Icon, title, value, onPress }: { icon: typeof FileText; title: string; value: string; onPress?: () => void }) {
+  const content = (
+    <>
       <Icon size={18} color={colors.clayDark} />
       <View style={styles.listBody}>
         <Text style={styles.listTitle}>{title}</Text>
         <Text style={styles.listMeta}>{value}</Text>
       </View>
+    </>
+  );
+  if (onPress) {
+    return (
+      <TouchableOpacity style={styles.dataRow} activeOpacity={0.78} onPress={onPress}>
+        {content}
+      </TouchableOpacity>
+    );
+  }
+  return (
+    <View style={styles.dataRow}>
+      {content}
     </View>
   );
 }
@@ -1330,19 +1387,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceSoft,
     flexDirection: "row",
   },
-  segmentText: {
+  segmentButton: {
     flex: 1,
     borderRadius: radius.sm,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  segmentText: {
     textAlign: "center",
-    textAlignVertical: "center",
     color: colors.muted,
     fontSize: 13,
-    lineHeight: 34,
     fontWeight: "800",
   },
   segmentActive: {
-    color: colors.clayDark,
     backgroundColor: colors.surface,
+  },
+  segmentTextActive: {
+    color: colors.clayDark,
   },
   profileCard: {
     borderRadius: radius.sm,
@@ -1957,6 +2018,40 @@ const styles = StyleSheet.create({
   },
   enabledWideText: {
     color: "#FFF9F3",
+  },
+  noticeToast: {
+    position: "absolute",
+    left: 14,
+    right: 14,
+    bottom: 90,
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: "rgba(255,253,249,0.98)",
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    ...shadow.soft,
+  },
+  noticeToastTitle: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  noticeToastDetail: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  noticeToastClose: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
   },
   avatar: {
     width: 44,
