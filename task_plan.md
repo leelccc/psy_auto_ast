@@ -6,7 +6,7 @@ Build a minimal backend core first, then a polished mobile frontend prototype th
 
 ## Current Phase
 
-Complete.
+Complete. Latest follow-up polish pass also complete.
 
 ## Phases
 
@@ -23,6 +23,8 @@ Complete.
 - [x] Phase 10: Scaffold mobile frontend app.
 - [x] Phase 11: Build high-fidelity mobile screens for home, recordings, profiles, archive, supervision, privacy, and account.
 - [x] Phase 12: Verify frontend build/rendering and commit.
+- [x] Phase 13: Polish mobile detail workflows for profile detail, recording summary detail, report editing, and data/privacy authorization.
+- [x] Phase 14: Verify polished mobile frontend with tests, typecheck, Expo Web, and web export.
 
 ## Working Files
 
@@ -42,6 +44,8 @@ Complete.
 - Treat `docs/prd/2026-06-05-counselor-assistant-app-prd.md` and `docs/prd/decision-log.md` as the source of product truth.
 - User prefers mobile frontend presentation quality, so backend should stay minimal and unblock UI/API shape rather than becoming a full production implementation now.
 - Backend MVP uses in-memory repositories for speed, with API contracts aligned to the schema/API docs so it can later migrate to SQLAlchemy/PostgreSQL.
+- Mobile frontend detail polish should keep the warm, soft, professional workbench style, but prioritize task clarity over decorative density.
+- Data/privacy authorization UI must show active user choice: no default checked long-term save items, and original recordings remain non-preservable.
 
 ## Errors Encountered
 

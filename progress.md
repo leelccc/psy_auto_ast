@@ -38,3 +38,18 @@
 - Started Expo Web on `http://localhost:8082` and exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
 - Committed mobile prototype with message `feat: add mobile prototype`.
 - Marked Phase 12 complete.
+- Continued mobile frontend polish for the key detail workflows requested by the user.
+- Read `progress.md`, `task_plan.md`, and `docs/prd/session-memory.md` before editing.
+- Added navigable mobile prototype flows for profile detail, recording summary detail, report editing, and data/privacy long-term-save authorization.
+- Updated bottom navigation labels from generic content wording to task-specific `档案` and `纪要`.
+- Added profile detail UI covering sensitive resource status, non-preservable original recording rules, reports, attachments, and timeline.
+- Added recording summary detail UI covering summary, chapter overview, transcript turns, export, regeneration, and report editing entry.
+- Added report editor UI covering draft/formal-version rules, editable report sections, save action, and privacy authorization entry.
+- Added data/privacy authorization popup UI with explicit unchecked consent items, original recording non-preservation copy, risk/revocation explanation, and disabled confirmation until manual selection.
+- Added mock data for attachments, profile timeline, recording chapters, transcript turns, and report sections.
+- Ran frontend tests: `npm test`, result `2 passed`.
+- Ran frontend typecheck: `npm run typecheck`, result passed.
+- Started Expo Web on `http://localhost:8083` because `8082` was already occupied, and visually checked home, profile detail, report editor, authorization popup, and recording summary detail in the in-app browser.
+- Increased mobile scroll bottom padding so deep-page content clears the floating bottom tab bar.
+- Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
+- Marked Phase 14 complete.

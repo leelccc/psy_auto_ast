@@ -3,10 +3,16 @@ import {
   Bell,
   BookOpenText,
   CalendarDays,
+  CheckCircle2,
   ChevronRight,
+  CircleAlert,
   Clock3,
+  ClipboardList,
+  Download,
+  Edit3,
   FileText,
   FolderOpen,
+  History,
   Home,
   LockKeyhole,
   Mic,
@@ -14,33 +20,48 @@ import {
   Pause,
   Play,
   Plus,
+  RefreshCcw,
+  Save,
   Search,
   Settings,
   ShieldCheck,
   Sparkles,
+  Trash2,
   UserRound,
-  UsersRound,
 } from "lucide-react-native";
 import { useMemo, useState } from "react";
 import {
   SafeAreaView,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
   useWindowDimensions,
+  ScrollView,
 } from "react-native";
 
-import { formatBadge, metrics, privacyResources, profiles, recordings, reminders, type TabKey } from "./src/mockData";
+import {
+  attachmentRows,
+  formatBadge,
+  metrics,
+  privacyResources,
+  profileTimeline,
+  profiles,
+  recordings,
+  reminders,
+  reportSections,
+  summaryChapters,
+  transcriptTurns,
+  type TabKey,
+} from "./src/mockData";
 import { colors, radius, shadow } from "./src/theme";
 
-type QuickView = "overview" | "recording" | "archive" | "supervision";
+type QuickView = "overview" | "recording" | "archive" | "supervision" | "profileDetail" | "recordingDetail" | "reportEditor" | "privacyConsent";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
   { key: "home", label: "首页", icon: Home },
-  { key: "profiles", label: "文档", icon: FolderOpen },
-  { key: "recordings", label: "资讯", icon: Newspaper },
+  { key: "profiles", label: "档案", icon: FolderOpen },
+  { key: "recordings", label: "纪要", icon: Newspaper },
   { key: "account", label: "我的", icon: UserRound },
 ];
 
@@ -54,8 +75,12 @@ export default function App() {
     if (quickView === "recording") return "录音记录";
     if (quickView === "archive") return "归档确认";
     if (quickView === "supervision") return "智能督导";
+    if (quickView === "profileDetail") return "档案详情";
+    if (quickView === "recordingDetail") return "录音纪要";
+    if (quickView === "reportEditor") return "报告编辑";
+    if (quickView === "privacyConsent") return "长期保存授权";
     if (tab === "profiles") return "档案库";
-    if (tab === "recordings") return "资讯";
+    if (tab === "recordings") return "录音纪要";
     if (tab === "account") return "我的";
     return "今天要做什么";
   }, [quickView, tab]);
@@ -67,12 +92,16 @@ export default function App() {
         <Header title={title} quickView={quickView} onBack={() => setQuickView("overview")} />
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {tab === "home" && quickView === "overview" ? <HomeScreen onOpen={setQuickView} /> : null}
-          {quickView === "recording" ? <RecordingScreen onArchive={() => setQuickView("archive")} /> : null}
+          {quickView === "recording" ? <RecordingScreen onArchive={() => setQuickView("archive")} onOpenDetail={() => setQuickView("recordingDetail")} /> : null}
           {quickView === "archive" ? <ArchiveScreen /> : null}
           {quickView === "supervision" ? <SupervisionScreen /> : null}
-          {tab === "profiles" && quickView === "overview" ? <ProfilesScreen /> : null}
-          {tab === "recordings" && quickView === "overview" ? <ContentScreen /> : null}
-          {tab === "account" && quickView === "overview" ? <AccountScreen /> : null}
+          {quickView === "profileDetail" ? <ProfileDetailScreen onOpenReport={() => setQuickView("reportEditor")} /> : null}
+          {quickView === "recordingDetail" ? <RecordingDetailScreen onOpenReport={() => setQuickView("reportEditor")} /> : null}
+          {quickView === "reportEditor" ? <ReportEditorScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
+          {quickView === "privacyConsent" ? <PrivacyConsentScreen /> : null}
+          {tab === "profiles" && quickView === "overview" ? <ProfilesScreen onOpenDetail={() => setQuickView("profileDetail")} /> : null}
+          {tab === "recordings" && quickView === "overview" ? <ContentScreen onOpenDetail={() => setQuickView("recordingDetail")} /> : null}
+          {tab === "account" && quickView === "overview" ? <AccountScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
         </ScrollView>
         <BottomTabs
           active={tab}
@@ -159,7 +188,7 @@ function HomeScreen({ onOpen }: { onOpen: (view: QuickView) => void }) {
   );
 }
 
-function RecordingScreen({ onArchive }: { onArchive: () => void }) {
+function RecordingScreen({ onArchive, onOpenDetail }: { onArchive: () => void; onOpenDetail?: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.recorderPanel}>
@@ -184,7 +213,7 @@ function RecordingScreen({ onArchive }: { onArchive: () => void }) {
       <SectionHeader title="录音列表" action="上传" />
       <View style={styles.cardStack}>
         {recordings.map((item) => (
-          <View key={item.title} style={styles.recordingCard}>
+          <TouchableOpacity key={item.title} style={styles.recordingCard} activeOpacity={0.78} onPress={onOpenDetail}>
             <View style={styles.recordingIcon}>
               <FileText size={20} color={colors.clayDark} />
             </View>
@@ -196,7 +225,8 @@ function RecordingScreen({ onArchive }: { onArchive: () => void }) {
                 <Badge label={item.archive} tone={formatBadge(item.archive)} />
               </View>
             </View>
-          </View>
+            <ChevronRight size={18} color={colors.subtle} />
+          </TouchableOpacity>
         ))}
       </View>
     </View>
@@ -225,7 +255,7 @@ function ArchiveScreen() {
   );
 }
 
-function ProfilesScreen() {
+function ProfilesScreen({ onOpenDetail }: { onOpenDetail: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.searchBar}>
@@ -239,7 +269,7 @@ function ProfilesScreen() {
       </View>
       <View style={styles.cardStack}>
         {profiles.map((item) => (
-          <View key={item.name} style={styles.profileCard}>
+          <TouchableOpacity key={item.name} style={styles.profileCard} activeOpacity={0.78} onPress={onOpenDetail}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text>
             </View>
@@ -252,8 +282,202 @@ function ProfilesScreen() {
               </View>
             </View>
             <LockKeyhole size={18} color={colors.subtle} />
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function ProfileDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.detailHero}>
+        <View style={styles.detailHeroTop}>
+          <View style={styles.avatarLarge}>
+            <Text style={styles.avatarLargeText}>陈</Text>
+          </View>
+          <View style={styles.listBody}>
+            <Text style={styles.detailName}>陈雨</Text>
+            <Text style={styles.listMeta}>来访者 · 第 6 次咨询 · 进行中</Text>
+          </View>
+          <Badge label="轻度风险" tone="warm" />
+        </View>
+        <View style={styles.detailStats}>
+          <MiniStat label="下次" value="6月8日" />
+          <MiniStat label="资料" value="7 项" />
+          <MiniStat label="长期" value="2 项" />
+        </View>
+      </View>
+
+      <View style={styles.inlineActions}>
+        <GhostButton icon={CalendarDays} label="设下次咨询" onPress={() => undefined} />
+        <PrimaryButton icon={FileText} label="生成报告" onPress={onOpenReport} />
+      </View>
+
+      <SectionHeader title="敏感资料状态" action="管理" />
+      <View style={styles.cardStack}>
+        <SensitiveResource title="第6次咨询转写" meta="13 天后自动销毁" status="可授权长期保存" tone="blue" />
+        <SensitiveResource title="原始录音" meta="13 天后自动销毁，不支持长期云端保存" status="不可长期保存" tone="warm" />
+        <SensitiveResource title="第5次咨询记录" meta="用户已授权长期保存" status="长期保存" tone="green" />
+      </View>
+
+      <SectionHeader title="报告与纪要" action="全部" />
+      <TouchableOpacity style={styles.reportPreviewCard} activeOpacity={0.78} onPress={onOpenReport}>
+        <View style={styles.reportIcon}>
+          <ClipboardList size={20} color={colors.clayDark} />
+        </View>
+        <View style={styles.listBody}>
+          <Text style={styles.listTitle}>咨询记录草稿</Text>
+          <Text style={styles.listMeta}>基于第6次录音生成 · 尚未保存为正式版</Text>
+        </View>
+        <ChevronRight size={18} color={colors.subtle} />
+      </TouchableOpacity>
+
+      <SectionHeader title="附件" action="上传" />
+      <View style={styles.settingsList}>
+        {attachmentRows.map((item) => (
+          <DataRow key={item.title} icon={FileText} title={item.title} value={item.meta} />
+        ))}
+      </View>
+
+      <SectionHeader title="近期时间线" action="更多" />
+      <View style={styles.timelineCard}>
+        {profileTimeline.map((item) => (
+          <View key={item.time} style={styles.timelineItem}>
+            <View style={styles.timelineDot} />
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>{item.title}</Text>
+              <Text style={styles.listMeta}>{item.time} · {item.meta}</Text>
+            </View>
           </View>
         ))}
+      </View>
+    </View>
+  );
+}
+
+function RecordingDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.noticeCard}>
+        <CheckCircle2 size={23} color={colors.sageDark} />
+        <View style={styles.listBody}>
+          <Text style={styles.listTitle}>陈雨 第6次咨询录音</Text>
+          <Text style={styles.listMeta}>52:18 · 已归档 · 原始录音 13 天后销毁</Text>
+        </View>
+      </View>
+
+      <View style={styles.summaryCard}>
+        <View style={styles.summaryHeader}>
+          <Text style={styles.summaryTitle}>录音纪要</Text>
+          <Badge label="可重新生成" tone="blue" />
+        </View>
+        <Text style={styles.summaryCopy}>本次来访者主要围绕睡眠下降、工作评价焦虑和关系议题展开。咨询师进行了事实、推测与情绪反应的区分。</Text>
+        <View style={styles.inlineActions}>
+          <GhostButton icon={RefreshCcw} label="重新生成" onPress={() => undefined} />
+          <PrimaryButton icon={Edit3} label="编辑报告" onPress={onOpenReport} />
+        </View>
+      </View>
+
+      <SectionHeader title="章节速览" action="编辑" />
+      <View style={styles.cardStack}>
+        {summaryChapters.map((item) => (
+          <ChapterRow key={item.time} time={item.time} title={item.title} current={item.current} />
+        ))}
+      </View>
+
+      <SectionHeader title="转写片段" action="完整文本" />
+      <View style={styles.transcriptCard}>
+        {transcriptTurns.map((item) => (
+          <View key={item.time} style={styles.transcriptTurn}>
+            <Text style={styles.transcriptSpeaker}>{item.speaker} · {item.time}</Text>
+            <Text style={styles.transcriptText}>{item.text}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.exportPanel}>
+        <DataRow icon={Download} title="导出 PDF / Word" value="纪要与转写均可导出" />
+        <DataRow icon={ShieldCheck} title="长期保存授权" value="转写与纪要可授权，原始录音不可授权" />
+      </View>
+    </View>
+  );
+}
+
+function ReportEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.editorHeader}>
+        <View>
+          <Text style={styles.editorEyebrow}>咨询记录草稿</Text>
+          <Text style={styles.editorTitle}>陈雨 · 第 6 次咨询</Text>
+        </View>
+        <Badge label="草稿" tone="warm" />
+      </View>
+      <View style={styles.ruleCard}>
+        <CircleAlert size={19} color={colors.clayDark} />
+        <Text style={styles.ruleText}>正式版不能直接编辑。保存正式版前，请确认草稿内容；后续修改会先复制为草稿再替换正式版。</Text>
+      </View>
+
+      <View style={styles.editorToolbar}>
+        <GhostButton icon={History} label="草稿" onPress={() => undefined} />
+        <GhostButton icon={FileText} label="正式版" onPress={() => undefined} />
+      </View>
+
+      {reportSections.map((section) => (
+        <View key={section.title} style={styles.editSection}>
+          <View style={styles.editSectionHeader}>
+            <Text style={styles.editSectionTitle}>{section.title}</Text>
+            <Edit3 size={16} color={colors.subtle} />
+          </View>
+          <Text style={styles.editSectionText}>{section.content}</Text>
+        </View>
+      ))}
+
+      <View style={styles.savePanel}>
+        <PrimaryButton icon={Save} label="保存为正式版" onPress={() => undefined} wide />
+        <GhostButton icon={ShieldCheck} label="授权长期保存草稿与正式版" onPress={onOpenPrivacy} />
+      </View>
+    </View>
+  );
+}
+
+function PrivacyConsentScreen() {
+  return (
+    <View style={styles.consentBackdrop}>
+      <View style={styles.consentSheet}>
+        <View style={styles.consentTopHandle} />
+        <Text style={styles.consentTitle}>是否授权长期保存？</Text>
+        <Text style={styles.consentCopy}>
+          以下资料默认 14 天后销毁。长期保存需要你主动勾选，授权后会保存到云端，直到你删除资料或撤回授权。
+        </Text>
+
+        <View style={styles.consentList}>
+          <ConsentItem title="陈雨 第6次咨询转写" meta="转写文本 · 可授权" />
+          <ConsentItem title="陈雨 第6次录音纪要" meta="录音纪要 · 可授权" />
+          <View style={styles.lockedConsentItem}>
+            <Trash2 size={18} color={colors.danger} />
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>原始录音</Text>
+              <Text style={styles.listMeta}>仅临时保存 14 天，不支持长期云端保存</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.riskPanel}>
+          <ShieldCheck size={18} color={colors.sageDark} />
+          <Text style={styles.riskText}>你可以在「数据与隐私」中随时查看授权清单、取消授权或删除资料。取消授权后资料按剩余销毁周期处理。</Text>
+        </View>
+
+        <View style={styles.consentFooter}>
+          <TouchableOpacity style={styles.secondaryWideButton} activeOpacity={0.78}>
+            <Text style={styles.secondaryWideText}>暂不授权</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.disabledWideButton} activeOpacity={0.78}>
+            <Text style={styles.disabledWideText}>需手动勾选</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -280,14 +504,34 @@ function SupervisionScreen() {
   );
 }
 
-function ContentScreen() {
+function ContentScreen({ onOpenDetail }: { onOpenDetail: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.poster}>
         <BookOpenText size={25} color={colors.clayDark} />
-        <Text style={styles.posterTitle}>咨询记录书写专题</Text>
-        <Text style={styles.posterCopy}>从录音纪要到正式记录，保持结构清晰和伦理边界。</Text>
+        <Text style={styles.posterTitle}>录音纪要工作台</Text>
+        <Text style={styles.posterCopy}>查看 AI 纪要、编辑转写、生成报告，并处理 14 天销毁前的授权选择。</Text>
       </View>
+      <SectionHeader title="最近纪要" action="筛选" />
+      <View style={styles.cardStack}>
+        {recordings.map((item) => (
+          <TouchableOpacity key={item.title} style={styles.recordingCard} activeOpacity={0.78} onPress={onOpenDetail}>
+            <View style={styles.recordingIcon}>
+              <FileText size={20} color={colors.clayDark} />
+            </View>
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>{item.title}</Text>
+              <Text style={styles.listMeta}>{item.duration} · {item.ttl}</Text>
+              <View style={styles.badgeRow}>
+                <Badge label={item.status} tone={formatBadge(item.status)} />
+                <Badge label={item.archive} tone={formatBadge(item.archive)} />
+              </View>
+            </View>
+            <ChevronRight size={18} color={colors.subtle} />
+          </TouchableOpacity>
+        ))}
+      </View>
+      <SectionHeader title="书写参考" action="更多" />
       <ArticleRow title="如何准备一次有效督导" tag="督导" />
       <ArticleRow title="咨询资料保存的边界" tag="隐私" />
       <ArticleRow title="危机风险记录的提醒" tag="安全" />
@@ -295,7 +539,7 @@ function ContentScreen() {
   );
 }
 
-function AccountScreen() {
+function AccountScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.accountCard}>
@@ -311,14 +555,14 @@ function AccountScreen() {
       <SectionHeader title="数据与隐私" action="查看" />
       <View style={styles.cardStack}>
         {privacyResources.map((item) => (
-          <View key={item.title} style={styles.privacyResource}>
+          <TouchableOpacity key={item.title} style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
             <Clock3 size={18} color={item.preservable ? colors.sageDark : colors.danger} />
             <View style={styles.listBody}>
               <Text style={styles.listTitle}>{item.title}</Text>
               <Text style={styles.listMeta}>{item.type} · {item.expires}</Text>
             </View>
             <Badge label={item.preservable ? "可授权" : "不可长期"} tone={item.preservable ? "green" : "warm"} />
-          </View>
+          </TouchableOpacity>
         ))}
       </View>
       <SectionHeader title="安全" action="设置" />
@@ -434,6 +678,65 @@ function SettingsRow({ icon: Icon, title, value }: { icon: typeof LockKeyhole; t
   );
 }
 
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.miniStat}>
+      <Text style={styles.miniStatValue}>{value}</Text>
+      <Text style={styles.miniStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function SensitiveResource({ title, meta, status, tone }: { title: string; meta: string; status: string; tone: "warm" | "green" | "blue" }) {
+  return (
+    <View style={styles.sensitiveRow}>
+      <Clock3 size={18} color={tone === "green" ? colors.sageDark : colors.clayDark} />
+      <View style={styles.listBody}>
+        <Text style={styles.listTitle}>{title}</Text>
+        <Text style={styles.listMeta}>{meta}</Text>
+      </View>
+      <Badge label={status} tone={tone} />
+    </View>
+  );
+}
+
+function DataRow({ icon: Icon, title, value }: { icon: typeof FileText; title: string; value: string }) {
+  return (
+    <View style={styles.dataRow}>
+      <Icon size={18} color={colors.clayDark} />
+      <View style={styles.listBody}>
+        <Text style={styles.listTitle}>{title}</Text>
+        <Text style={styles.listMeta}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ChapterRow({ time, title, current }: { time: string; title: string; current?: boolean }) {
+  return (
+    <View style={[styles.chapterRow, current && styles.chapterRowCurrent]}>
+      <Text style={styles.chapterTime}>{time}</Text>
+      <View style={styles.listBody}>
+        <Text style={styles.listTitle}>{title}</Text>
+        <Text style={styles.listMeta}>{current ? "当前定位章节" : "点击可跳转到对应转写"}</Text>
+      </View>
+      {current ? <Badge label="当前" tone="blue" /> : null}
+    </View>
+  );
+}
+
+function ConsentItem({ title, meta }: { title: string; meta: string }) {
+  return (
+    <TouchableOpacity style={styles.consentItem} activeOpacity={0.78}>
+      <View style={styles.emptyCheckbox} />
+      <View style={styles.listBody}>
+        <Text style={styles.listTitle}>{title}</Text>
+        <Text style={styles.listMeta}>{meta}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
@@ -496,7 +799,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingBottom: 110,
+    paddingBottom: 150,
   },
   stack: {
     gap: 16,
@@ -891,6 +1194,369 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+  },
+  detailHero: {
+    borderRadius: radius.sm,
+    padding: 15,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 14,
+  },
+  detailHeroTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  detailName: {
+    color: colors.ink,
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: "900",
+  },
+  detailStats: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  miniStat: {
+    flex: 1,
+    minHeight: 58,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    padding: 10,
+    justifyContent: "center",
+  },
+  miniStatValue: {
+    color: colors.ink,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  miniStatLabel: {
+    marginTop: 3,
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  inlineActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  sensitiveRow: {
+    minHeight: 70,
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  reportPreviewCard: {
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  reportIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.sm,
+    backgroundColor: "#E8F0EC",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dataRow: {
+    minHeight: 62,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  timelineCard: {
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 12,
+    gap: 14,
+  },
+  timelineItem: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  timelineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: radius.pill,
+    marginTop: 5,
+    backgroundColor: colors.clay,
+  },
+  summaryCard: {
+    borderRadius: radius.sm,
+    padding: 15,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 12,
+  },
+  summaryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  summaryTitle: {
+    color: colors.ink,
+    fontSize: 20,
+    fontWeight: "900",
+  },
+  summaryCopy: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: "600",
+  },
+  chapterRow: {
+    minHeight: 68,
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+  },
+  chapterRowCurrent: {
+    backgroundColor: "#F7EDE4",
+  },
+  chapterTime: {
+    width: 58,
+    color: colors.clayDark,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  transcriptCard: {
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 14,
+    gap: 14,
+  },
+  transcriptTurn: {
+    gap: 5,
+  },
+  transcriptSpeaker: {
+    color: colors.clayDark,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  transcriptText: {
+    color: colors.ink,
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: "600",
+  },
+  exportPanel: {
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    overflow: "hidden",
+  },
+  editorHeader: {
+    borderRadius: radius.sm,
+    padding: 15,
+    backgroundColor: colors.clay,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  editorEyebrow: {
+    color: "rgba(255,249,243,0.82)",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  editorTitle: {
+    marginTop: 4,
+    color: "#FFF9F3",
+    fontSize: 21,
+    lineHeight: 27,
+    fontWeight: "900",
+  },
+  ruleCard: {
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+  },
+  ruleText: {
+    flex: 1,
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: "700",
+  },
+  editorToolbar: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  editSection: {
+    borderRadius: radius.sm,
+    padding: 14,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 10,
+  },
+  editSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  editSectionTitle: {
+    color: colors.ink,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  editSectionText: {
+    color: colors.ink,
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: "600",
+  },
+  savePanel: {
+    gap: 10,
+    marginTop: 2,
+  },
+  consentBackdrop: {
+    minHeight: 620,
+    justifyContent: "flex-end",
+    borderRadius: radius.sm,
+    backgroundColor: "rgba(55,49,45,0.18)",
+    overflow: "hidden",
+  },
+  consentSheet: {
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    padding: 18,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 14,
+  },
+  consentTopHandle: {
+    alignSelf: "center",
+    width: 42,
+    height: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.line,
+  },
+  consentTitle: {
+    color: colors.ink,
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: "900",
+  },
+  consentCopy: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 21,
+    fontWeight: "700",
+  },
+  consentList: {
+    gap: 10,
+  },
+  consentItem: {
+    minHeight: 66,
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  emptyCheckbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.clayDark,
+    backgroundColor: colors.surface,
+  },
+  lockedConsentItem: {
+    minHeight: 66,
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: "#FFF4F0",
+    borderWidth: 1,
+    borderColor: "#F0D1C7",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  riskPanel: {
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: "#EEF5F0",
+    borderWidth: 1,
+    borderColor: "#D8E6DD",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+  },
+  riskText: {
+    flex: 1,
+    color: colors.sageDark,
+    fontSize: 12,
+    lineHeight: 19,
+    fontWeight: "800",
+  },
+  consentFooter: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  secondaryWideButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryWideText: {
+    color: colors.clayDark,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  disabledWideButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: radius.sm,
+    backgroundColor: "#E8DED5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  disabledWideText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "900",
   },
   avatar: {
     width: 44,
