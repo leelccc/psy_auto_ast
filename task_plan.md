@@ -27,6 +27,7 @@ Complete. Latest follow-up polish pass also complete.
 - [x] Phase 14: Verify polished mobile frontend with tests, typecheck, Expo Web, and web export.
 - [x] Phase 15: Add mobile interaction polish for selectable long-term-save authorization, transcript proofreading cues, and report draft status.
 - [x] Phase 16: Verify interaction polish with typecheck, tests, Expo Web DOM checks, and web export.
+- [x] Phase 17: Correct mobile information architecture: restore information tab, split recording flows, add profile creation, and rebuild profile detail around per-session cards.
 
 ## Working Files
 
@@ -49,6 +50,9 @@ Complete. Latest follow-up polish pass also complete.
 - Mobile frontend detail polish should keep the warm, soft, professional workbench style, but prioritize task clarity over decorative density.
 - Data/privacy authorization UI must show active user choice: no default checked long-term save items, and original recordings remain non-preservable.
 - Long-term-save authorization should behave as an explicit decision flow: hidden bottom navigation, selectable items, disabled confirmation until selection, and visible selection count.
+- Primary bottom navigation is fixed as `首页 / 档案 / 资讯 / 我的`; `资讯` remains a lightweight but necessary tab even if early content is simple.
+- The active recording page must not include historical recording records; recording records are a separate page.
+- Profile detail is organized by per-session cards. Each session card uses the fixed entry labels `录音 / 记录 / 量表 / 作业 / 其他` for all three profile identities.
 
 ## Errors Encountered
 

@@ -66,3 +66,16 @@
 - Browser screenshot capture timed out during this pass, but DOM-level interaction checks succeeded.
 - Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
 - Marked Phase 16 complete.
+- User pointed out several mobile IA issues: bottom navigation must remain `首页 / 档案 / 资讯 / 我的`, the home reminder card should not include intelligent supervision, active recording should not mix in recording history, profile library needs a create flow, and profile detail should follow the provided per-session card reference.
+- Read the provided reference file `/Users/apple/WeChatProjects/psy_ast/页面/来访者:督导:受督档案详情页.html`.
+- Restored bottom navigation label from `纪要` to `资讯` and changed the information tab back to lightweight professional content.
+- Removed the intelligent supervision button from the home reminder card; intelligent supervision remains only as a lower quick action.
+- Split active recording from recording history by removing recording records from `RecordingScreen` and adding a dedicated recording records page.
+- Added a profile creation entry in the profile library with identity choices for `新增来访者`, `新增督导师`, and `新增受督者`; each identity shows a different field set.
+- Rebuilt profile detail around a profile header, legal/ethical files, and per-session cards.
+- Added fixed per-session action entries `录音 / 记录 / 量表 / 作业 / 其他`, with recording retention, draft/formal report state, and long-term authorization rules integrated into each card.
+- Verified via browser DOM checks that home navigation, active recording, recording records, profile creation, and profile detail session cards match the corrected IA.
+- Ran frontend tests: `npm test`, result `2 passed`.
+- Ran frontend typecheck: `npm run typecheck`, result passed.
+- Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
+- Marked Phase 17 complete.

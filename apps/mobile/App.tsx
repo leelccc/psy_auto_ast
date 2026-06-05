@@ -3,6 +3,7 @@ import {
   Bell,
   BookOpenText,
   CalendarDays,
+  ChartNoAxesColumn,
   CheckCircle2,
   ChevronRight,
   CircleAlert,
@@ -41,11 +42,9 @@ import {
 } from "react-native";
 
 import {
-  attachmentRows,
   formatBadge,
   metrics,
   privacyResources,
-  profileTimeline,
   profiles,
   recordings,
   reminders,
@@ -56,12 +55,22 @@ import {
 } from "./src/mockData";
 import { colors, radius, shadow } from "./src/theme";
 
-type QuickView = "overview" | "recording" | "archive" | "supervision" | "profileDetail" | "recordingDetail" | "reportEditor" | "privacyConsent";
+type QuickView =
+  | "overview"
+  | "recording"
+  | "recordingRecords"
+  | "archive"
+  | "supervision"
+  | "profileDetail"
+  | "profileCreate"
+  | "recordingDetail"
+  | "reportEditor"
+  | "privacyConsent";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
   { key: "home", label: "首页", icon: Home },
   { key: "profiles", label: "档案", icon: FolderOpen },
-  { key: "recordings", label: "纪要", icon: Newspaper },
+  { key: "recordings", label: "资讯", icon: Newspaper },
   { key: "account", label: "我的", icon: UserRound },
 ];
 
@@ -72,15 +81,17 @@ export default function App() {
   const isCompact = width < 430;
 
   const title = useMemo(() => {
-    if (quickView === "recording") return "录音记录";
+    if (quickView === "recording") return "正在录音";
+    if (quickView === "recordingRecords") return "录音记录";
     if (quickView === "archive") return "归档确认";
     if (quickView === "supervision") return "智能督导";
     if (quickView === "profileDetail") return "档案详情";
+    if (quickView === "profileCreate") return "新增档案";
     if (quickView === "recordingDetail") return "录音纪要";
     if (quickView === "reportEditor") return "报告编辑";
     if (quickView === "privacyConsent") return "长期保存授权";
     if (tab === "profiles") return "档案库";
-    if (tab === "recordings") return "录音纪要";
+    if (tab === "recordings") return "资讯";
     if (tab === "account") return "我的";
     return "今天要做什么";
   }, [quickView, tab]);
@@ -91,16 +102,18 @@ export default function App() {
       <View style={[styles.phoneShell, isCompact && styles.phoneShellCompact]}>
         <Header title={title} quickView={quickView} onBack={() => setQuickView("overview")} />
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {tab === "home" && quickView === "overview" ? <HomeScreen onOpen={setQuickView} /> : null}
-          {quickView === "recording" ? <RecordingScreen onArchive={() => setQuickView("archive")} onOpenDetail={() => setQuickView("recordingDetail")} /> : null}
+          {tab === "home" && quickView === "overview" ? <HomeScreen onOpen={setQuickView} onOpenProfiles={() => setTab("profiles")} /> : null}
+          {quickView === "recording" ? <RecordingScreen onArchive={() => setQuickView("archive")} /> : null}
+          {quickView === "recordingRecords" ? <RecordingRecordsScreen onOpenDetail={() => setQuickView("recordingDetail")} /> : null}
           {quickView === "archive" ? <ArchiveScreen /> : null}
           {quickView === "supervision" ? <SupervisionScreen /> : null}
           {quickView === "profileDetail" ? <ProfileDetailScreen onOpenReport={() => setQuickView("reportEditor")} /> : null}
+          {quickView === "profileCreate" ? <ProfileCreateScreen /> : null}
           {quickView === "recordingDetail" ? <RecordingDetailScreen onOpenReport={() => setQuickView("reportEditor")} /> : null}
           {quickView === "reportEditor" ? <ReportEditorScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
           {quickView === "privacyConsent" ? <PrivacyConsentScreen /> : null}
-          {tab === "profiles" && quickView === "overview" ? <ProfilesScreen onOpenDetail={() => setQuickView("profileDetail")} /> : null}
-          {tab === "recordings" && quickView === "overview" ? <ContentScreen onOpenDetail={() => setQuickView("recordingDetail")} /> : null}
+          {tab === "profiles" && quickView === "overview" ? <ProfilesScreen onOpenDetail={() => setQuickView("profileDetail")} onCreate={() => setQuickView("profileCreate")} /> : null}
+          {tab === "recordings" && quickView === "overview" ? <ContentScreen /> : null}
           {tab === "account" && quickView === "overview" ? <AccountScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
         </ScrollView>
         {quickView !== "privacyConsent" ? (
@@ -137,7 +150,7 @@ function Header({ title, quickView, onBack }: { title: string; quickView: QuickV
   );
 }
 
-function HomeScreen({ onOpen }: { onOpen: (view: QuickView) => void }) {
+function HomeScreen({ onOpen, onOpenProfiles }: { onOpen: (view: QuickView) => void; onOpenProfiles: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.hero}>
@@ -151,13 +164,12 @@ function HomeScreen({ onOpen }: { onOpen: (view: QuickView) => void }) {
         <Text style={styles.heroCopy}>陈雨的第 6 次咨询将在 10:00 开始，录音结束后可直接归档并生成纪要。</Text>
         <View style={styles.heroActions}>
           <PrimaryButton icon={Mic} label="开始录音" onPress={() => onOpen("recording")} />
-          <GhostButton icon={Sparkles} label="智能督导" onPress={() => onOpen("supervision")} />
         </View>
       </View>
 
       <View style={styles.quickGrid}>
-        <QuickAction icon={Mic} label="录音记录" detail="3 条待处理" onPress={() => onOpen("recording")} />
-        <QuickAction icon={FolderOpen} label="档案库" detail="24 个档案" onPress={() => undefined} />
+        <QuickAction icon={Mic} label="录音记录" detail="3 条待处理" onPress={() => onOpen("recordingRecords")} />
+        <QuickAction icon={FolderOpen} label="档案库" detail="24 个档案" onPress={onOpenProfiles} />
         <QuickAction icon={Sparkles} label="智能督导" detail="仅读取已选资料" onPress={() => onOpen("supervision")} />
       </View>
 
@@ -190,7 +202,7 @@ function HomeScreen({ onOpen }: { onOpen: (view: QuickView) => void }) {
   );
 }
 
-function RecordingScreen({ onArchive, onOpenDetail }: { onArchive: () => void; onOpenDetail?: () => void }) {
+function RecordingScreen({ onArchive }: { onArchive: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.recorderPanel}>
@@ -212,6 +224,29 @@ function RecordingScreen({ onArchive, onOpenDetail }: { onArchive: () => void; o
         </View>
       </View>
 
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>录音保存提示</Text>
+        <Text style={styles.privacyCopy}>当前录音保存后会进入归档确认。原始录音云端仅临时保存 14 天，可下载到本地，不支持长期云端保存。</Text>
+      </View>
+      <View style={styles.noticeCard}>
+        <Clock3 size={21} color={colors.sageDark} />
+        <View style={styles.listBody}>
+          <Text style={styles.listTitle}>录音结束后异步生成</Text>
+          <Text style={styles.listMeta}>转写、纪要、章节速览会在保存并归档后生成</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function RecordingRecordsScreen({ onOpenDetail }: { onOpenDetail: () => void }) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.poster}>
+        <FileText size={25} color={colors.clayDark} />
+        <Text style={styles.posterTitle}>录音记录</Text>
+        <Text style={styles.posterCopy}>集中查看待归档、生成中和可查看的录音，不和正在录音流程混在一起。</Text>
+      </View>
       <SectionHeader title="录音列表" action="上传" />
       <View style={styles.cardStack}>
         {recordings.map((item) => (
@@ -257,9 +292,13 @@ function ArchiveScreen() {
   );
 }
 
-function ProfilesScreen({ onOpenDetail }: { onOpenDetail: () => void }) {
+function ProfilesScreen({ onOpenDetail, onCreate }: { onOpenDetail: () => void; onCreate: () => void }) {
   return (
     <View style={styles.stack}>
+      <TouchableOpacity style={styles.createProfileButton} activeOpacity={0.78} onPress={onCreate}>
+        <Plus size={19} color="#FFF9F3" />
+        <Text style={styles.createProfileButtonText}>新增档案</Text>
+      </TouchableOpacity>
       <View style={styles.searchBar}>
         <Search size={18} color={colors.subtle} />
         <Text style={styles.searchPlaceholder}>搜索姓名、编号、状态</Text>
@@ -291,70 +330,98 @@ function ProfilesScreen({ onOpenDetail }: { onOpenDetail: () => void }) {
   );
 }
 
+function ProfileCreateScreen() {
+  const [kind, setKind] = useState<"client" | "supervisor" | "supervisee">("client");
+  const fields = {
+    client: ["姓名 / 昵称", "联系方式", "主诉与来访目标", "紧急联系人", "知情同意书"],
+    supervisor: ["姓名 / 称呼", "督导方向", "机构 / 资质", "督导协议", "下次受督时间"],
+    supervisee: ["姓名 / 称呼", "受督方向", "当前阶段", "督导评价", "下次督导时间"],
+  }[kind];
+
+  return (
+    <View style={styles.stack}>
+      <View style={styles.identityPicker}>
+        <IdentityOption active={kind === "client"} title="新增来访者" detail="咨询记录与个案报告" onPress={() => setKind("client")} />
+        <IdentityOption active={kind === "supervisor"} title="新增督导师" detail="受督记录与反馈" onPress={() => setKind("supervisor")} />
+        <IdentityOption active={kind === "supervisee"} title="新增受督者" detail="督导记录与评价" onPress={() => setKind("supervisee")} />
+      </View>
+      <View style={styles.formPreviewCard}>
+        <Text style={styles.formPreviewTitle}>需要填写</Text>
+        {fields.map((field) => (
+          <View key={field} style={styles.formFieldRow}>
+            <Text style={styles.formFieldLabel}>{field}</Text>
+            <Text style={styles.formFieldValue}>待填写</Text>
+          </View>
+        ))}
+      </View>
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>基础档案长期保存</Text>
+        <Text style={styles.privacyCopy}>基础档案信息会长期保存在云端；录音、报告、附件等敏感资料仍按 14 天临时保存与主动授权规则处理。</Text>
+      </View>
+      <PrimaryButton icon={FolderOpen} label="创建档案" onPress={() => undefined} wide />
+    </View>
+  );
+}
+
 function ProfileDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
   return (
     <View style={styles.stack}>
-      <View style={styles.detailHero}>
+      <View style={styles.profileHeaderCard}>
         <View style={styles.detailHeroTop}>
           <View style={styles.avatarLarge}>
             <Text style={styles.avatarLargeText}>陈</Text>
           </View>
           <View style={styles.listBody}>
             <Text style={styles.detailName}>陈雨</Text>
-            <Text style={styles.listMeta}>来访者 · 第 6 次咨询 · 进行中</Text>
+            <Text style={styles.listMeta}>ID: 20260605-A08 · 来访者档案</Text>
           </View>
-          <Badge label="轻度风险" tone="warm" />
+          <Badge label="已解锁" tone="green" />
         </View>
         <View style={styles.detailStats}>
+          <MiniStat label="状态" value="进行中" />
+          <MiniStat label="频率" value="每周" />
           <MiniStat label="下次" value="6月8日" />
-          <MiniStat label="资料" value="7 项" />
-          <MiniStat label="长期" value="2 项" />
         </View>
       </View>
 
-      <View style={styles.inlineActions}>
-        <GhostButton icon={CalendarDays} label="设下次咨询" onPress={() => undefined} />
-        <PrimaryButton icon={FileText} label="生成报告" onPress={onOpenReport} />
+      <SectionHeader title="法律及伦理文件" action="上传" />
+      <View style={styles.legalGrid}>
+        <LegalFile title="知情同意书" meta="已签署 · 第 2 版" icon={FileText} />
+        <LegalFile title="咨询协议" meta="已签署 · 6月3日" icon={ClipboardList} />
       </View>
 
-      <SectionHeader title="敏感资料状态" action="管理" />
-      <View style={styles.cardStack}>
-        <SensitiveResource title="第6次咨询转写" meta="13 天后自动销毁" status="可授权长期保存" tone="blue" />
-        <SensitiveResource title="原始录音" meta="13 天后自动销毁，不支持长期云端保存" status="不可长期保存" tone="warm" />
-        <SensitiveResource title="第5次咨询记录" meta="用户已授权长期保存" status="长期保存" tone="green" />
+      <SectionHeader title="咨询历程" action="新增记录" />
+      <SessionCard
+        index="第 6 次"
+        time="2026年6月5日 10:00"
+        summary="围绕睡眠下降、工作评价焦虑和关系议题展开。"
+        tags={["焦虑", "睡眠"]}
+        recording="剩余 13 天"
+        record="草稿"
+        scale="未上传"
+        homework="已布置"
+        other="1 项"
+        onOpenReport={onOpenReport}
+      />
+      <SessionCard
+        index="第 5 次"
+        time="2026年5月29日 10:00"
+        summary="梳理近期压力事件，并继续识别自动化想法。"
+        tags={["长期保存", "正式版"]}
+        recording="已销毁"
+        record="正式版"
+        scale="SAS"
+        homework="已提交"
+        other="无"
+        onOpenReport={onOpenReport}
+      />
+
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>保存规则会跟随每次记录</Text>
+        <Text style={styles.privacyCopy}>录音只能临时保存 14 天；记录、量表、作业和其他附件可在对应卡片内主动授权长期保存。草稿保存为正式版后，正式版不可直接编辑。</Text>
       </View>
 
-      <SectionHeader title="报告与纪要" action="全部" />
-      <TouchableOpacity style={styles.reportPreviewCard} activeOpacity={0.78} onPress={onOpenReport}>
-        <View style={styles.reportIcon}>
-          <ClipboardList size={20} color={colors.clayDark} />
-        </View>
-        <View style={styles.listBody}>
-          <Text style={styles.listTitle}>咨询记录草稿</Text>
-          <Text style={styles.listMeta}>基于第6次录音生成 · 尚未保存为正式版</Text>
-        </View>
-        <ChevronRight size={18} color={colors.subtle} />
-      </TouchableOpacity>
-
-      <SectionHeader title="附件" action="上传" />
-      <View style={styles.settingsList}>
-        {attachmentRows.map((item) => (
-          <DataRow key={item.title} icon={FileText} title={item.title} value={item.meta} />
-        ))}
-      </View>
-
-      <SectionHeader title="近期时间线" action="更多" />
-      <View style={styles.timelineCard}>
-        {profileTimeline.map((item) => (
-          <View key={item.time} style={styles.timelineItem}>
-            <View style={styles.timelineDot} />
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{item.title}</Text>
-              <Text style={styles.listMeta}>{item.time} · {item.meta}</Text>
-            </View>
-          </View>
-        ))}
-      </View>
+      <PrimaryButton icon={Sparkles} label="生成个案报告" onPress={onOpenReport} wide />
     </View>
   );
 }
@@ -532,32 +599,13 @@ function SupervisionScreen() {
   );
 }
 
-function ContentScreen({ onOpenDetail }: { onOpenDetail: () => void }) {
+function ContentScreen() {
   return (
     <View style={styles.stack}>
       <View style={styles.poster}>
         <BookOpenText size={25} color={colors.clayDark} />
-        <Text style={styles.posterTitle}>录音纪要工作台</Text>
-        <Text style={styles.posterCopy}>查看 AI 纪要、编辑转写、生成报告，并处理 14 天销毁前的授权选择。</Text>
-      </View>
-      <SectionHeader title="最近纪要" action="筛选" />
-      <View style={styles.cardStack}>
-        {recordings.map((item) => (
-          <TouchableOpacity key={item.title} style={styles.recordingCard} activeOpacity={0.78} onPress={onOpenDetail}>
-            <View style={styles.recordingIcon}>
-              <FileText size={20} color={colors.clayDark} />
-            </View>
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{item.title}</Text>
-              <Text style={styles.listMeta}>{item.duration} · {item.ttl}</Text>
-              <View style={styles.badgeRow}>
-                <Badge label={item.status} tone={formatBadge(item.status)} />
-                <Badge label={item.archive} tone={formatBadge(item.archive)} />
-              </View>
-            </View>
-            <ChevronRight size={18} color={colors.subtle} />
-          </TouchableOpacity>
-        ))}
+        <Text style={styles.posterTitle}>专业资讯</Text>
+        <Text style={styles.posterCopy}>记录书写、隐私伦理、督导准备和风险识别的轻量参考。</Text>
       </View>
       <SectionHeader title="书写参考" action="更多" />
       <ArticleRow title="如何准备一次有效督导" tag="督导" />
@@ -706,24 +754,105 @@ function SettingsRow({ icon: Icon, title, value }: { icon: typeof LockKeyhole; t
   );
 }
 
+function IdentityOption({ active, title, detail, onPress }: { active: boolean; title: string; detail: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={[styles.identityOption, active && styles.identityOptionActive]} activeOpacity={0.78} onPress={onPress}>
+      <Text style={[styles.identityTitle, active && styles.identityTitleActive]}>{title}</Text>
+      <Text style={styles.identityDetail}>{detail}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function LegalFile({ title, meta, icon: Icon }: { title: string; meta: string; icon: typeof FileText }) {
+  return (
+    <View style={styles.legalFile}>
+      <View style={styles.legalIcon}>
+        <Icon size={19} color={colors.clayDark} />
+      </View>
+      <View style={styles.listBody}>
+        <Text style={styles.listTitle}>{title}</Text>
+        <Text style={styles.listMeta}>{meta}</Text>
+      </View>
+    </View>
+  );
+}
+
+function SessionCard({
+  index,
+  time,
+  summary,
+  tags,
+  recording,
+  record,
+  scale,
+  homework,
+  other,
+  onOpenReport,
+}: {
+  index: string;
+  time: string;
+  summary: string;
+  tags: string[];
+  recording: string;
+  record: string;
+  scale: string;
+  homework: string;
+  other: string;
+  onOpenReport: () => void;
+}) {
+  return (
+    <View style={styles.sessionCard}>
+      <View style={styles.sessionTop}>
+        <View style={styles.listBody}>
+          <View style={styles.sessionTitleRow}>
+            <Text style={styles.sessionIndex}>{index}</Text>
+            <Text style={styles.sessionTime}>{time}</Text>
+          </View>
+          <Text style={styles.sessionSummary}>{summary}</Text>
+        </View>
+        <View style={styles.sessionTags}>
+          {tags.map((tag) => (
+            <Text key={tag} style={styles.sessionTag}>{tag}</Text>
+          ))}
+        </View>
+      </View>
+
+      <View style={styles.sessionActionGrid}>
+        <SessionAction icon={Mic} label="录音" status={recording} tone={recording.includes("剩余") ? "warm" : "muted"} />
+        <SessionAction icon={Edit3} label="记录" status={record} tone={record === "草稿" ? "blue" : "green"} />
+        <SessionAction icon={ChartNoAxesColumn} label="量表" status={scale} tone={scale === "未上传" ? "muted" : "green"} />
+        <SessionAction icon={ClipboardList} label="作业" status={homework} tone={homework.includes("已") ? "green" : "muted"} />
+        <SessionAction icon={Plus} label="其他" status={other} tone={other === "无" ? "muted" : "blue"} />
+      </View>
+
+      <View style={styles.sessionFooter}>
+        <Text style={styles.sessionRule}>记录可存草稿/正式版；敏感资料需主动授权长期保存</Text>
+        <TouchableOpacity style={styles.sessionGenerateButton} activeOpacity={0.78} onPress={onOpenReport}>
+          <Sparkles size={16} color={colors.clayDark} />
+          <Text style={styles.sessionGenerateText}>生成咨询记录</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+function SessionAction({ icon: Icon, label, status, tone }: { icon: typeof Mic; label: string; status: string; tone: "warm" | "green" | "blue" | "muted" }) {
+  return (
+    <TouchableOpacity style={styles.sessionAction} activeOpacity={0.78}>
+      <View style={[styles.sessionActionIcon, styles[`sessionActionIcon_${tone}`]]}>
+        <Icon size={18} color={tone === "muted" ? colors.subtle : colors.clayDark} />
+      </View>
+      <Text style={styles.sessionActionLabel}>{label}</Text>
+      <Text style={styles.sessionActionStatus}>{status}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.miniStat}>
       <Text style={styles.miniStatValue}>{value}</Text>
       <Text style={styles.miniStatLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function SensitiveResource({ title, meta, status, tone }: { title: string; meta: string; status: string; tone: "warm" | "green" | "blue" }) {
-  return (
-    <View style={styles.sensitiveRow}>
-      <Clock3 size={18} color={tone === "green" ? colors.sageDark : colors.clayDark} />
-      <View style={styles.listBody}>
-        <Text style={styles.listTitle}>{title}</Text>
-        <Text style={styles.listMeta}>{meta}</Text>
-      </View>
-      <Badge label={status} tone={tone} />
     </View>
   );
 }
@@ -1225,7 +1354,86 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
-  detailHero: {
+  createProfileButton: {
+    minHeight: 46,
+    borderRadius: radius.sm,
+    backgroundColor: colors.clayDark,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  createProfileButtonText: {
+    color: "#FFF9F3",
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  identityPicker: {
+    gap: 10,
+  },
+  identityOption: {
+    minHeight: 74,
+    borderRadius: radius.sm,
+    padding: 13,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    justifyContent: "center",
+  },
+  identityOptionActive: {
+    backgroundColor: "#F7EDE4",
+    borderColor: "#E7B9A8",
+  },
+  identityTitle: {
+    color: colors.ink,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  identityTitleActive: {
+    color: colors.clayDark,
+  },
+  identityDetail: {
+    marginTop: 5,
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+  },
+  formPreviewCard: {
+    borderRadius: radius.sm,
+    padding: 14,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 4,
+  },
+  formPreviewTitle: {
+    color: colors.ink,
+    fontSize: 17,
+    fontWeight: "900",
+    marginBottom: 6,
+  },
+  formFieldRow: {
+    minHeight: 42,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  formFieldLabel: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  formFieldValue: {
+    color: colors.subtle,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  profileHeaderCard: {
     borderRadius: radius.sm,
     padding: 15,
     backgroundColor: colors.surface,
@@ -1271,34 +1479,156 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
   },
-  sensitiveRow: {
-    minHeight: 70,
-    borderRadius: radius.sm,
-    padding: 12,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
+  legalGrid: {
     flexDirection: "row",
-    alignItems: "center",
     gap: 10,
   },
-  reportPreviewCard: {
+  legalFile: {
+    flex: 1,
+    minHeight: 86,
     borderRadius: radius.sm,
     padding: 12,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.line,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
+    gap: 10,
   },
-  reportIcon: {
-    width: 42,
-    height: 42,
+  legalIcon: {
+    width: 34,
+    height: 34,
     borderRadius: radius.sm,
-    backgroundColor: "#E8F0EC",
+    backgroundColor: colors.surfaceSoft,
     alignItems: "center",
     justifyContent: "center",
+  },
+  sessionCard: {
+    borderRadius: radius.sm,
+    padding: 13,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 13,
+    ...shadow.soft,
+  },
+  sessionTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  sessionTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 7,
+  },
+  sessionIndex: {
+    overflow: "hidden",
+    borderRadius: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: "#E4EFE9",
+    color: colors.sageDark,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  sessionTime: {
+    color: colors.ink,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
+  sessionSummary: {
+    marginTop: 6,
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: "700",
+  },
+  sessionTags: {
+    maxWidth: 104,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: 5,
+  },
+  sessionTag: {
+    overflow: "hidden",
+    borderRadius: radius.pill,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    backgroundColor: colors.surfaceSoft,
+    color: colors.clayDark,
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  sessionActionGrid: {
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    paddingTop: 12,
+    flexDirection: "row",
+    gap: 6,
+  },
+  sessionAction: {
+    flex: 1,
+    minHeight: 80,
+    alignItems: "center",
+    gap: 4,
+  },
+  sessionActionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sessionActionIcon_warm: {
+    backgroundColor: "#F5DED5",
+  },
+  sessionActionIcon_green: {
+    backgroundColor: "#E4EFE9",
+  },
+  sessionActionIcon_blue: {
+    backgroundColor: "#E7EEF5",
+  },
+  sessionActionIcon_muted: {
+    backgroundColor: colors.surfaceSoft,
+  },
+  sessionActionLabel: {
+    color: colors.ink,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  sessionActionStatus: {
+    color: colors.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    textAlign: "center",
+    fontWeight: "700",
+  },
+  sessionFooter: {
+    gap: 10,
+  },
+  sessionRule: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  sessionGenerateButton: {
+    minHeight: 40,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: "#E7B9A8",
+    backgroundColor: "#FFF7EF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  sessionGenerateText: {
+    color: colors.clayDark,
+    fontSize: 13,
+    fontWeight: "900",
   },
   dataRow: {
     minHeight: 62,
@@ -1308,26 +1638,6 @@ const styles = StyleSheet.create({
     gap: 11,
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
-  },
-  timelineCard: {
-    borderRadius: radius.sm,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
-    padding: 12,
-    gap: 14,
-  },
-  timelineItem: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 10,
-  },
-  timelineDot: {
-    width: 10,
-    height: 10,
-    borderRadius: radius.pill,
-    marginTop: 5,
-    backgroundColor: colors.clay,
   },
   summaryCard: {
     borderRadius: radius.sm,
