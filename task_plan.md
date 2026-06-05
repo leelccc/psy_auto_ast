@@ -25,6 +25,8 @@ Complete. Latest follow-up polish pass also complete.
 - [x] Phase 12: Verify frontend build/rendering and commit.
 - [x] Phase 13: Polish mobile detail workflows for profile detail, recording summary detail, report editing, and data/privacy authorization.
 - [x] Phase 14: Verify polished mobile frontend with tests, typecheck, Expo Web, and web export.
+- [x] Phase 15: Add mobile interaction polish for selectable long-term-save authorization, transcript proofreading cues, and report draft status.
+- [x] Phase 16: Verify interaction polish with typecheck, tests, Expo Web DOM checks, and web export.
 
 ## Working Files
 
@@ -46,6 +48,7 @@ Complete. Latest follow-up polish pass also complete.
 - Backend MVP uses in-memory repositories for speed, with API contracts aligned to the schema/API docs so it can later migrate to SQLAlchemy/PostgreSQL.
 - Mobile frontend detail polish should keep the warm, soft, professional workbench style, but prioritize task clarity over decorative density.
 - Data/privacy authorization UI must show active user choice: no default checked long-term save items, and original recordings remain non-preservable.
+- Long-term-save authorization should behave as an explicit decision flow: hidden bottom navigation, selectable items, disabled confirmation until selection, and visible selection count.
 
 ## Errors Encountered
 

@@ -103,13 +103,15 @@ export default function App() {
           {tab === "recordings" && quickView === "overview" ? <ContentScreen onOpenDetail={() => setQuickView("recordingDetail")} /> : null}
           {tab === "account" && quickView === "overview" ? <AccountScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
         </ScrollView>
-        <BottomTabs
-          active={tab}
-          onChange={(next) => {
-            setQuickView("overview");
-            setTab(next);
-          }}
-        />
+        {quickView !== "privacyConsent" ? (
+          <BottomTabs
+            active={tab}
+            onChange={(next) => {
+              setQuickView("overview");
+              setTab(next);
+            }}
+          />
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -388,6 +390,17 @@ function RecordingDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
       </View>
 
       <SectionHeader title="转写片段" action="完整文本" />
+      <View style={styles.transcriptTools}>
+        <View style={styles.transcriptToolHeader}>
+          <Text style={styles.transcriptToolTitle}>转写校对</Text>
+          <Badge label="3 处待确认" tone="warm" />
+        </View>
+        <View style={styles.speakerRow}>
+          <Text style={styles.speakerChip}>来访者：陈雨</Text>
+          <Text style={styles.speakerChip}>咨询师：林咨询师</Text>
+        </View>
+        <Text style={styles.transcriptToolCopy}>可编辑发言人名称、逐段校对文本。修改后会同步影响纪要和后续报告草稿。</Text>
+      </View>
       <View style={styles.transcriptCard}>
         {transcriptTurns.map((item) => (
           <View key={item.time} style={styles.transcriptTurn}>
@@ -425,6 +438,12 @@ function ReportEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
         <GhostButton icon={FileText} label="正式版" onPress={() => undefined} />
       </View>
 
+      <View style={styles.editorStatusGrid}>
+        <MiniStat label="编辑段落" value="3 段" />
+        <MiniStat label="模板" value="内置" />
+        <MiniStat label="状态" value="未保存" />
+      </View>
+
       {reportSections.map((section) => (
         <View key={section.title} style={styles.editSection}>
           <View style={styles.editSectionHeader}>
@@ -444,6 +463,12 @@ function ReportEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
 }
 
 function PrivacyConsentScreen() {
+  const [selected, setSelected] = useState<string[]>([]);
+  const toggleConsent = (title: string) => {
+    setSelected((current) => (current.includes(title) ? current.filter((item) => item !== title) : [...current, title]));
+  };
+  const hasSelected = selected.length > 0;
+
   return (
     <View style={styles.consentBackdrop}>
       <View style={styles.consentSheet}>
@@ -454,8 +479,8 @@ function PrivacyConsentScreen() {
         </Text>
 
         <View style={styles.consentList}>
-          <ConsentItem title="陈雨 第6次咨询转写" meta="转写文本 · 可授权" />
-          <ConsentItem title="陈雨 第6次录音纪要" meta="录音纪要 · 可授权" />
+          <ConsentItem title="陈雨 第6次咨询转写" meta="转写文本 · 可授权" selected={selected.includes("陈雨 第6次咨询转写")} onPress={() => toggleConsent("陈雨 第6次咨询转写")} />
+          <ConsentItem title="陈雨 第6次录音纪要" meta="录音纪要 · 可授权" selected={selected.includes("陈雨 第6次录音纪要")} onPress={() => toggleConsent("陈雨 第6次录音纪要")} />
           <View style={styles.lockedConsentItem}>
             <Trash2 size={18} color={colors.danger} />
             <View style={styles.listBody}>
@@ -467,15 +492,18 @@ function PrivacyConsentScreen() {
 
         <View style={styles.riskPanel}>
           <ShieldCheck size={18} color={colors.sageDark} />
-          <Text style={styles.riskText}>你可以在「数据与隐私」中随时查看授权清单、取消授权或删除资料。取消授权后资料按剩余销毁周期处理。</Text>
+          <Text style={styles.riskText}>
+            {hasSelected ? `将授权 ${selected.length} 项资料长期保存。` : "尚未选择任何资料。"}
+            你可以在「数据与隐私」中随时查看授权清单、取消授权或删除资料。
+          </Text>
         </View>
 
         <View style={styles.consentFooter}>
           <TouchableOpacity style={styles.secondaryWideButton} activeOpacity={0.78}>
             <Text style={styles.secondaryWideText}>暂不授权</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.disabledWideButton} activeOpacity={0.78}>
-            <Text style={styles.disabledWideText}>需手动勾选</Text>
+          <TouchableOpacity style={[styles.disabledWideButton, hasSelected && styles.enabledWideButton]} activeOpacity={0.78} disabled={!hasSelected}>
+            <Text style={[styles.disabledWideText, hasSelected && styles.enabledWideText]}>{hasSelected ? `确认授权 ${selected.length} 项` : "需手动勾选"}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -725,10 +753,12 @@ function ChapterRow({ time, title, current }: { time: string; title: string; cur
   );
 }
 
-function ConsentItem({ title, meta }: { title: string; meta: string }) {
+function ConsentItem({ title, meta, selected, onPress }: { title: string; meta: string; selected: boolean; onPress: () => void }) {
   return (
-    <TouchableOpacity style={styles.consentItem} activeOpacity={0.78}>
-      <View style={styles.emptyCheckbox} />
+    <TouchableOpacity style={[styles.consentItem, selected && styles.consentItemSelected]} activeOpacity={0.78} onPress={onPress}>
+      <View style={[styles.emptyCheckbox, selected && styles.selectedCheckbox]}>
+        {selected ? <CheckCircle2 size={14} color="#FFF9F3" /> : null}
+      </View>
       <View style={styles.listBody}>
         <Text style={styles.listTitle}>{title}</Text>
         <Text style={styles.listMeta}>{meta}</Text>
@@ -1344,6 +1374,46 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "900",
   },
+  transcriptTools: {
+    borderRadius: radius.sm,
+    padding: 14,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 10,
+  },
+  transcriptToolHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  transcriptToolTitle: {
+    color: colors.ink,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  speakerRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  speakerChip: {
+    overflow: "hidden",
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: colors.surface,
+    color: colors.clayDark,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  transcriptToolCopy: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 19,
+    fontWeight: "700",
+  },
   transcriptCard: {
     borderRadius: radius.sm,
     backgroundColor: colors.surface,
@@ -1414,6 +1484,10 @@ const styles = StyleSheet.create({
   editorToolbar: {
     flexDirection: "row",
     gap: 10,
+  },
+  editorStatusGrid: {
+    flexDirection: "row",
+    gap: 8,
   },
   editSection: {
     borderRadius: radius.sm,
@@ -1492,6 +1566,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
+  consentItemSelected: {
+    backgroundColor: "#FFF7EF",
+    borderColor: "#E7B9A8",
+  },
   emptyCheckbox: {
     width: 20,
     height: 20,
@@ -1499,6 +1577,12 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.clayDark,
     backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  selectedCheckbox: {
+    backgroundColor: colors.clayDark,
+    borderColor: colors.clayDark,
   },
   lockedConsentItem: {
     minHeight: 66,
@@ -1553,10 +1637,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  enabledWideButton: {
+    backgroundColor: colors.clayDark,
+  },
   disabledWideText: {
     color: colors.muted,
     fontSize: 14,
     fontWeight: "900",
+  },
+  enabledWideText: {
+    color: "#FFF9F3",
   },
   avatar: {
     width: 44,

@@ -54,3 +54,15 @@
 - Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
 - Marked Phase 14 complete.
 - User paused after reviewing the mobile detail workflow polish; next continuation should resume from mobile frontend refinement and any requested follow-up screens or interaction polish.
+- Resumed mobile frontend refinement after the user asked to continue.
+- Added true selectable state to the long-term-save authorization UI, including selected item highlighting, live authorization count, and disabled confirmation until the user manually selects at least one item.
+- Hid the bottom tab bar while the long-term-save authorization decision flow is open so the page behaves more like a focused modal.
+- Added transcript proofreading cues to the recording summary detail page: pending confirmation count, speaker identity chips, and copy clarifying speaker/text edits affect summaries and report drafts.
+- Added report editor status stats for editable section count, built-in template use, and unsaved draft state.
+- Ran frontend tests: `npm test`, result `2 passed`.
+- Ran frontend typecheck: `npm run typecheck`, result passed.
+- Started Expo Web on `http://localhost:8083` and verified via browser DOM checks that authorization toggles from `需手动勾选` to `确认授权 1 项` after item selection.
+- Verified via browser DOM checks that the recording summary detail shows `转写校对`, `3 处待确认`, and speaker chips.
+- Browser screenshot capture timed out during this pass, but DOM-level interaction checks succeeded.
+- Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
+- Marked Phase 16 complete.
