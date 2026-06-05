@@ -53,6 +53,7 @@ Complete. Latest follow-up polish pass also complete.
 - Primary bottom navigation is fixed as `首页 / 档案 / 资讯 / 我的`; `资讯` remains a lightweight but necessary tab even if early content is simple.
 - The active recording page must not include historical recording records; recording records are a separate page.
 - Profile detail is organized by per-session cards. Each session card uses the fixed entry labels `录音 / 记录 / 量表 / 作业 / 其他` for all three profile identities.
+- Single-session output is a consultation/supervision record generated from that session's recording, transcript/summary, scale, homework, and other materials. Case reports are full-profile outputs generated from all session records and related materials.
 
 ## Errors Encountered
 

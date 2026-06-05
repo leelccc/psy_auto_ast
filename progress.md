@@ -79,3 +79,8 @@
 - Ran frontend typecheck: `npm run typecheck`, result passed.
 - Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
 - Marked Phase 17 complete.
+- User clarified the report hierarchy: each consultation/session has one consultation record, generated from that session's recording plus scale, homework, and other materials when present; the case report is generated later from all consultation records and related profile materials.
+- Updated mobile wording so the recording summary entry says `生成咨询记录` rather than `编辑报告`, and the editor route title says `咨询记录编辑`.
+- Updated internal naming from report editor/sections to record editor/sections for single-session record editing.
+- Kept `生成个案报告` as a full-profile action instead of routing it into the single-session consultation record editor.
+- Updated `docs/prd/session-memory.md` and `task_plan.md` with the single-session record vs full-profile case report distinction.

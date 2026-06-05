@@ -71,7 +71,7 @@ export const transcriptTurns = [
   { time: "10:18", speaker: "来访者", text: "这样分开以后，好像能看到我把很多不确定都当成了已经发生的结果。" },
 ];
 
-export const reportSections = [
+export const recordSections = [
   { title: "主诉与本次主题", content: "来访者本周睡眠质量下降，主要与工作评价焦虑及关系中的自我怀疑有关。本次围绕压力触发点、自动化想法和身体反应展开。" },
   { title: "咨询过程摘要", content: "咨询师引导来访者区分事实、推测与情绪反应，并协助其识别在评价场景中的灾难化推断。来访者能初步命名焦虑出现前的身体信号。" },
   { title: "后续计划", content: "下周继续记录睡前 30 分钟的想法链条，优先观察触发事件、身体反应和可验证事实。必要时在督导中讨论风险评估边界。" },

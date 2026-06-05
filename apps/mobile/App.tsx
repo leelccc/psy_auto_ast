@@ -48,7 +48,7 @@ import {
   profiles,
   recordings,
   reminders,
-  reportSections,
+  recordSections,
   summaryChapters,
   transcriptTurns,
   type TabKey,
@@ -64,7 +64,7 @@ type QuickView =
   | "profileDetail"
   | "profileCreate"
   | "recordingDetail"
-  | "reportEditor"
+  | "recordEditor"
   | "privacyConsent";
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
@@ -88,7 +88,7 @@ export default function App() {
     if (quickView === "profileDetail") return "档案详情";
     if (quickView === "profileCreate") return "新增档案";
     if (quickView === "recordingDetail") return "录音纪要";
-    if (quickView === "reportEditor") return "报告编辑";
+    if (quickView === "recordEditor") return "咨询记录编辑";
     if (quickView === "privacyConsent") return "长期保存授权";
     if (tab === "profiles") return "档案库";
     if (tab === "recordings") return "资讯";
@@ -107,10 +107,10 @@ export default function App() {
           {quickView === "recordingRecords" ? <RecordingRecordsScreen onOpenDetail={() => setQuickView("recordingDetail")} /> : null}
           {quickView === "archive" ? <ArchiveScreen /> : null}
           {quickView === "supervision" ? <SupervisionScreen /> : null}
-          {quickView === "profileDetail" ? <ProfileDetailScreen onOpenReport={() => setQuickView("reportEditor")} /> : null}
+          {quickView === "profileDetail" ? <ProfileDetailScreen onOpenRecord={() => setQuickView("recordEditor")} /> : null}
           {quickView === "profileCreate" ? <ProfileCreateScreen /> : null}
-          {quickView === "recordingDetail" ? <RecordingDetailScreen onOpenReport={() => setQuickView("reportEditor")} /> : null}
-          {quickView === "reportEditor" ? <ReportEditorScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
+          {quickView === "recordingDetail" ? <RecordingDetailScreen onOpenRecord={() => setQuickView("recordEditor")} /> : null}
+          {quickView === "recordEditor" ? <RecordEditorScreen onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
           {quickView === "privacyConsent" ? <PrivacyConsentScreen /> : null}
           {tab === "profiles" && quickView === "overview" ? <ProfilesScreen onOpenDetail={() => setQuickView("profileDetail")} onCreate={() => setQuickView("profileCreate")} /> : null}
           {tab === "recordings" && quickView === "overview" ? <ContentScreen /> : null}
@@ -356,14 +356,14 @@ function ProfileCreateScreen() {
       </View>
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>基础档案长期保存</Text>
-        <Text style={styles.privacyCopy}>基础档案信息会长期保存在云端；录音、报告、附件等敏感资料仍按 14 天临时保存与主动授权规则处理。</Text>
+        <Text style={styles.privacyCopy}>基础档案信息会长期保存在云端；录音、咨询记录、个案报告、附件等敏感资料仍按 14 天临时保存与主动授权规则处理。</Text>
       </View>
       <PrimaryButton icon={FolderOpen} label="创建档案" onPress={() => undefined} wide />
     </View>
   );
 }
 
-function ProfileDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
+function ProfileDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.profileHeaderCard}>
@@ -401,7 +401,7 @@ function ProfileDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
         scale="未上传"
         homework="已布置"
         other="1 项"
-        onOpenReport={onOpenReport}
+        onOpenRecord={onOpenRecord}
       />
       <SessionCard
         index="第 5 次"
@@ -413,7 +413,7 @@ function ProfileDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
         scale="SAS"
         homework="已提交"
         other="无"
-        onOpenReport={onOpenReport}
+        onOpenRecord={onOpenRecord}
       />
 
       <View style={styles.privacyPanel}>
@@ -421,12 +421,12 @@ function ProfileDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
         <Text style={styles.privacyCopy}>录音只能临时保存 14 天；记录、量表、作业和其他附件可在对应卡片内主动授权长期保存。草稿保存为正式版后，正式版不可直接编辑。</Text>
       </View>
 
-      <PrimaryButton icon={Sparkles} label="生成个案报告" onPress={onOpenReport} wide />
+      <PrimaryButton icon={Sparkles} label="生成个案报告" onPress={() => undefined} wide />
     </View>
   );
 }
 
-function RecordingDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
+function RecordingDetailScreen({ onOpenRecord }: { onOpenRecord: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.noticeCard}>
@@ -445,7 +445,7 @@ function RecordingDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
         <Text style={styles.summaryCopy}>本次来访者主要围绕睡眠下降、工作评价焦虑和关系议题展开。咨询师进行了事实、推测与情绪反应的区分。</Text>
         <View style={styles.inlineActions}>
           <GhostButton icon={RefreshCcw} label="重新生成" onPress={() => undefined} />
-          <PrimaryButton icon={Edit3} label="编辑报告" onPress={onOpenReport} />
+          <PrimaryButton icon={Edit3} label="生成咨询记录" onPress={onOpenRecord} />
         </View>
       </View>
 
@@ -466,7 +466,7 @@ function RecordingDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
           <Text style={styles.speakerChip}>来访者：陈雨</Text>
           <Text style={styles.speakerChip}>咨询师：林咨询师</Text>
         </View>
-        <Text style={styles.transcriptToolCopy}>可编辑发言人名称、逐段校对文本。修改后会同步影响纪要和后续报告草稿。</Text>
+        <Text style={styles.transcriptToolCopy}>可编辑发言人名称、逐段校对文本。修改后会同步影响纪要和本次咨询记录草稿。</Text>
       </View>
       <View style={styles.transcriptCard}>
         {transcriptTurns.map((item) => (
@@ -485,7 +485,7 @@ function RecordingDetailScreen({ onOpenReport }: { onOpenReport: () => void }) {
   );
 }
 
-function ReportEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
+function RecordEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.editorHeader}>
@@ -511,7 +511,7 @@ function ReportEditorScreen({ onOpenPrivacy }: { onOpenPrivacy: () => void }) {
         <MiniStat label="状态" value="未保存" />
       </View>
 
-      {reportSections.map((section) => (
+      {recordSections.map((section) => (
         <View key={section.title} style={styles.editSection}>
           <View style={styles.editSectionHeader}>
             <Text style={styles.editSectionTitle}>{section.title}</Text>
@@ -588,7 +588,7 @@ function SupervisionScreen() {
         <GhostButton icon={Plus} label="添加资料" onPress={() => undefined} />
       </View>
       <ChatBubble align="left" text="可以帮我整理一个适合带去督导的问题清单吗？" />
-      <ChatBubble align="right" text="可以。请先选择要参考的档案、报告或附件；未添加资料时，我只能提供通用整理框架。" />
+      <ChatBubble align="right" text="可以。请先选择要参考的档案、咨询记录、个案报告或附件；未添加资料时，我只能提供通用整理框架。" />
       <View style={styles.composer}>
         <Text style={styles.composerText}>输入想讨论的主题</Text>
         <TouchableOpacity style={styles.sendButton} activeOpacity={0.75}>
@@ -787,7 +787,7 @@ function SessionCard({
   scale,
   homework,
   other,
-  onOpenReport,
+  onOpenRecord,
 }: {
   index: string;
   time: string;
@@ -798,7 +798,7 @@ function SessionCard({
   scale: string;
   homework: string;
   other: string;
-  onOpenReport: () => void;
+  onOpenRecord: () => void;
 }) {
   return (
     <View style={styles.sessionCard}>
@@ -827,7 +827,7 @@ function SessionCard({
 
       <View style={styles.sessionFooter}>
         <Text style={styles.sessionRule}>记录可存草稿/正式版；敏感资料需主动授权长期保存</Text>
-        <TouchableOpacity style={styles.sessionGenerateButton} activeOpacity={0.78} onPress={onOpenReport}>
+        <TouchableOpacity style={styles.sessionGenerateButton} activeOpacity={0.78} onPress={onOpenRecord}>
           <Sparkles size={16} color={colors.clayDark} />
           <Text style={styles.sessionGenerateText}>生成咨询记录</Text>
         </TouchableOpacity>
