@@ -55,6 +55,7 @@ Complete. Latest follow-up polish pass also complete.
 - Profile detail is organized by per-session cards. Each session card uses the fixed entry labels `录音 / 记录 / 量表 / 作业 / 其他` for all three profile identities.
 - Single-session output is a consultation/supervision record generated from that session's recording, transcript/summary, scale, homework, and other materials. Case reports are full-profile outputs generated from all session records and related materials.
 - Every visible button or pressable row in the mobile prototype must close a loop: navigate, change state, open a focused decision flow, or show a specific action result. Avoid no-op placeholder buttons.
+- Saving a recording leads to an archive decision flow. The user must choose which profile the recording belongs to; if the person does not exist, the flow must allow creating a new person before confirming archive.
 
 ## Errors Encountered
 

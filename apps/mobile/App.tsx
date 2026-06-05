@@ -280,23 +280,138 @@ function RecordingRecordsScreen({ onOpenDetail, onNotice }: { onOpenDetail: () =
 }
 
 function ArchiveScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
+  const [kind, setKind] = useState<"client" | "supervisor" | "supervisee">("client");
+  const [selectedProfile, setSelectedProfile] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const archiveKinds = [
+    { key: "client" as const, label: "来访者", detail: "咨询记录" },
+    { key: "supervisor" as const, label: "督导师", detail: "受督记录" },
+    { key: "supervisee" as const, label: "受督者", detail: "督导记录" },
+  ];
+  const archiveCandidates = {
+    client: [
+      { id: "chen-yu", name: "陈雨", meta: "进行中 · 第 6 次咨询", next: "下次 6月8日 10:00" },
+      { id: "zhou-nan", name: "周楠", meta: "暂停 · 第 3 次咨询", next: "最近 5月18日" },
+    ],
+    supervisor: [
+      { id: "li-cheng", name: "李澄", meta: "督导师 · 第 3 次受督", next: "下次 6月9日 15:30" },
+    ],
+    supervisee: [
+      { id: "zhou-ning", name: "周宁", meta: "受督者 · 第 12 次督导", next: "下次 6月12日 14:00" },
+    ],
+  }[kind];
+  const selectedName = selectedProfile === "new" ? "新建人员" : archiveCandidates.find((item) => item.id === selectedProfile)?.name;
+
   return (
     <View style={styles.stack}>
       <View style={styles.noticeCard}>
         <ShieldCheck size={24} color={colors.sageDark} />
         <View style={styles.listBody}>
-          <Text style={styles.listTitle}>陈雨 第6次咨询录音</Text>
-          <Text style={styles.listMeta}>52:18 · AI 正在生成章节速览</Text>
+          <Text style={styles.listTitle}>未归档录音 06-05</Text>
+          <Text style={styles.listMeta}>52:18 · 保存后需要选择归属档案</Text>
         </View>
       </View>
-      <StepRow index="1" title="身份类型" value="来访者档案" onPress={() => onNotice("选择身份类型", "可切换为来访者、督导师或受督者；不同身份会影响归档字段。")} />
-      <StepRow index="2" title="目标档案" value="陈雨 · 进行中" onPress={() => onNotice("选择目标档案", "可搜索并选择已有档案，或先创建新档案再归档。")} />
+
+      <SectionHeader title="1 选择归档类型" action="必选" />
+      <View style={styles.archiveKindGrid}>
+        {archiveKinds.map((item) => (
+          <TouchableOpacity
+            key={item.key}
+            style={[styles.archiveKindOption, kind === item.key && styles.archiveKindOptionActive]}
+            activeOpacity={0.78}
+            onPress={() => {
+              setKind(item.key);
+              setSelectedProfile(null);
+              setCreating(false);
+            }}
+          >
+            <Text style={[styles.archiveKindTitle, kind === item.key && styles.archiveKindTitleActive]}>{item.label}</Text>
+            <Text style={styles.archiveKindDetail}>{item.detail}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <SectionHeader title="2 选择归属档案" action="搜索" onAction={() => onNotice("搜索档案", "可按姓名、编号、备注搜索；找不到时从下方新增人员。")} />
+      <View style={styles.searchBar}>
+        <Search size={18} color={colors.subtle} />
+        <Text style={styles.searchPlaceholder}>搜索姓名、编号或备注</Text>
+      </View>
+      <View style={styles.cardStack}>
+        {archiveCandidates.map((item) => (
+          <TouchableOpacity
+            key={item.id}
+            style={[styles.archiveProfileCard, selectedProfile === item.id && styles.archiveProfileCardSelected]}
+            activeOpacity={0.78}
+            onPress={() => {
+              setSelectedProfile(item.id);
+              setCreating(false);
+              onNotice("已选择归属档案", `${item.name} 将作为这段录音的归档对象。`);
+            }}
+          >
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text>
+            </View>
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>{item.name}</Text>
+              <Text style={styles.listMeta}>{item.meta} · {item.next}</Text>
+            </View>
+            {selectedProfile === item.id ? <CheckCircle2 size={19} color={colors.sageDark} /> : <ChevronRight size={18} color={colors.subtle} />}
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {!creating ? (
+        <TouchableOpacity style={styles.createInlineButton} activeOpacity={0.78} onPress={() => {
+          setCreating(true);
+          setSelectedProfile(null);
+        }}>
+          <Plus size={18} color={colors.clayDark} />
+          <Text style={styles.createInlineButtonText}>没有这个人，新增人员</Text>
+        </TouchableOpacity>
+      ) : (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>新增{archiveKinds.find((item) => item.key === kind)?.label}</Text>
+          <View style={styles.formFieldRow}>
+            <Text style={styles.formFieldLabel}>姓名 / 称呼</Text>
+            <Text style={styles.formFieldValue}>待填写</Text>
+          </View>
+          <View style={styles.formFieldRow}>
+            <Text style={styles.formFieldLabel}>{kind === "client" ? "主诉与目标" : kind === "supervisor" ? "督导方向" : "受督方向"}</Text>
+            <Text style={styles.formFieldValue}>待填写</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.inlineCreateConfirm}
+            activeOpacity={0.78}
+            onPress={() => {
+              setSelectedProfile("new");
+              setCreating(false);
+              onNotice("新人员已创建并选中", "录音会先归入新建档案，稍后可补全详细字段。");
+            }}
+          >
+            <Text style={styles.inlineCreateConfirmText}>保存人员并选中</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <StepRow index="3" title="记录次数" value="第 6 次咨询" onPress={() => onNotice("确认记录次数", "可调整为对应咨询/督导/受督次数，保存后仍可在档案详情中修改。")} />
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>保存与隐私</Text>
         <Text style={styles.privacyCopy}>原始录音云端仅保存 14 天，不支持长期保存。转写和纪要可在生成后单独授权长期保存。</Text>
       </View>
-      <PrimaryButton icon={FolderOpen} label="确认归档" onPress={() => onNotice("已进入归档队列", "录音将归入陈雨第 6 次咨询，并开始异步生成转写、纪要和咨询记录材料。")} wide />
+      <TouchableOpacity
+        style={[styles.primaryButton, styles.wideButton, !selectedProfile && styles.pendingPrimaryButton]}
+        activeOpacity={0.78}
+        onPress={() => {
+          if (!selectedProfile) {
+            onNotice("请先选择归属档案", "保存录音后必须选择已有人员，或新增人员后再确认归档。");
+            return;
+          }
+          onNotice("已进入归档队列", `录音将归入${selectedName}的档案，并开始异步生成转写、纪要和本次记录材料。`);
+        }}
+      >
+        <FolderOpen size={18} color="#FFF9F3" />
+        <Text style={styles.primaryButtonText}>{selectedProfile ? "确认归档" : "请先选择档案"}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -1321,6 +1436,94 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+  },
+  archiveKindGrid: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  archiveKindOption: {
+    flex: 1,
+    minHeight: 68,
+    borderRadius: radius.sm,
+    padding: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    justifyContent: "center",
+  },
+  archiveKindOptionActive: {
+    backgroundColor: "#F7EDE4",
+    borderColor: "#E7B9A8",
+  },
+  archiveKindTitle: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  archiveKindTitleActive: {
+    color: colors.clayDark,
+  },
+  archiveKindDetail: {
+    marginTop: 4,
+    color: colors.muted,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "700",
+  },
+  archiveProfileCard: {
+    minHeight: 70,
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  archiveProfileCardSelected: {
+    backgroundColor: "#EEF5F0",
+    borderColor: "#C9DED1",
+  },
+  createInlineButton: {
+    minHeight: 46,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  createInlineButtonText: {
+    color: colors.clayDark,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  inlineCreateCard: {
+    borderRadius: radius.sm,
+    padding: 14,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 4,
+  },
+  inlineCreateConfirm: {
+    marginTop: 10,
+    minHeight: 40,
+    borderRadius: radius.sm,
+    backgroundColor: colors.clayDark,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inlineCreateConfirmText: {
+    color: "#FFF9F3",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  pendingPrimaryButton: {
+    backgroundColor: colors.subtle,
   },
   stepRow: {
     minHeight: 70,

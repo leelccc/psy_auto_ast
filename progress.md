@@ -90,3 +90,7 @@
 - Converted several visually actionable rows/cards from static views into pressable controls where appropriate.
 - Audited `App.tsx` for empty `onPress={() => undefined}` handlers; none remain.
 - Verified via browser DOM checks that representative buttons show feedback: home reminder, recording cancel, session scale entry, and case report generation.
+- User clarified that after saving a recording, archive must require choosing which person's profile the recording belongs to; if the person does not exist, the user must be able to create the person during archive.
+- Rebuilt the archive confirmation page into a choose-or-create flow: select archive type (`来访者/督导师/受督者`), search/select an existing profile, or add a new person inline before confirming archive.
+- Changed archive confirmation so it prompts for a selected profile first and only confirms archive after an existing or newly created person is selected.
+- Verified via browser DOM checks that archive shows type selection, target profile selection, `没有这个人，新增人员`, disabled/pending confirmation copy, existing profile selection, and inline new-person selection.
