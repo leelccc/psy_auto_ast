@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "咨询师助手",
+    "slug": "psy-auto-ast-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

@@ -28,3 +28,13 @@
 - Confirmed RED state: tests failed because `app.main` did not exist.
 - Implemented minimal in-memory FastAPI core in `backend/app/main.py`.
 - Ran backend tests: `PYTHONPATH=backend venv/bin/python -m pytest backend/tests/test_core_api.py -q`, result `4 passed`.
+- Committed minimal backend core with message `feat: add minimal backend core`.
+- Started Phase 10: Expo/React Native mobile frontend scaffold.
+- Added Expo/React Native mobile app scaffold under `apps/mobile`.
+- Added mobile theme tokens, mock data, and data helper tests.
+- Built `App.tsx` with a polished mobile prototype: home workbench, recording state, archive confirmation, profile library, intelligent supervision, content, account, and privacy resource views.
+- Ran frontend tests: `npm test`, result `2 passed`.
+- Ran frontend typecheck: `npm run typecheck`, result passed.
+- Started Expo Web on `http://localhost:8082` and exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
+- Committed mobile prototype with message `feat: add mobile prototype`.
+- Marked Phase 12 complete.

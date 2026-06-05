@@ -9,6 +9,7 @@ __pycache__/
 node_modules/
 .expo/
 dist/
+dist-web/
 build/
 
 .env

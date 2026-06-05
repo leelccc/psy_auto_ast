@@ -6,7 +6,7 @@ Build a minimal backend core first, then a polished mobile frontend prototype th
 
 ## Current Phase
 
-Phase 9: Verify backend endpoints and commit.
+Complete.
 
 ## Phases
 
@@ -19,10 +19,10 @@ Phase 9: Verify backend endpoints and commit.
 - [x] Phase 6: Validate consistency against PRD and technical design.
 - [x] Phase 7: Commit documentation changes.
 - [x] Phase 8: Scaffold minimal FastAPI backend core with TDD.
-- [ ] Phase 9: Verify backend endpoints and commit.
-- [ ] Phase 10: Scaffold mobile frontend app.
-- [ ] Phase 11: Build high-fidelity mobile screens for home, recordings, profiles, archive, supervision, privacy, and account.
-- [ ] Phase 12: Verify frontend build/rendering and commit.
+- [x] Phase 9: Verify backend endpoints and commit.
+- [x] Phase 10: Scaffold mobile frontend app.
+- [x] Phase 11: Build high-fidelity mobile screens for home, recordings, profiles, archive, supervision, privacy, and account.
+- [x] Phase 12: Verify frontend build/rendering and commit.
 
 ## Working Files
 
