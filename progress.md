@@ -53,3 +53,4 @@
 - Increased mobile scroll bottom padding so deep-page content clears the floating bottom tab bar.
 - Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
 - Marked Phase 14 complete.
+- User paused after reviewing the mobile detail workflow polish; next continuation should resume from mobile frontend refinement and any requested follow-up screens or interaction polish.
