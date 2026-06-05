@@ -1,0 +1,16 @@
+.DS_Store
+.idea/
+
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+node_modules/
+.expo/
+dist/
+build/
+
+.env
+.env.*
+!.env.example

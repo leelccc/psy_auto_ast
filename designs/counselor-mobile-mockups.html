@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>咨询师助手移动端视觉稿</title>
+    <style>
+      :root {
+        --paper: #fff9f3;
+        --surface: #fffdf9;
+        --surface-soft: #f7ede4;
+        --ink: #37312d;
+        --muted: #756b63;
+        --subtle: #9a8f85;
+        --line: #eaded2;
+        --clay: #c97965;
+        --clay-dark: #9f5747;
+        --sage: #8fac9b;
+        --sage-dark: #5f806f;
+        --blue: #8fa6c2;
+        --gold: #d7a45f;
+        --shadow: 0 22px 60px rgba(99, 71, 50, 0.16);
+        --soft-shadow: 0 10px 30px rgba(99, 71, 50, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 5%, rgba(201, 121, 101, 0.16), transparent 30%),
+          radial-gradient(circle at 88% 8%, rgba(143, 172, 155, 0.2), transparent 28%),
+          linear-gradient(135deg, #fffaf4 0%, #f4ebe4 100%);
+        font-family:
+          "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+
+      .canvas {
+        width: 1840px;
+        min-height: 1040px;
+        padding: 44px 48px 56px;
+      }
+
+      .brief {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        margin: 0 0 30px;
+      }
+
+      .brief h1 {
+        margin: 0;
+        font-size: 34px;
+        line-height: 1.1;
+        font-weight: 760;
+        letter-spacing: 0;
+      }
+
+      .brief p {
+        width: 620px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1.7;
+      }
+
+      .frames {
+        display: grid;
+        grid-template-columns: repeat(4, 390px);
+        gap: 38px;
+        align-items: start;
+      }
+
+      .phone-wrap {
+        display: grid;
+        gap: 14px;
+      }
+
+      .caption {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 8px;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .caption strong {
+        color: var(--ink);
+        font-size: 18px;
+      }
+
+      .phone {
+        width: 390px;
+        height: 844px;
+        overflow: hidden;
+        position: relative;
+        border: 10px solid #2f2a27;
+        border-radius: 42px;
+        background: var(--paper);
+        box-shadow: var(--shadow);
+      }
+
+      .screen {
+        height: 100%;
+        padding: 20px 20px 88px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 22px;
+        margin-bottom: 16px;
+        color: #4f4740;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .signal {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: #4f4740;
+        opacity: 0.85;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+
+      .kicker {
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: 28px;
+        line-height: 1.12;
+        font-weight: 760;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        margin: 0;
+        font-size: 17px;
+        line-height: 1.25;
+        font-weight: 720;
+      }
+
+      .avatar {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        color: var(--clay-dark);
+        background: #f2d9cd;
+        font-size: 15px;
+        font-weight: 760;
+      }
+
+      .icon-btn {
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        color: var(--muted);
+        background: rgba(255, 253, 249, 0.9);
+        font-weight: 750;
+      }
+
+      .hero-card {
+        padding: 19px;
+        border: 1px solid rgba(234, 222, 210, 0.9);
+        border-radius: 26px;
+        color: #fffaf5;
+        background:
+          linear-gradient(135deg, rgba(159, 87, 71, 0.94), rgba(201, 121, 101, 0.86)),
+          #c97965;
+        box-shadow: var(--soft-shadow);
+      }
+
+      .hero-card .row,
+      .card .row,
+      .list-row,
+      .metric-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .hero-card p {
+        margin: 10px 0 18px;
+        color: rgba(255, 250, 245, 0.82);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .hero-card strong {
+        display: block;
+        font-size: 20px;
+        line-height: 1.3;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        padding: 0 11px;
+        border-radius: 999px;
+        color: var(--clay-dark);
+        background: #f3ded5;
+        font-size: 12px;
+        font-weight: 760;
+        white-space: nowrap;
+      }
+
+      .pill.light {
+        color: #fff8f3;
+        background: rgba(255, 255, 255, 0.18);
+      }
+
+      .pill.sage {
+        color: var(--sage-dark);
+        background: #e2eee7;
+      }
+
+      .pill.blue {
+        color: #58708b;
+        background: #e4edf5;
+      }
+
+      .quick-grid {
+        display: grid;
+        grid-template-columns: 1.15fr 1fr;
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .action {
+        min-height: 102px;
+        padding: 15px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(255, 253, 249, 0.92);
+        box-shadow: 0 8px 22px rgba(99, 71, 50, 0.06);
+      }
+
+      .action.featured {
+        grid-row: span 2;
+        background: #fffdf9;
+      }
+
+      .action-mark {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        margin-bottom: 14px;
+        border-radius: 14px;
+        color: var(--clay-dark);
+        background: #f4ded6;
+        font-size: 18px;
+        font-weight: 850;
+      }
+
+      .action:nth-child(2) .action-mark {
+        color: var(--sage-dark);
+        background: #e1ece6;
+      }
+
+      .action:nth-child(3) .action-mark {
+        color: #58708b;
+        background: #e5edf5;
+      }
+
+      .action b {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 15px;
+      }
+
+      .action span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 20px 0 10px;
+      }
+
+      .section-head h3 {
+        font-size: 16px;
+      }
+
+      .section-head span {
+        color: var(--subtle);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .card {
+        padding: 15px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(255, 253, 249, 0.88);
+      }
+
+      .metric-row {
+        align-items: stretch;
+      }
+
+      .metric {
+        flex: 1;
+        padding: 11px 9px;
+        border-radius: 16px;
+        background: #faf2ea;
+      }
+
+      .metric b {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 20px;
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.3;
+      }
+
+      .task {
+        display: flex;
+        gap: 10px;
+        padding: 12px 0;
+        border-bottom: 1px solid rgba(234, 222, 210, 0.75);
+      }
+
+      .task:last-child {
+        border-bottom: 0;
+        padding-bottom: 0;
+      }
+
+      .task-time {
+        width: 48px;
+        color: var(--clay-dark);
+        font-size: 12px;
+        font-weight: 760;
+      }
+
+      .task b {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 14px;
+      }
+
+      .task span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .bottom-nav {
+        position: absolute;
+        left: 18px;
+        right: 18px;
+        bottom: 16px;
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 4px;
+        padding: 10px;
+        border: 1px solid rgba(234, 222, 210, 0.9);
+        border-radius: 26px;
+        background: rgba(255, 253, 249, 0.94);
+        box-shadow: 0 14px 36px rgba(99, 71, 50, 0.13);
+      }
+
+      .nav-item {
+        display: grid;
+        place-items: center;
+        gap: 4px;
+        min-height: 42px;
+        color: var(--subtle);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .nav-item i {
+        display: block;
+        width: 18px;
+        height: 18px;
+        border: 2px solid currentColor;
+        border-radius: 7px;
+      }
+
+      .nav-item.active {
+        color: var(--clay-dark);
+      }
+
+      .nav-item.active i {
+        background: #f1d9ce;
+      }
+
+      .rec-screen {
+        background:
+          radial-gradient(circle at 50% -10%, rgba(201, 121, 101, 0.2), transparent 34%),
+          var(--paper);
+      }
+
+      .recording-top {
+        margin: 18px 0 22px;
+        text-align: center;
+      }
+
+      .timer {
+        margin: 10px 0 6px;
+        font-size: 44px;
+        line-height: 1;
+        font-weight: 780;
+        letter-spacing: 0;
+        color: var(--clay-dark);
+      }
+
+      .wave-card {
+        height: 180px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        margin: 18px 0;
+        border-radius: 30px;
+        background:
+          linear-gradient(180deg, rgba(255, 253, 249, 0.95), rgba(248, 236, 226, 0.92));
+        border: 1px solid var(--line);
+        box-shadow: var(--soft-shadow);
+      }
+
+      .bar {
+        width: 8px;
+        border-radius: 999px;
+        background: var(--clay);
+        opacity: 0.42;
+      }
+
+      .bar:nth-child(1) { height: 34px; }
+      .bar:nth-child(2) { height: 68px; background: var(--sage); }
+      .bar:nth-child(3) { height: 104px; opacity: 0.75; }
+      .bar:nth-child(4) { height: 136px; background: var(--gold); opacity: 0.55; }
+      .bar:nth-child(5) { height: 92px; }
+      .bar:nth-child(6) { height: 126px; background: var(--sage); opacity: 0.7; }
+      .bar:nth-child(7) { height: 58px; }
+      .bar:nth-child(8) { height: 110px; background: var(--blue); opacity: 0.7; }
+      .bar:nth-child(9) { height: 74px; }
+      .bar:nth-child(10) { height: 42px; background: var(--sage); }
+
+      .transcript {
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: rgba(255, 253, 249, 0.88);
+      }
+
+      .transcript p {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.7;
+      }
+
+      .transcript .live {
+        color: var(--clay-dark);
+        font-size: 12px;
+        font-weight: 780;
+      }
+
+      .rec-actions {
+        position: absolute;
+        left: 20px;
+        right: 20px;
+        bottom: 26px;
+        display: grid;
+        grid-template-columns: 1fr 70px 1fr;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .text-btn {
+        height: 52px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        color: var(--muted);
+        background: rgba(255, 253, 249, 0.95);
+        font-size: 14px;
+        font-weight: 760;
+      }
+
+      .pause-btn {
+        display: grid;
+        place-items: center;
+        width: 70px;
+        height: 70px;
+        border: 0;
+        border-radius: 50%;
+        color: #fffaf5;
+        background: var(--clay);
+        box-shadow: 0 12px 30px rgba(201, 121, 101, 0.35);
+        font-size: 22px;
+        font-weight: 900;
+      }
+
+      .tabs,
+      .segmented {
+        display: flex;
+        gap: 6px;
+        padding: 5px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: #f7eee6;
+      }
+
+      .tab {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        height: 34px;
+        border-radius: 13px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 760;
+      }
+
+      .tab.active {
+        color: var(--clay-dark);
+        background: var(--surface);
+        box-shadow: 0 8px 18px rgba(99, 71, 50, 0.08);
+      }
+
+      .search {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 46px;
+        margin: 14px 0;
+        padding: 0 15px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        color: var(--subtle);
+        background: rgba(255, 253, 249, 0.9);
+        font-size: 13px;
+      }
+
+      .profile-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .profile-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(255, 253, 249, 0.9);
+      }
+
+      .profile-avatar {
+        display: grid;
+        place-items: center;
+        flex: 0 0 auto;
+        width: 48px;
+        height: 48px;
+        border-radius: 18px;
+        color: var(--clay-dark);
+        background: #f1d9ce;
+        font-size: 17px;
+        font-weight: 820;
+      }
+
+      .profile-card:nth-child(2) .profile-avatar {
+        color: var(--sage-dark);
+        background: #e0ebe5;
+      }
+
+      .profile-card:nth-child(3) .profile-avatar {
+        color: #58708b;
+        background: #e5edf5;
+      }
+
+      .profile-main {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .profile-main b {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 15px;
+      }
+
+      .profile-main span {
+        display: block;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .risk {
+        min-width: 42px;
+        height: 27px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        color: #7a5b16;
+        background: #f5e7be;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .risk.low {
+        color: var(--sage-dark);
+        background: #dfece5;
+      }
+
+      .fab {
+        position: absolute;
+        right: 22px;
+        bottom: 104px;
+        display: grid;
+        place-items: center;
+        width: 58px;
+        height: 58px;
+        border-radius: 50%;
+        color: #fffaf5;
+        background: var(--clay);
+        box-shadow: 0 14px 34px rgba(201, 121, 101, 0.34);
+        font-size: 28px;
+        font-weight: 650;
+      }
+
+      .archive-summary {
+        padding: 17px;
+        border: 1px solid var(--line);
+        border-radius: 25px;
+        background: rgba(255, 253, 249, 0.9);
+        box-shadow: var(--soft-shadow);
+      }
+
+      .archive-summary p {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .step {
+        display: flex;
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .step-no {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        color: #fffaf5;
+        background: var(--clay);
+        font-size: 12px;
+        font-weight: 820;
+      }
+
+      .step-body {
+        flex: 1;
+        padding-bottom: 18px;
+        border-bottom: 1px solid rgba(234, 222, 210, 0.8);
+      }
+
+      .step:last-of-type .step-body {
+        border-bottom: 0;
+      }
+
+      .choice-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 9px;
+        margin-top: 10px;
+      }
+
+      .choice {
+        min-height: 66px;
+        padding: 10px 6px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        text-align: center;
+        background: rgba(255, 253, 249, 0.9);
+      }
+
+      .choice.active {
+        border-color: rgba(201, 121, 101, 0.4);
+        background: #f3ded5;
+      }
+
+      .choice b {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 13px;
+      }
+
+      .choice span {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .select-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 10px;
+        padding: 13px;
+        border: 1px solid var(--line);
+        border-radius: 17px;
+        background: var(--surface);
+      }
+
+      .select-card span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .primary {
+        position: absolute;
+        left: 20px;
+        right: 20px;
+        bottom: 28px;
+        height: 56px;
+        border: 0;
+        border-radius: 20px;
+        color: #fffaf5;
+        background: var(--clay);
+        box-shadow: 0 14px 30px rgba(201, 121, 101, 0.28);
+        font-size: 16px;
+        font-weight: 820;
+      }
+
+      .home-screen .hero-card {
+        padding: 16px;
+        border-radius: 24px;
+      }
+
+      .home-screen .hero-card p {
+        margin: 8px 0 14px;
+        line-height: 1.48;
+      }
+
+      .home-screen .quick-grid {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .home-screen .action.featured {
+        grid-row: auto;
+      }
+
+      .home-screen .action {
+        min-height: 112px;
+        padding: 12px;
+        border-radius: 20px;
+      }
+
+      .home-screen .action-mark {
+        width: 32px;
+        height: 32px;
+        margin-bottom: 9px;
+        border-radius: 12px;
+        font-size: 15px;
+      }
+
+      .home-screen .action b {
+        font-size: 14px;
+      }
+
+      .home-screen .action span {
+        font-size: 11px;
+      }
+
+      .home-screen .section-head {
+        margin: 15px 0 8px;
+      }
+
+      .home-screen .card {
+        padding: 12px;
+      }
+
+      .home-screen .metric {
+        padding: 8px 9px;
+      }
+
+      .home-screen .task {
+        padding: 9px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="canvas">
+      <section class="brief">
+        <div>
+          <p class="kicker">Warm clinical workspace · Mobile UI direction</p>
+          <h1>咨询师助手 App 视觉探索</h1>
+        </div>
+        <p>方向：温柔、安静、可信。用暖米白做底，陶土粉作为行动色，鼠尾草绿和雾蓝降低压力感；页面主次明确，不把所有功能都堆成同等重量。</p>
+      </section>
+
+      <section class="frames">
+        <div class="phone-wrap">
+          <div class="caption"><strong>首页</strong><span>工作提醒优先</span></div>
+          <div class="phone">
+            <div class="screen home-screen">
+              <div class="status"><span>9:41</span><span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+              <div class="topbar">
+                <div>
+                  <p class="kicker">周四，晚上好</p>
+                  <h2>今天先照顾好节奏</h2>
+                </div>
+                <div class="avatar">林</div>
+              </div>
+
+              <div class="hero-card">
+                <div class="row">
+                  <span class="pill light">今日提醒</span>
+                  <span>14:30</span>
+                </div>
+                <p>下一次咨询即将开始，建议提前准备上次记录与量表附件。</p>
+                <strong>陈雨 · 第 6 次咨询</strong>
+              </div>
+
+              <div class="quick-grid">
+                <div class="action featured">
+                  <div class="action-mark">rec</div>
+                  <b>录音记录</b>
+                  <span>开始录音、查看转写和待归档纪要</span>
+                </div>
+                <div class="action">
+                  <div class="action-mark">档</div>
+                  <b>档案库</b>
+                  <span>来访者与督导档案</span>
+                </div>
+                <div class="action">
+                  <div class="action-mark">督</div>
+                  <b>智能督导</b>
+                  <span>复盘与风险提示</span>
+                </div>
+              </div>
+
+              <div class="section-head"><h3>本周统计</h3><span>自动汇总</span></div>
+              <div class="card metric-row">
+                <div class="metric"><b>7.5h</b><span>咨询</span></div>
+                <div class="metric"><b>2h</b><span>受督</span></div>
+                <div class="metric"><b>1.5h</b><span>督导</span></div>
+              </div>
+
+              <div class="section-head"><h3>近期任务</h3><span>近 7 天</span></div>
+              <div class="card">
+                <div class="task">
+                  <div class="task-time">昨天</div>
+                  <div><b>生成咨询记录</b><span>李然 · 第 3 次咨询</span></div>
+                </div>
+                <div class="task">
+                  <div class="task-time">周一</div>
+                  <div><b>督导反馈已完成</b><span>王老师 · 线下督导</span></div>
+                </div>
+              </div>
+
+              <nav class="bottom-nav">
+                <div class="nav-item active"><i></i><span>首页</span></div>
+                <div class="nav-item"><i></i><span>文档</span></div>
+                <div class="nav-item"><i></i><span>资讯</span></div>
+                <div class="nav-item"><i></i><span>我的</span></div>
+              </nav>
+            </div>
+          </div>
+        </div>
+
+        <div class="phone-wrap">
+          <div class="caption"><strong>实时录音</strong><span>低干扰操作</span></div>
+          <div class="phone">
+            <div class="screen rec-screen">
+              <div class="status"><span>9:41</span><span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+              <div class="topbar">
+                <div class="icon-btn">‹</div>
+                <span class="pill">正在录音</span>
+                <div class="icon-btn">···</div>
+              </div>
+
+              <div class="recording-top">
+                <p class="kicker">陈雨 · 第 6 次咨询</p>
+                <div class="timer">00:18:42</div>
+                <span class="pill sage">实时转写稳定</span>
+              </div>
+
+              <div class="wave-card">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span><span class="bar"></span>
+              </div>
+
+              <div class="transcript">
+                <span class="live">实时文字</span>
+                <p>来访者提到最近入睡时间变晚，主要担心工作评价。咨询师正在引导其区分事实、推测与情绪反应。</p>
+              </div>
+
+              <div class="section-head"><h3>自动章节</h3><span>生成中</span></div>
+              <div class="card">
+                <div class="list-row">
+                  <div>
+                    <h3>工作压力与睡眠</h3>
+                    <p class="kicker">00:08:12 - 00:18:42</p>
+                  </div>
+                  <span class="pill blue">当前</span>
+                </div>
+              </div>
+
+              <div class="rec-actions">
+                <button class="text-btn">取消</button>
+                <button class="pause-btn">Ⅱ</button>
+                <button class="text-btn">保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="phone-wrap">
+          <div class="caption"><strong>档案库</strong><span>三类身份隔离</span></div>
+          <div class="phone">
+            <div class="screen">
+              <div class="status"><span>9:41</span><span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+              <div class="topbar">
+                <div>
+                  <p class="kicker">文档</p>
+                  <h2>档案库</h2>
+                </div>
+                <div class="icon-btn">＋</div>
+              </div>
+
+              <div class="tabs">
+                <div class="tab active">来访者</div>
+                <div class="tab">督导师</div>
+                <div class="tab">受督者</div>
+              </div>
+
+              <div class="search">搜索姓名、编号、主诉或时间</div>
+
+              <div class="section-head"><h3>进行中的个案</h3><span>12 位</span></div>
+              <div class="profile-list">
+                <div class="profile-card">
+                  <div class="profile-avatar">陈</div>
+                  <div class="profile-main"><b>陈雨</b><span>第 6 次 · 下次 06/05 14:30 · 焦虑与睡眠</span></div>
+                  <div class="risk">中度</div>
+                </div>
+                <div class="profile-card">
+                  <div class="profile-avatar">李</div>
+                  <div class="profile-main"><b>李然</b><span>第 3 次 · 已生成咨询记录 · 关系议题</span></div>
+                  <div class="risk low">轻度</div>
+                </div>
+                <div class="profile-card">
+                  <div class="profile-avatar">周</div>
+                  <div class="profile-main"><b>周宁</b><span>第 9 次 · 个案报告待生成</span></div>
+                  <div class="risk low">轻度</div>
+                </div>
+              </div>
+
+              <div class="section-head"><h3>最近更新</h3><span>查看全部</span></div>
+              <div class="card">
+                <div class="task">
+                  <div class="task-time">18:20</div>
+                  <div><b>录音已归档</b><span>陈雨 · 第 6 次咨询</span></div>
+                </div>
+                <div class="task">
+                  <div class="task-time">10:15</div>
+                  <div><b>上传知情同意书</b><span>李然 · 第 1 版</span></div>
+                </div>
+              </div>
+
+              <div class="fab">＋</div>
+              <nav class="bottom-nav">
+                <div class="nav-item"><i></i><span>首页</span></div>
+                <div class="nav-item active"><i></i><span>文档</span></div>
+                <div class="nav-item"><i></i><span>资讯</span></div>
+                <div class="nav-item"><i></i><span>我的</span></div>
+              </nav>
+            </div>
+          </div>
+        </div>
+
+        <div class="phone-wrap">
+          <div class="caption"><strong>归档中间页</strong><span>避免误归档</span></div>
+          <div class="phone">
+            <div class="screen">
+              <div class="status"><span>9:41</span><span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+              <div class="topbar">
+                <div class="icon-btn">‹</div>
+                <div>
+                  <p class="kicker">保存文档</p>
+                  <h2>归档到档案</h2>
+                </div>
+                <div></div>
+              </div>
+
+              <div class="archive-summary">
+                <div class="row">
+                  <span class="pill">待归档录音</span>
+                  <span class="kicker">18分42秒</span>
+                </div>
+                <h3 style="margin-top: 12px;">陈雨咨询录音 2026-06-04</h3>
+                <p>已完成实时转写，可归入已有档案，或先创建新档案后继续。</p>
+              </div>
+
+              <div class="step">
+                <div class="step-no">1</div>
+                <div class="step-body">
+                  <h3>选择身份类型</h3>
+                  <div class="choice-grid">
+                    <div class="choice active"><b>来访者</b><span>咨询记录</span></div>
+                    <div class="choice"><b>督导师</b><span>督导反馈</span></div>
+                    <div class="choice"><b>受督者</b><span>督导记录</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="step">
+                <div class="step-no">2</div>
+                <div class="step-body">
+                  <h3>归入已有档案</h3>
+                  <div class="select-card">
+                    <div><b>陈雨</b><span>进行中 · 第 6 次咨询</span></div>
+                    <span class="pill sage">已匹配</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="step">
+                <div class="step-no">3</div>
+                <div class="step-body">
+                  <h3>确认咨询次数</h3>
+                  <div class="select-card">
+                    <div><b>第 6 次咨询</b><span>自动命名，稍后可修改</span></div>
+                    <span class="pill">可编辑</span>
+                  </div>
+                </div>
+              </div>
+
+              <button class="primary">确认归档并生成纪要</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
