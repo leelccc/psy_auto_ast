@@ -21,3 +21,10 @@
 - Marked Phase 6 complete and started documentation commit phase.
 - Committed backend documentation with message `docs: add backend schema and API specs`.
 - Marked Phase 7 complete.
+- User chose: build a minimal backend core first, then move to mobile frontend because frontend presentation matters most.
+- Started Phase 8: minimal FastAPI backend core with TDD.
+- Added backend dependency list in `backend/requirements.txt` and installed dependencies into local `venv`.
+- Wrote failing backend tests in `backend/tests/test_core_api.py` for health, one-time profile access grants, session sequence numbers, and recording audio lifecycle.
+- Confirmed RED state: tests failed because `app.main` did not exist.
+- Implemented minimal in-memory FastAPI core in `backend/app/main.py`.
+- Ran backend tests: `PYTHONPATH=backend venv/bin/python -m pytest backend/tests/test_core_api.py -q`, result `4 passed`.

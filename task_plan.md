@@ -1,12 +1,12 @@
-# Counselor Assistant Backend Specification Plan
+# Counselor Assistant MVP Build Plan
 
 ## Goal
 
-Turn the approved PRD and updated product/technical design into backend-ready database schema and API specification documents, while keeping a durable progress trail in the repository.
+Build a minimal backend core first, then a polished mobile frontend prototype that matches the approved warm, soft, professional counselor-assistant direction.
 
 ## Current Phase
 
-Complete.
+Phase 9: Verify backend endpoints and commit.
 
 ## Phases
 
@@ -18,6 +18,11 @@ Complete.
 - [x] Phase 5: Add lifecycle, AI job, retention, and security implementation notes.
 - [x] Phase 6: Validate consistency against PRD and technical design.
 - [x] Phase 7: Commit documentation changes.
+- [x] Phase 8: Scaffold minimal FastAPI backend core with TDD.
+- [ ] Phase 9: Verify backend endpoints and commit.
+- [ ] Phase 10: Scaffold mobile frontend app.
+- [ ] Phase 11: Build high-fidelity mobile screens for home, recordings, profiles, archive, supervision, privacy, and account.
+- [ ] Phase 12: Verify frontend build/rendering and commit.
 
 ## Working Files
 
@@ -27,12 +32,16 @@ Complete.
 - `docs/backend/database-schema.md`: planned database schema specification.
 - `docs/backend/api-spec.md`: planned backend API specification.
 - `docs/backend/implementation-notes.md`: planned backend notes for jobs, retention, security, exports, and integrations.
+- `backend/`: minimal FastAPI backend core.
+- `apps/mobile/`: planned mobile frontend.
 
 ## Decisions
 
 - The project already has a Git repository; all substantial documentation changes should be committed.
 - Keep specs implementation-oriented, but avoid pretending code exists before the backend scaffold is created.
 - Treat `docs/prd/2026-06-05-counselor-assistant-app-prd.md` and `docs/prd/decision-log.md` as the source of product truth.
+- User prefers mobile frontend presentation quality, so backend should stay minimal and unblock UI/API shape rather than becoming a full production implementation now.
+- Backend MVP uses in-memory repositories for speed, with API contracts aligned to the schema/API docs so it can later migrate to SQLAlchemy/PostgreSQL.
 
 ## Errors Encountered
 
