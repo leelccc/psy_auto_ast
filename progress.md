@@ -94,3 +94,13 @@
 - Rebuilt the archive confirmation page into a choose-or-create flow: select archive type (`来访者/督导师/受督者`), search/select an existing profile, or add a new person inline before confirming archive.
 - Changed archive confirmation so it prompts for a selected profile first and only confirms archive after an existing or newly created person is selected.
 - Verified via browser DOM checks that archive shows type selection, target profile selection, `没有这个人，新增人员`, disabled/pending confirmation copy, existing profile selection, and inline new-person selection.
+- Continued the recording archive flow from selection into a real completion state.
+- Added tested archive helpers for profile search and automatic next-record numbering across consultation, supervision, and supervisee identities.
+- Replaced the archive search placeholder with a working name/profile-code input and replaced inline creation placeholders with real name and identity-specific note fields.
+- Added an archive completion page showing the selected person, profile identity, session number, recording retention state, transcript/summary processing state, and next actions.
+- Connected archive completion to the selected person's profile detail. Newly created profiles now show their own name, identity, first-session card, and processing state instead of falling back to the hardcoded sample profile.
+- Moved transient action feedback to the top and added automatic dismissal so it cannot cover the archive confirmation button.
+- Added context-aware back navigation for archive, recording details, profile details, consultation record editing, and long-term-save authorization.
+- Verified the complete browser flow for an existing profile (`陈雨` becomes `第 7 次咨询`) and a newly created profile (`林清` becomes `第 1 次咨询`), including archive completion, profile detail, consultation record editing, and return navigation.
+- Ran frontend tests: `npm test`, result `5 passed`.
+- Ran frontend typecheck: `npm run typecheck`, result passed.

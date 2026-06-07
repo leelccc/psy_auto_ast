@@ -28,6 +28,7 @@ Complete. Latest follow-up polish pass also complete.
 - [x] Phase 15: Add mobile interaction polish for selectable long-term-save authorization, transcript proofreading cues, and report draft status.
 - [x] Phase 16: Verify interaction polish with typecheck, tests, Expo Web DOM checks, and web export.
 - [x] Phase 17: Correct mobile information architecture: restore information tab, split recording flows, add profile creation, and rebuild profile detail around per-session cards.
+- [x] Phase 18: Complete recording archive flow with working search/create, automatic session numbering, completion state, selected-profile detail, and contextual back navigation.
 
 ## Working Files
 
@@ -56,6 +57,9 @@ Complete. Latest follow-up polish pass also complete.
 - Single-session output is a consultation/supervision record generated from that session's recording, transcript/summary, scale, homework, and other materials. Case reports are full-profile outputs generated from all session records and related materials.
 - Every visible button or pressable row in the mobile prototype must close a loop: navigate, change state, open a focused decision flow, or show a specific action result. Avoid no-op placeholder buttons.
 - Saving a recording leads to an archive decision flow. The user must choose which profile the recording belongs to; if the person does not exist, the flow must allow creating a new person before confirming archive.
+- Archive completion must persist the selected profile context into the next screen and display the exact session number created by the archive action.
+- Transient feedback must not block primary actions. Feedback clears on route changes, auto-dismisses, and stays away from bottom action buttons.
+- Back navigation should return to the initiating workflow context rather than sending every detail page to the generic overview.
 
 ## Errors Encountered
 

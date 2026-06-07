@@ -31,17 +31,19 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react-native";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   SafeAreaView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
   useWindowDimensions,
   ScrollView,
 } from "react-native";
 
+import { buildArchiveResult, filterArchiveCandidates, type ArchiveKind } from "./src/archiveFlow";
 import {
   formatBadge,
   metrics,
@@ -61,6 +63,7 @@ type QuickView =
   | "recording"
   | "recordingRecords"
   | "archive"
+  | "archiveComplete"
   | "supervision"
   | "profileDetail"
   | "profileCreate"
@@ -68,6 +71,7 @@ type QuickView =
   | "recordEditor"
   | "privacyConsent";
 type Notice = { title: string; detail: string };
+type ArchiveResult = ReturnType<typeof buildArchiveResult>;
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
   { key: "home", label: "首页", icon: Home },
@@ -80,14 +84,65 @@ export default function App() {
   const [tab, setTab] = useState<TabKey>("home");
   const [quickView, setQuickView] = useState<QuickView>("overview");
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [archiveResult, setArchiveResult] = useState<ArchiveResult | null>(null);
+  const [recordEditorReturn, setRecordEditorReturn] = useState<QuickView>("profileDetail");
+  const [privacyReturn, setPrivacyReturn] = useState<{ quickView: QuickView; tab: TabKey }>({
+    quickView: "overview",
+    tab: "account",
+  });
+  const [activeProfile, setActiveProfile] = useState<ArchiveResult>({
+    profileName: "陈雨",
+    kindLabel: "来访者",
+    recordLabel: "第 6 次咨询",
+  });
   const { width } = useWindowDimensions();
   const isCompact = width < 430;
   const showNotice = (title: string, detail: string) => setNotice({ title, detail });
+  const openPrivacy = (returnView: QuickView) => {
+    setPrivacyReturn({ quickView: returnView, tab });
+    setQuickView("privacyConsent");
+  };
+  const handleBack = () => {
+    if (quickView === "privacyConsent") {
+      setTab(privacyReturn.tab);
+      setQuickView(privacyReturn.quickView);
+      return;
+    }
+    if (quickView === "recordEditor") {
+      setQuickView(recordEditorReturn);
+      return;
+    }
+    if (quickView === "archive") {
+      setQuickView("recording");
+      return;
+    }
+    if (quickView === "archiveComplete" || quickView === "recordingDetail") {
+      setQuickView("recordingRecords");
+      return;
+    }
+    if (quickView === "profileDetail" || quickView === "profileCreate") {
+      setTab("profiles");
+      setQuickView("overview");
+      return;
+    }
+    setQuickView("overview");
+  };
+
+  useEffect(() => {
+    setNotice(null);
+  }, [quickView, tab]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = setTimeout(() => setNotice(null), 3200);
+    return () => clearTimeout(timeout);
+  }, [notice]);
 
   const title = useMemo(() => {
     if (quickView === "recording") return "正在录音";
     if (quickView === "recordingRecords") return "录音记录";
     if (quickView === "archive") return "归档确认";
+    if (quickView === "archiveComplete") return "归档完成";
     if (quickView === "supervision") return "智能督导";
     if (quickView === "profileDetail") return "档案详情";
     if (quickView === "profileCreate") return "新增档案";
@@ -104,21 +159,54 @@ export default function App() {
     <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
       <View style={[styles.phoneShell, isCompact && styles.phoneShellCompact]}>
-        <Header title={title} quickView={quickView} onBack={() => setQuickView("overview")} onNotice={showNotice} />
+        <Header title={title} quickView={quickView} onBack={handleBack} onNotice={showNotice} />
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {tab === "home" && quickView === "overview" ? <HomeScreen onOpen={setQuickView} onOpenProfiles={() => setTab("profiles")} onNotice={showNotice} /> : null}
           {quickView === "recording" ? <RecordingScreen onArchive={() => setQuickView("archive")} onNotice={showNotice} /> : null}
           {quickView === "recordingRecords" ? <RecordingRecordsScreen onOpenDetail={() => setQuickView("recordingDetail")} onNotice={showNotice} /> : null}
-          {quickView === "archive" ? <ArchiveScreen onNotice={showNotice} /> : null}
+          {quickView === "archive" ? <ArchiveScreen onNotice={showNotice} onComplete={(result) => {
+            setArchiveResult(result);
+            setQuickView("archiveComplete");
+          }} /> : null}
+          {quickView === "archiveComplete" && archiveResult ? (
+            <ArchiveCompleteScreen
+              result={archiveResult}
+              onOpenProfile={() => {
+                setActiveProfile(archiveResult);
+                setQuickView("profileDetail");
+              }}
+              onOpenRecords={() => setQuickView("recordingRecords")}
+            />
+          ) : null}
           {quickView === "supervision" ? <SupervisionScreen onNotice={showNotice} /> : null}
-          {quickView === "profileDetail" ? <ProfileDetailScreen onOpenRecord={() => setQuickView("recordEditor")} onNotice={showNotice} /> : null}
+          {quickView === "profileDetail" ? <ProfileDetailScreen profile={activeProfile} onOpenRecord={() => {
+            setRecordEditorReturn("profileDetail");
+            setQuickView("recordEditor");
+          }} onNotice={showNotice} /> : null}
           {quickView === "profileCreate" ? <ProfileCreateScreen onNotice={showNotice} /> : null}
-          {quickView === "recordingDetail" ? <RecordingDetailScreen onOpenRecord={() => setQuickView("recordEditor")} onNotice={showNotice} onOpenPrivacy={() => setQuickView("privacyConsent")} /> : null}
-          {quickView === "recordEditor" ? <RecordEditorScreen onOpenPrivacy={() => setQuickView("privacyConsent")} onNotice={showNotice} /> : null}
+          {quickView === "recordingDetail" ? <RecordingDetailScreen onOpenRecord={() => {
+            setRecordEditorReturn("recordingDetail");
+            setQuickView("recordEditor");
+          }} onNotice={showNotice} onOpenPrivacy={() => openPrivacy("recordingDetail")} /> : null}
+          {quickView === "recordEditor" ? <RecordEditorScreen profile={activeProfile} onOpenPrivacy={() => openPrivacy("recordEditor")} onNotice={showNotice} /> : null}
           {quickView === "privacyConsent" ? <PrivacyConsentScreen onNotice={showNotice} /> : null}
-          {tab === "profiles" && quickView === "overview" ? <ProfilesScreen onOpenDetail={() => setQuickView("profileDetail")} onCreate={() => setQuickView("profileCreate")} onNotice={showNotice} /> : null}
+          {tab === "profiles" && quickView === "overview" ? (
+            <ProfilesScreen
+              onOpenDetail={(profile) => {
+                const recordNoun = profile.type === "来访者" ? "咨询" : profile.type === "督导师" ? "受督" : "督导";
+                setActiveProfile({
+                  profileName: profile.name,
+                  kindLabel: profile.type,
+                  recordLabel: `${profile.count}${recordNoun}`,
+                });
+                setQuickView("profileDetail");
+              }}
+              onCreate={() => setQuickView("profileCreate")}
+              onNotice={showNotice}
+            />
+          ) : null}
           {tab === "recordings" && quickView === "overview" ? <ContentScreen onNotice={showNotice} /> : null}
-          {tab === "account" && quickView === "overview" ? <AccountScreen onOpenPrivacy={() => setQuickView("privacyConsent")} onNotice={showNotice} /> : null}
+          {tab === "account" && quickView === "overview" ? <AccountScreen onOpenPrivacy={() => openPrivacy("overview")} onNotice={showNotice} /> : null}
         </ScrollView>
         {quickView !== "privacyConsent" ? (
           <BottomTabs
@@ -279,28 +367,43 @@ function RecordingRecordsScreen({ onOpenDetail, onNotice }: { onOpenDetail: () =
   );
 }
 
-function ArchiveScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
-  const [kind, setKind] = useState<"client" | "supervisor" | "supervisee">("client");
+function ArchiveScreen({
+  onNotice,
+  onComplete,
+}: {
+  onNotice: (title: string, detail: string) => void;
+  onComplete: (result: ArchiveResult) => void;
+}) {
+  const [kind, setKind] = useState<ArchiveKind>("client");
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [newProfileName, setNewProfileName] = useState("");
+  const [newProfileNote, setNewProfileNote] = useState("");
   const archiveKinds = [
     { key: "client" as const, label: "来访者", detail: "咨询记录" },
     { key: "supervisor" as const, label: "督导师", detail: "受督记录" },
     { key: "supervisee" as const, label: "受督者", detail: "督导记录" },
   ];
-  const archiveCandidates = {
+  const candidatesByKind = {
     client: [
-      { id: "chen-yu", name: "陈雨", meta: "进行中 · 第 6 次咨询", next: "下次 6月8日 10:00" },
-      { id: "zhou-nan", name: "周楠", meta: "暂停 · 第 3 次咨询", next: "最近 5月18日" },
+      { id: "chen-yu", name: "陈雨", code: "A08", completedCount: 6, meta: "进行中 · 已完成 6 次咨询", next: "下次 6月8日 10:00" },
+      { id: "zhou-nan", name: "周楠", code: "B12", completedCount: 3, meta: "暂停 · 已完成 3 次咨询", next: "最近 5月18日" },
     ],
     supervisor: [
-      { id: "li-cheng", name: "李澄", meta: "督导师 · 第 3 次受督", next: "下次 6月9日 15:30" },
+      { id: "li-cheng", name: "李澄", code: "S03", completedCount: 3, meta: "督导师 · 已完成 3 次受督", next: "下次 6月9日 15:30" },
     ],
     supervisee: [
-      { id: "zhou-ning", name: "周宁", meta: "受督者 · 第 12 次督导", next: "下次 6月12日 14:00" },
+      { id: "zhou-ning", name: "周宁", code: "E12", completedCount: 12, meta: "受督者 · 已完成 12 次督导", next: "下次 6月12日 14:00" },
     ],
-  }[kind];
-  const selectedName = selectedProfile === "new" ? "新建人员" : archiveCandidates.find((item) => item.id === selectedProfile)?.name;
+  };
+  const archiveCandidates = filterArchiveCandidates(candidatesByKind[kind], searchQuery);
+  const selectedCandidate = candidatesByKind[kind].find((item) => item.id === selectedProfile);
+  const pendingResult = selectedProfile === "new"
+    ? buildArchiveResult({ kind, profileName: newProfileName.trim(), completedCount: 0 })
+    : selectedCandidate
+      ? buildArchiveResult({ kind, profileName: selectedCandidate.name, completedCount: selectedCandidate.completedCount })
+      : null;
 
   return (
     <View style={styles.stack}>
@@ -323,6 +426,9 @@ function ArchiveScreen({ onNotice }: { onNotice: (title: string, detail: string)
               setKind(item.key);
               setSelectedProfile(null);
               setCreating(false);
+              setSearchQuery("");
+              setNewProfileName("");
+              setNewProfileNote("");
             }}
           >
             <Text style={[styles.archiveKindTitle, kind === item.key && styles.archiveKindTitleActive]}>{item.label}</Text>
@@ -334,7 +440,13 @@ function ArchiveScreen({ onNotice }: { onNotice: (title: string, detail: string)
       <SectionHeader title="2 选择归属档案" action="搜索" onAction={() => onNotice("搜索档案", "可按姓名、编号、备注搜索；找不到时从下方新增人员。")} />
       <View style={styles.searchBar}>
         <Search size={18} color={colors.subtle} />
-        <Text style={styles.searchPlaceholder}>搜索姓名、编号或备注</Text>
+        <TextInput
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="搜索姓名或档案编号"
+          placeholderTextColor={colors.subtle}
+          style={styles.searchInput}
+        />
       </View>
       <View style={styles.cardStack}>
         {archiveCandidates.map((item) => (
@@ -352,12 +464,19 @@ function ArchiveScreen({ onNotice }: { onNotice: (title: string, detail: string)
               <Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text>
             </View>
             <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{item.name}</Text>
+              <Text style={styles.listTitle}>{item.name} · {item.code}</Text>
               <Text style={styles.listMeta}>{item.meta} · {item.next}</Text>
             </View>
             {selectedProfile === item.id ? <CheckCircle2 size={19} color={colors.sageDark} /> : <ChevronRight size={18} color={colors.subtle} />}
           </TouchableOpacity>
         ))}
+        {archiveCandidates.length === 0 ? (
+          <View style={styles.emptySearchCard}>
+            <Search size={20} color={colors.subtle} />
+            <Text style={styles.emptySearchTitle}>没有找到匹配档案</Text>
+            <Text style={styles.emptySearchCopy}>确认姓名或编号无误后，可以直接新增人员。</Text>
+          </View>
+        ) : null}
       </View>
 
       {!creating ? (
@@ -371,21 +490,32 @@ function ArchiveScreen({ onNotice }: { onNotice: (title: string, detail: string)
       ) : (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formPreviewTitle}>新增{archiveKinds.find((item) => item.key === kind)?.label}</Text>
-          <View style={styles.formFieldRow}>
-            <Text style={styles.formFieldLabel}>姓名 / 称呼</Text>
-            <Text style={styles.formFieldValue}>待填写</Text>
-          </View>
-          <View style={styles.formFieldRow}>
-            <Text style={styles.formFieldLabel}>{kind === "client" ? "主诉与目标" : kind === "supervisor" ? "督导方向" : "受督方向"}</Text>
-            <Text style={styles.formFieldValue}>待填写</Text>
-          </View>
+          <TextInput
+            value={newProfileName}
+            onChangeText={setNewProfileName}
+            placeholder="姓名 / 称呼（必填）"
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+          />
+          <TextInput
+            value={newProfileNote}
+            onChangeText={setNewProfileNote}
+            placeholder={kind === "client" ? "主诉与目标（可稍后补充）" : kind === "supervisor" ? "督导方向（可稍后补充）" : "受督方向（可稍后补充）"}
+            placeholderTextColor={colors.subtle}
+            style={[styles.archiveTextInput, styles.archiveTextArea]}
+            multiline
+          />
           <TouchableOpacity
-            style={styles.inlineCreateConfirm}
+            style={[styles.inlineCreateConfirm, !newProfileName.trim() && styles.inlineCreateConfirmDisabled]}
             activeOpacity={0.78}
             onPress={() => {
+              if (!newProfileName.trim()) {
+                onNotice("请填写姓名", "新增人员至少需要姓名或称呼，其他字段可以稍后补充。");
+                return;
+              }
               setSelectedProfile("new");
               setCreating(false);
-              onNotice("新人员已创建并选中", "录音会先归入新建档案，稍后可补全详细字段。");
+              onNotice("新人员已创建并选中", `${newProfileName.trim()}的基础档案已创建，录音将作为第 1 次记录归档。`);
             }}
           >
             <Text style={styles.inlineCreateConfirmText}>保存人员并选中</Text>
@@ -393,30 +523,83 @@ function ArchiveScreen({ onNotice }: { onNotice: (title: string, detail: string)
         </View>
       )}
 
-      <StepRow index="3" title="记录次数" value="第 6 次咨询" onPress={() => onNotice("确认记录次数", "可调整为对应咨询/督导/受督次数，保存后仍可在档案详情中修改。")} />
+      <StepRow
+        index="3"
+        title="记录次数"
+        value={pendingResult?.recordLabel ?? "选择人员后自动计算"}
+        onPress={() => onNotice("记录次数自动计算", "已有档案按已完成次数顺延；新建人员从第 1 次开始。")}
+      />
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>保存与隐私</Text>
         <Text style={styles.privacyCopy}>原始录音云端仅保存 14 天，不支持长期保存。转写和纪要可在生成后单独授权长期保存。</Text>
       </View>
       <TouchableOpacity
-        style={[styles.primaryButton, styles.wideButton, !selectedProfile && styles.pendingPrimaryButton]}
+        style={[styles.primaryButton, styles.wideButton, !pendingResult && styles.pendingPrimaryButton]}
         activeOpacity={0.78}
         onPress={() => {
-          if (!selectedProfile) {
+          if (!pendingResult) {
             onNotice("请先选择归属档案", "保存录音后必须选择已有人员，或新增人员后再确认归档。");
             return;
           }
-          onNotice("已进入归档队列", `录音将归入${selectedName}的档案，并开始异步生成转写、纪要和本次记录材料。`);
+          onComplete(pendingResult);
         }}
       >
         <FolderOpen size={18} color="#FFF9F3" />
-        <Text style={styles.primaryButtonText}>{selectedProfile ? "确认归档" : "请先选择档案"}</Text>
+        <Text style={styles.primaryButtonText}>{pendingResult ? `归档到 ${pendingResult.profileName}` : "请先选择档案"}</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
-function ProfilesScreen({ onOpenDetail, onCreate, onNotice }: { onOpenDetail: () => void; onCreate: () => void; onNotice: (title: string, detail: string) => void }) {
+function ArchiveCompleteScreen({
+  result,
+  onOpenProfile,
+  onOpenRecords,
+}: {
+  result: ArchiveResult;
+  onOpenProfile: () => void;
+  onOpenRecords: () => void;
+}) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.archiveSuccessHero}>
+        <View style={styles.archiveSuccessIcon}>
+          <CheckCircle2 size={34} color="#FFF9F3" />
+        </View>
+        <Text style={styles.archiveSuccessTitle}>录音已归档</Text>
+        <Text style={styles.archiveSuccessCopy}>
+          已归入 {result.profileName} 的{result.kindLabel}档案，作为{result.recordLabel}。
+        </Text>
+      </View>
+
+      <SectionHeader title="后台处理中" action="自动更新" />
+      <View style={styles.processingList}>
+        <ProcessingRow title="原始录音" detail="已保存，13 天后自动销毁" status="完成" complete />
+        <ProcessingRow title="完整转写" detail="识别发言人与时间戳" status="处理中" />
+        <ProcessingRow title="录音纪要" detail="生成摘要与章节速览" status="等待中" />
+        <ProcessingRow title="咨询记录材料" detail="将合并量表、作业和其他资料" status="待补充" />
+      </View>
+
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>归档后仍可补充资料</Text>
+        <Text style={styles.privacyCopy}>可进入本次记录继续添加量表、作业和其他材料，再生成完整咨询记录。原始录音不支持长期云端保存。</Text>
+      </View>
+
+      <PrimaryButton icon={FolderOpen} label={`查看 ${result.profileName} 的档案`} onPress={onOpenProfile} wide />
+      <GhostButton icon={Mic} label="返回录音记录" onPress={onOpenRecords} />
+    </View>
+  );
+}
+
+function ProfilesScreen({
+  onOpenDetail,
+  onCreate,
+  onNotice,
+}: {
+  onOpenDetail: (profile: (typeof profiles)[number]) => void;
+  onCreate: () => void;
+  onNotice: (title: string, detail: string) => void;
+}) {
   return (
     <View style={styles.stack}>
       <TouchableOpacity style={styles.createProfileButton} activeOpacity={0.78} onPress={onCreate}>
@@ -440,7 +623,7 @@ function ProfilesScreen({ onOpenDetail, onCreate, onNotice }: { onOpenDetail: ()
       </View>
       <View style={styles.cardStack}>
         {profiles.map((item) => (
-          <TouchableOpacity key={item.name} style={styles.profileCard} activeOpacity={0.78} onPress={onOpenDetail}>
+          <TouchableOpacity key={item.name} style={styles.profileCard} activeOpacity={0.78} onPress={() => onOpenDetail(item)}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text>
             </View>
@@ -493,17 +676,26 @@ function ProfileCreateScreen({ onNotice }: { onNotice: (title: string, detail: s
   );
 }
 
-function ProfileDetailScreen({ onOpenRecord, onNotice }: { onOpenRecord: () => void; onNotice: (title: string, detail: string) => void }) {
+function ProfileDetailScreen({
+  profile,
+  onOpenRecord,
+  onNotice,
+}: {
+  profile: ArchiveResult;
+  onOpenRecord: () => void;
+  onNotice: (title: string, detail: string) => void;
+}) {
+  const isDefaultProfile = profile.profileName === "陈雨";
   return (
     <View style={styles.stack}>
       <View style={styles.profileHeaderCard}>
         <View style={styles.detailHeroTop}>
           <View style={styles.avatarLarge}>
-            <Text style={styles.avatarLargeText}>陈</Text>
+            <Text style={styles.avatarLargeText}>{profile.profileName.slice(0, 1)}</Text>
           </View>
           <View style={styles.listBody}>
-            <Text style={styles.detailName}>陈雨</Text>
-            <Text style={styles.listMeta}>ID: 20260605-A08 · 来访者档案</Text>
+            <Text style={styles.detailName}>{profile.profileName}</Text>
+            <Text style={styles.listMeta}>{profile.kindLabel}档案 · {profile.recordLabel}</Text>
           </View>
           <Badge label="已解锁" tone="green" />
         </View>
@@ -516,37 +708,55 @@ function ProfileDetailScreen({ onOpenRecord, onNotice }: { onOpenRecord: () => v
 
       <SectionHeader title="法律及伦理文件" action="上传" onAction={() => onNotice("上传伦理文件", "可上传知情同意书、咨询协议等覆盖型文件，新版本会替换旧版本。")} />
       <View style={styles.legalGrid}>
-        <LegalFile title="知情同意书" meta="已签署 · 第 2 版" icon={FileText} onPress={() => onNotice("查看知情同意书", "可查看当前版本，也可从上传入口覆盖为新版本。")} />
-        <LegalFile title="咨询协议" meta="已签署 · 6月3日" icon={ClipboardList} onPress={() => onNotice("查看咨询协议", "可查看协议文件；重新上传会覆盖旧文件。")} />
+        <LegalFile title="知情同意书" meta={isDefaultProfile ? "已签署 · 第 2 版" : "待上传"} icon={FileText} onPress={() => onNotice("查看知情同意书", "可查看当前版本，也可从上传入口覆盖为新版本。")} />
+        <LegalFile title="咨询协议" meta={isDefaultProfile ? "已签署 · 6月3日" : "待上传"} icon={ClipboardList} onPress={() => onNotice("查看咨询协议", "可查看协议文件；重新上传会覆盖旧文件。")} />
       </View>
 
       <SectionHeader title="咨询历程" action="新增记录" onAction={() => onNotice("新增咨询记录", "将创建下一次咨询卡片，可继续添加录音、量表、作业和其他材料。")} />
-      <SessionCard
-        index="第 6 次"
-        time="2026年6月5日 10:00"
-        summary="围绕睡眠下降、工作评价焦虑和关系议题展开。"
-        tags={["焦虑", "睡眠"]}
-        recording="剩余 13 天"
-        record="草稿"
-        scale="未上传"
-        homework="已布置"
-        other="1 项"
-        onOpenRecord={onOpenRecord}
-        onNotice={onNotice}
-      />
-      <SessionCard
-        index="第 5 次"
-        time="2026年5月29日 10:00"
-        summary="梳理近期压力事件，并继续识别自动化想法。"
-        tags={["长期保存", "正式版"]}
-        recording="已销毁"
-        record="正式版"
-        scale="SAS"
-        homework="已提交"
-        other="无"
-        onOpenRecord={onOpenRecord}
-        onNotice={onNotice}
-      />
+      {isDefaultProfile ? (
+        <>
+          <SessionCard
+            index="第 6 次"
+            time="2026年6月5日 10:00"
+            summary="围绕睡眠下降、工作评价焦虑和关系议题展开。"
+            tags={["焦虑", "睡眠"]}
+            recording="剩余 13 天"
+            record="草稿"
+            scale="未上传"
+            homework="已布置"
+            other="1 项"
+            onOpenRecord={onOpenRecord}
+            onNotice={onNotice}
+          />
+          <SessionCard
+            index="第 5 次"
+            time="2026年5月29日 10:00"
+            summary="梳理近期压力事件，并继续识别自动化想法。"
+            tags={["长期保存", "正式版"]}
+            recording="已销毁"
+            record="正式版"
+            scale="SAS"
+            homework="已提交"
+            other="无"
+            onOpenRecord={onOpenRecord}
+            onNotice={onNotice}
+          />
+        </>
+      ) : (
+        <SessionCard
+          index={profile.recordLabel.replace(/咨询|受督|督导/g, "").trim()}
+          time="刚刚归档"
+          summary="录音已归档，完整转写和录音纪要正在后台生成。"
+          tags={["处理中"]}
+          recording="剩余 13 天"
+          record="待生成"
+          scale="未上传"
+          homework="未添加"
+          other="无"
+          onOpenRecord={onOpenRecord}
+          onNotice={onNotice}
+        />
+      )}
 
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>保存规则会跟随每次记录</Text>
@@ -617,13 +827,21 @@ function RecordingDetailScreen({ onOpenRecord, onNotice, onOpenPrivacy }: { onOp
   );
 }
 
-function RecordEditorScreen({ onOpenPrivacy, onNotice }: { onOpenPrivacy: () => void; onNotice: (title: string, detail: string) => void }) {
+function RecordEditorScreen({
+  profile,
+  onOpenPrivacy,
+  onNotice,
+}: {
+  profile: ArchiveResult;
+  onOpenPrivacy: () => void;
+  onNotice: (title: string, detail: string) => void;
+}) {
   return (
     <View style={styles.stack}>
       <View style={styles.editorHeader}>
         <View>
           <Text style={styles.editorEyebrow}>咨询记录草稿</Text>
-          <Text style={styles.editorTitle}>陈雨 · 第 6 次咨询</Text>
+          <Text style={styles.editorTitle}>{profile.profileName} · {profile.recordLabel}</Text>
         </View>
         <Badge label="草稿" tone="warm" />
       </View>
@@ -1013,6 +1231,21 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     <View style={styles.miniStat}>
       <Text style={styles.miniStatValue}>{value}</Text>
       <Text style={styles.miniStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function ProcessingRow({ title, detail, status, complete }: { title: string; detail: string; status: string; complete?: boolean }) {
+  return (
+    <View style={styles.processingRow}>
+      <View style={[styles.processingDot, complete && styles.processingDotComplete]}>
+        {complete ? <CheckCircle2 size={15} color="#FFF9F3" /> : <Clock3 size={14} color={colors.clayDark} />}
+      </View>
+      <View style={styles.listBody}>
+        <Text style={styles.listTitle}>{title}</Text>
+        <Text style={styles.listMeta}>{detail}</Text>
+      </View>
+      <Badge label={status} tone={complete ? "green" : "blue"} />
     </View>
   );
 }
@@ -1485,6 +1718,29 @@ const styles = StyleSheet.create({
     backgroundColor: "#EEF5F0",
     borderColor: "#C9DED1",
   },
+  emptySearchCard: {
+    minHeight: 108,
+    borderRadius: radius.sm,
+    padding: 14,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  emptySearchTitle: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  emptySearchCopy: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    fontWeight: "700",
+  },
   createInlineButton: {
     minHeight: 46,
     borderRadius: radius.sm,
@@ -1522,8 +1778,82 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "900",
   },
+  inlineCreateConfirmDisabled: {
+    backgroundColor: colors.subtle,
+  },
+  archiveTextInput: {
+    minHeight: 44,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  archiveTextArea: {
+    minHeight: 76,
+    paddingTop: 12,
+    textAlignVertical: "top",
+  },
   pendingPrimaryButton: {
     backgroundColor: colors.subtle,
+  },
+  archiveSuccessHero: {
+    borderRadius: radius.sm,
+    padding: 22,
+    backgroundColor: colors.sage,
+    alignItems: "center",
+    gap: 10,
+    ...shadow.soft,
+  },
+  archiveSuccessIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: radius.pill,
+    backgroundColor: colors.sageDark,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  archiveSuccessTitle: {
+    color: "#FFF9F3",
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  archiveSuccessCopy: {
+    color: "rgba(255,249,243,0.9)",
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: "center",
+    fontWeight: "700",
+  },
+  processingList: {
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    overflow: "hidden",
+  },
+  processingRow: {
+    minHeight: 68,
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  processingDot: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  processingDotComplete: {
+    backgroundColor: colors.sageDark,
   },
   stepRow: {
     minHeight: 70,
@@ -1582,6 +1912,13 @@ const styles = StyleSheet.create({
     color: colors.subtle,
     fontSize: 14,
     fontWeight: "700",
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "700",
+    paddingVertical: 0,
   },
   segmented: {
     height: 44,
@@ -2226,7 +2563,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 14,
     right: 14,
-    bottom: 90,
+    top: 76,
     borderRadius: radius.sm,
     padding: 12,
     backgroundColor: "rgba(255,253,249,0.98)",
