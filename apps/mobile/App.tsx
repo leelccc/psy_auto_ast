@@ -43,7 +43,7 @@ import {
   ScrollView,
 } from "react-native";
 
-import { buildArchiveResult, filterArchiveCandidates, type ArchiveKind } from "./src/archiveFlow";
+import { buildArchiveResult, describeArchiveTarget, filterArchiveCandidates, type ArchiveKind } from "./src/archiveFlow";
 import {
   formatBadge,
   metrics,
@@ -404,6 +404,7 @@ function ArchiveScreen({
     : selectedCandidate
       ? buildArchiveResult({ kind, profileName: selectedCandidate.name, completedCount: selectedCandidate.completedCount })
       : null;
+  const archiveTarget = describeArchiveTarget(pendingResult);
 
   return (
     <View style={styles.stack}>
@@ -523,12 +524,16 @@ function ArchiveScreen({
         </View>
       )}
 
-      <StepRow
-        index="3"
-        title="记录次数"
-        value={pendingResult?.recordLabel ?? "选择人员后自动计算"}
-        onPress={() => onNotice("记录次数自动计算", "已有档案按已完成次数顺延；新建人员从第 1 次开始。")}
-      />
+      <View style={[styles.archiveTargetCard, pendingResult && styles.archiveTargetCardReady]}>
+        <View style={[styles.archiveTargetIcon, pendingResult && styles.archiveTargetIconReady]}>
+          {pendingResult ? <CheckCircle2 size={19} color="#FFF9F3" /> : <Clock3 size={19} color={colors.muted} />}
+        </View>
+        <View style={styles.listBody}>
+          <Text style={styles.archiveTargetLabel}>{archiveTarget.title}</Text>
+          <Text style={[styles.archiveTargetValue, !pendingResult && styles.archiveTargetValuePending]}>{archiveTarget.value}</Text>
+          <Text style={styles.archiveTargetDetail}>{archiveTarget.detail}</Text>
+        </View>
+      </View>
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>保存与隐私</Text>
         <Text style={styles.privacyCopy}>原始录音云端仅保存 14 天，不支持长期保存。转写和纪要可在生成后单独授权长期保存。</Text>
@@ -1083,21 +1088,6 @@ function ActionNotice({ notice, onClose }: { notice: Notice; onClose: () => void
 
 function Badge({ label, tone }: { label: string; tone: "warm" | "green" | "blue" }) {
   return <Text style={[styles.badge, styles[`badge_${tone}`]]}>{label}</Text>;
-}
-
-function StepRow({ index, title, value, onPress }: { index: string; title: string; value: string; onPress: () => void }) {
-  return (
-    <TouchableOpacity style={styles.stepRow} activeOpacity={0.78} onPress={onPress}>
-      <View style={styles.stepIndex}>
-        <Text style={styles.stepIndexText}>{index}</Text>
-      </View>
-      <View style={styles.listBody}>
-        <Text style={styles.listMeta}>{title}</Text>
-        <Text style={styles.listTitle}>{value}</Text>
-      </View>
-      <ChevronRight size={18} color={colors.subtle} />
-    </TouchableOpacity>
-  );
 }
 
 function ChatBubble({ align, text }: { align: "left" | "right"; text: string }) {
@@ -1855,28 +1845,53 @@ const styles = StyleSheet.create({
   processingDotComplete: {
     backgroundColor: colors.sageDark,
   },
-  stepRow: {
-    minHeight: 70,
+  archiveTargetCard: {
+    minHeight: 88,
     borderRadius: radius.sm,
-    padding: 12,
-    backgroundColor: colors.surface,
+    padding: 14,
+    backgroundColor: colors.surfaceSoft,
     borderWidth: 1,
     borderColor: colors.line,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 12,
   },
-  stepIndex: {
-    width: 32,
-    height: 32,
+  archiveTargetCardReady: {
+    backgroundColor: "#F4F8F5",
+    borderColor: "#C9DDD1",
+  },
+  archiveTargetIcon: {
+    width: 36,
+    height: 36,
     borderRadius: radius.pill,
-    backgroundColor: colors.clay,
+    backgroundColor: "#E8DED5",
     alignItems: "center",
     justifyContent: "center",
   },
-  stepIndexText: {
-    color: "#FFF9F3",
+  archiveTargetIconReady: {
+    backgroundColor: colors.sageDark,
+  },
+  archiveTargetLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  archiveTargetValue: {
+    marginTop: 3,
+    color: colors.ink,
+    fontSize: 17,
     fontWeight: "900",
+  },
+  archiveTargetValuePending: {
+    color: colors.muted,
+    fontSize: 14,
+  },
+  archiveTargetDetail: {
+    marginTop: 4,
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
   },
   privacyPanel: {
     borderRadius: radius.sm,

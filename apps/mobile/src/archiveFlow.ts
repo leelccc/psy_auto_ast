@@ -38,3 +38,21 @@ export function buildArchiveResult({
     recordLabel: `第 ${completedCount + 1} 次${meta.recordNoun}`,
   };
 }
+
+export function describeArchiveTarget(
+  result: ReturnType<typeof buildArchiveResult> | null,
+): { title: string; value: string; detail: string } {
+  if (!result) {
+    return {
+      title: "本次归档记录",
+      value: "选择归属档案后自动生成",
+      detail: "系统会根据该档案已有记录自动顺延",
+    };
+  }
+
+  return {
+    title: "本次将归为",
+    value: result.recordLabel,
+    detail: `归入${result.profileName}的${result.kindLabel}档案`,
+  };
+}

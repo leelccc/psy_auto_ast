@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildArchiveResult, filterArchiveCandidates } from "../archiveFlow";
+import { buildArchiveResult, describeArchiveTarget, filterArchiveCandidates } from "../archiveFlow";
 
 const candidates = [
   { id: "chen-yu", name: "陈雨", code: "A08", completedCount: 6 },
@@ -33,4 +33,24 @@ test("buildArchiveResult starts a newly created supervisee at the first record",
       recordLabel: "第 1 次督导",
     },
   );
+});
+
+test("describeArchiveTarget presents the derived record number as confirmation, not a user step", () => {
+  assert.deepEqual(
+    describeArchiveTarget({
+      profileName: "陈雨",
+      kindLabel: "来访者",
+      recordLabel: "第 7 次咨询",
+    }),
+    {
+      title: "本次将归为",
+      value: "第 7 次咨询",
+      detail: "归入陈雨的来访者档案",
+    },
+  );
+  assert.deepEqual(describeArchiveTarget(null), {
+    title: "本次归档记录",
+    value: "选择归属档案后自动生成",
+    detail: "系统会根据该档案已有记录自动顺延",
+  });
 });

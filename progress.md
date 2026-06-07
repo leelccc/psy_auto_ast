@@ -104,3 +104,10 @@
 - Verified the complete browser flow for an existing profile (`陈雨` becomes `第 7 次咨询`) and a newly created profile (`林清` becomes `第 1 次咨询`), including archive completion, profile detail, consultation record editing, and return navigation.
 - Ran frontend tests: `npm test`, result `5 passed`.
 - Ran frontend typecheck: `npm run typecheck`, result passed.
+- User flagged the archive confirmation page's `记录次数` card as logically wrong.
+- Reworked the archive confirmation display so only `选择归档类型` and `选择归属档案` are user decision steps; the derived record number is now a non-clickable confirmation summary.
+- Added `describeArchiveTarget` tests to keep the derived record number presentation separate from user steps.
+- Verified via browser DOM checks that the unselected state says `选择归属档案后自动生成` and selecting `陈雨` shows `本次将归为 / 第 7 次咨询 / 归入陈雨的来访者档案`.
+- Ran frontend tests: `npm test`, result `6 passed`.
+- Ran frontend typecheck: `npm run typecheck`, result passed.
+- Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.

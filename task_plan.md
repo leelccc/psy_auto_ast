@@ -60,6 +60,7 @@ Complete. Latest follow-up polish pass also complete.
 - Archive completion must persist the selected profile context into the next screen and display the exact session number created by the archive action.
 - Transient feedback must not block primary actions. Feedback clears on route changes, auto-dismisses, and stays away from bottom action buttons.
 - Back navigation should return to the initiating workflow context rather than sending every detail page to the generic overview.
+- Archive confirmation should only mark user decisions as steps. Automatically derived record numbers belong in a read-only confirmation summary, not in a clickable step card.
 
 ## Errors Encountered
 
