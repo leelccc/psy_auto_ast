@@ -14,7 +14,7 @@
 - Recording does not require real-time transcription. Audio is recorded or uploaded first, then AI processing runs asynchronously.
 - Original audio is stored in the cloud for 14 days only and cannot be authorized for long-term cloud storage.
 - Transcripts, recording notes, reports, attachments, and AI supervision conversations default to 14-day retention and can be authorized for long-term storage by explicit user action.
-- Archive flow must use an intermediate page: select profile type, select or create profile, select session sequence, then confirm.
+- Archive flow must use an intermediate page: select profile type, select or create profile, review the automatically assigned fixed session sequence, then confirm. This supersedes the early PRD wording that made sequence selection a user action.
 - Every entry into a profile detail page requires the corresponding profile access password. No short-term bypass.
 - Report templates are system built-in for MVP. No user custom templates or Word template upload/parse in MVP.
 - Intelligent supervision chat reads no profile data by default; the user must manually add materials as context.
@@ -55,3 +55,14 @@
 - Audit records may be retained only with minimized non-sensitive metadata.
 - PDF text can participate in AI analysis if extraction succeeds. Images are stored and viewed only in MVP.
 - Intelligent supervision citations can retain non-sensitive labels after source deletion, but not sensitive source body text.
+
+## Mobile Flow Audit Findings
+
+- The product needs three separate consistency layers: user journey, interaction outcome, and data propagation. A visually plausible screen is still wrong if it displays stale or hardcoded data.
+- Toast feedback is appropriate only for lightweight completion. It cannot replace required forms, state pages, lists, confirmations, or version changes.
+- Recording list navigation must be status-aware: pending archive goes to archive confirmation, processing goes to processing status, and completed archived recordings go to recording note detail.
+- Archive confirmation must receive the selected recording title and duration from the source list item. It must not use its own hardcoded recording metadata.
+- Profile creation from the profile library and inline creation during archive are different flows. Library creation produces an empty profile with `尚无记录`; archive creation immediately produces the first fixed session.
+- Profile library identity filters and search must combine rather than act as decorative controls.
+- Profile detail terminology and covering legal files depend on identity: consultation/client, received supervision/supervisor, and provided supervision/supervisee.
+- Actions such as `全部`, `更多`, or filter labels should not look clickable until the destination or state change exists.

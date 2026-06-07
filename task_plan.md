@@ -6,7 +6,7 @@ Build a minimal backend core first, then a polished mobile frontend prototype th
 
 ## Current Phase
 
-Complete. Latest follow-up polish pass also complete.
+Complete. Latest mobile behavior audit and first P0 implementation pass complete.
 
 ## Phases
 
@@ -29,6 +29,10 @@ Complete. Latest follow-up polish pass also complete.
 - [x] Phase 16: Verify interaction polish with typecheck, tests, Expo Web DOM checks, and web export.
 - [x] Phase 17: Correct mobile information architecture: restore information tab, split recording flows, add profile creation, and rebuild profile detail around per-session cards.
 - [x] Phase 18: Complete recording archive flow with working search/create, automatic session numbering, completion state, selected-profile detail, and contextual back navigation.
+- [x] Phase 19: Document user journeys, interaction state rules, and data movement across the mobile product.
+- [x] Phase 20: Audit every mobile screen, card, button, label, state, and navigation outcome.
+- [x] Phase 21: Implement the highest-priority audit fixes with tests: profile library, recording routing/context, record editing/versioning, privacy center/authorization state, and case-report generation.
+- [x] Phase 22: Verify full workflows in the browser, export the app, and commit the audit pass.
 
 ## Working Files
 
@@ -61,6 +65,10 @@ Complete. Latest follow-up polish pass also complete.
 - Transient feedback must not block primary actions. Feedback clears on route changes, auto-dismisses, and stays away from bottom action buttons.
 - Back navigation should return to the initiating workflow context rather than sending every detail page to the generic overview.
 - Archive confirmation should only mark user decisions as steps. Automatically derived record numbers belong in a read-only confirmation summary, not in a clickable step card.
+- Profile-library creation and archive-inline creation are different flows: library creation creates an empty profile with no records; archive creation creates the first record.
+- Recording detail pages must be driven by the selected recording. Titles, durations, role labels, summaries, and record-generation labels cannot remain hardcoded.
+- Data/privacy has two layers: a management center and a per-resource authorization sheet. Confirmed authorization must update the long-term-save list.
+- Case reports are full-profile outputs. They require material selection before draft generation and must exclude destroyed/unavailable resources.
 
 ## Errors Encountered
 

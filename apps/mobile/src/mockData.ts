@@ -18,6 +18,9 @@ export const recordings = [
     status: "生成中",
     archive: "已归档",
     ttl: "剩余 13 天",
+    profileName: "陈雨",
+    kindLabel: "来访者" as const,
+    recordLabel: "第 6 次咨询",
   },
   {
     title: "未归档录音 06-05",
@@ -25,6 +28,9 @@ export const recordings = [
     status: "可查看",
     archive: "待归档",
     ttl: "剩余 12 天",
+    profileName: null,
+    kindLabel: null,
+    recordLabel: null,
   },
   {
     title: "王澜 督导反馈",
@@ -32,13 +38,16 @@ export const recordings = [
     status: "可查看",
     archive: "已归档",
     ttl: "长期保存",
+    profileName: "王澜",
+    kindLabel: "督导师" as const,
+    recordLabel: "第 2 次受督",
   },
 ];
 
 export const profiles = [
-  { name: "陈雨", type: "来访者", count: "第6次", status: "进行中", risk: "轻度", next: "6月8日 10:00" },
-  { name: "李澄", type: "督导师", count: "第3次", status: "线上", risk: "无", next: "6月9日 15:30" },
-  { name: "周宁", type: "受督者", count: "第12次", status: "线下", risk: "无", next: "6月12日 14:00" },
+  { id: "A08", name: "陈雨", type: "来访者" as const, count: "第6次", status: "进行中", risk: "轻度", next: "6月8日 10:00" },
+  { id: "S03", name: "李澄", type: "督导师" as const, count: "第3次", status: "线上", risk: "无", next: "6月9日 15:30" },
+  { id: "E12", name: "周宁", type: "受督者" as const, count: "第12次", status: "线下", risk: "无", next: "6月12日 14:00" },
 ];
 
 export const privacyResources = [

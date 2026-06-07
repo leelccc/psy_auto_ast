@@ -52,6 +52,33 @@
 - Started Expo Web on `http://localhost:8083` because `8082` was already occupied, and visually checked home, profile detail, report editor, authorization popup, and recording summary detail in the in-app browser.
 - Increased mobile scroll bottom padding so deep-page content clears the floating bottom tab bar.
 - Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
+- Started a full mobile behavior audit after the user requested整理 user journeys, interaction logic, and data movement before further page polishing.
+- Created `docs/plans/2026-06-07-mobile-flow-interaction-data-audit.md` with decision precedence, core journeys, interaction rules, entity/data flow, a page-by-page audit table, and P0/P1/P2 implementation order.
+- Identified and documented the early-PRD conflict around archive record numbering; the latest rule keeps sequence assignment automatic and read-only.
+- Implemented real profile-library identity filtering and combined name/code/status search.
+- Replaced the profile creation field preview with identity-specific inputs, required-name validation, creation state, and direct navigation into the new profile.
+- Added an explicit empty profile state. A profile created from the library now shows `尚无记录` instead of inventing a first session.
+- Made profile detail history labels, covering legal documents, and record nouns identity-aware for clients, supervisors, and supervisees.
+- Removed unsupported clickable actions such as home statistics `全部` and information `更多`; retained `近 7 天` as static scope text.
+- Split recording-list navigation by data state: pending archive, processing, and completed detail now open different destinations.
+- Added a dedicated recording-processing page rather than showing completed recording-note content while AI work is still running.
+- Propagated the selected recording title and duration into archive confirmation, fixing the stale hardcoded `52:18` shown for the `41:06` pending recording.
+- Preserved archive return context so archive opened from recording history returns to recording history, while archive opened after active recording returns to the recorder.
+- Added profile-library and recording-flow behavior tests; frontend test count is now `11 passed`.
+- Fixed recording detail context propagation so selecting `王澜 督导反馈` shows Wang Lan's title, duration, supervision summary, speaker roles, transcript snippets, and `生成督导反馈` instead of Chen Yu consultation content.
+- Made record editing identity-aware: client profiles edit consultation records, supervisor profiles edit supervision feedback, and supervisee profiles edit supervision records.
+- Turned record sections into editable draft fields. Saving creates a read-only formal version, and further changes require copying back to draft.
+- Split `我的 > 数据与隐私` into a real privacy center instead of opening the authorization sheet directly.
+- Added long-term authorization state propagation: selected resources are merged into an `已长期保存资料` list, while original audio remains non-authorizable.
+- Added case report material selection and case report editing flows. The material selector defaults to usable full-profile materials and excludes destroyed audio.
+- Added case report draft/formal editing, export action, and long-term-save authorization entry. The case report is clearly full-profile, not a single-session record.
+- Hid bottom navigation during focused flows such as recording, archive, profile creation, record editing, case-report generation/editing, and authorization to avoid accidental navigation and content overlap.
+- Replaced the recording cancel placeholder with an in-page two-step destructive confirmation; the second confirmation discards the unsaved recording and returns home.
+- Verified in the browser: profile filtering/search, new empty profile creation, recording-state routing, selected recording metadata in archive, supervision recording detail, supervision feedback formal-save/auth return, privacy center authorized list, and case-report material/edit/authorize flow.
+- Verified in the browser that recording cancellation enters a visible warning state and only discards the recording after the second confirmation.
+- Ran frontend tests: `npm test`, result `15 passed`.
+- Ran frontend typecheck: `npm run typecheck`, result passed.
+- Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
 - Marked Phase 14 complete.
 - User paused after reviewing the mobile detail workflow polish; next continuation should resume from mobile frontend refinement and any requested follow-up screens or interaction polish.
 - Resumed mobile frontend refinement after the user asked to continue.
