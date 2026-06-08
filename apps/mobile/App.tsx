@@ -51,6 +51,7 @@ import { buildNewProfile, filterProfiles, type ProfileFilter, type ProfileListIt
 import { describeRecordingContext, getRecordingDestination, toArchiveRecording, type ArchiveRecording } from "./src/recordingFlow";
 import { getAuthorizableResources, mergeAuthorizedResources, type PrivacyResource } from "./src/privacyFlow";
 import { getSelectableCaseReportMaterials, type CaseReportMaterial } from "./src/caseReportFlow";
+import { buildDownloadArtifact, scheduleDownload } from "./src/downloadFlow";
 import { decideRecordingRegeneration, updateAtIndex } from "./src/recordingEditorFlow";
 import {
   addSessionMaterial,
@@ -1724,9 +1725,18 @@ function RecordingDetailScreen({
       </View>
 
       <View style={styles.exportPanel}>
-        <DataRow icon={Download} title="导出 PDF / Word" value={exportReady ? "导出任务已完成 · 可重新下载" : "纪要与转写均可导出"} onPress={() => {
+        <DataRow icon={Download} title="下载录音纪要 PDF" value={exportReady ? "已下载 · 可重新下载" : "包含纪要、章节与完整转写"} onPress={() => {
           setExportReady(true);
-          onNotice("导出文件已生成", "文件包含当前纪要、章节和完整转写，不包含原始录音。");
+          scheduleDownload(buildDownloadArtifact({
+            title: `${recording.title} 录音纪要`,
+            fileType: "PDF",
+            sections: [
+              { title: "录音纪要", content: summary },
+              { title: "章节速览", content: chapters.map((chapter) => `${chapter.time} ${chapter.title}`).join("\n") },
+              { title: "完整转写", content: turns.map((turn) => `${turn.time} ${turn.speaker}\n${turn.text}`).join("\n\n") },
+            ],
+          }));
+          onNotice("下载已开始", "PDF 包含当前纪要、章节和完整转写，不包含原始录音。");
         }} />
         <DataRow icon={ShieldCheck} title="长期保存授权" value="转写与纪要可授权，原始录音不可授权" onPress={onOpenPrivacy} />
       </View>
@@ -1922,6 +1932,7 @@ function FilePreviewScreen({
   const [title, setTitle] = useState(file.title);
   const [fileType, setFileType] = useState(file.fileType);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [downloaded, setDownloaded] = useState(false);
   const previewCopy = fileType === "图片"
     ? "图片预览区域"
     : fileType === "音频"
@@ -1960,7 +1971,15 @@ function FilePreviewScreen({
         </View>
       ) : null}
 
-      <View style={styles.inlineActions}>
+      <View style={styles.fileActionStack}>
+        {fileType === "PDF" ? <GhostButton icon={Download} label={downloaded ? "重新下载 PDF" : "下载 PDF"} onPress={() => {
+          setDownloaded(true);
+          scheduleDownload(buildDownloadArtifact({
+            title: file.title,
+            fileType: "PDF",
+            sections: [{ title: "文件信息", content: file.meta }],
+          }));
+        }} /> : null}
         <GhostButton icon={Edit3} label={editing ? "取消修改" : "修改 / 替换"} onPress={() => {
           setEditing((current) => !current);
           setConfirmDelete(false);
@@ -2066,6 +2085,14 @@ function RecordEditorScreen({
             onNotice(`${recordType}已保存为正式版`, `本次${recordType}已进入档案；后续修改需先复制为草稿。`);
           }} wide />
         )}
+        <GhostButton icon={Download} label={`下载${recordType} PDF`} onPress={() => {
+          scheduleDownload(buildDownloadArtifact({
+            title: `${profile.profileName} ${profile.recordLabel} ${recordType}`,
+            fileType: "PDF",
+            sections,
+          }));
+          onNotice("下载已开始", `${recordType}${formal ? "正式版" : "草稿"}正在下载到本地。`);
+        }} />
         <GhostButton icon={ShieldCheck} label="授权长期保存草稿与正式版" onPress={onOpenPrivacy} />
       </View>
     </View>
@@ -2191,7 +2218,14 @@ function CaseReportEditorScreen({
             onNotice("个案报告已保存为正式版", "正式版已进入档案，后续修改需要先复制为草稿。");
           }} wide />
         )}
-        <GhostButton icon={Download} label="导出 PDF / Word" onPress={() => onNotice("导出已准备", "将导出当前个案报告，不包含原始录音。")} />
+        <GhostButton icon={Download} label="下载个案报告 PDF" onPress={() => {
+          scheduleDownload(buildDownloadArtifact({
+            title: `${profile.profileName} 个案报告`,
+            fileType: "PDF",
+            sections,
+          }));
+          onNotice("下载已开始", `个案报告${formal ? "正式版" : "草稿"}正在下载到本地，不包含原始录音。`);
+        }} />
         <GhostButton icon={ShieldCheck} label="授权长期保存个案报告" onPress={onOpenPrivacy} />
       </View>
     </View>
@@ -4332,6 +4366,9 @@ const styles = StyleSheet.create({
   },
   flexActionButton: {
     flex: 1,
+  },
+  fileActionStack: {
+    gap: 9,
   },
   editorHeader: {
     borderRadius: radius.sm,

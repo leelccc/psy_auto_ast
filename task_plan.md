@@ -39,6 +39,7 @@ Complete. Mobile P0/P1/P2 interaction audit items are implemented and verified.
 - [x] Phase 26: Verify P1/P2 workflows, update records, export, and commit.
 - [x] Phase 27: Make consultation history stateful with create, time sorting, editable summaries/tags, and confirmed deletion.
 - [x] Phase 28: Add session-scoped file preview, replacement, rename, and deletion flows.
+- [x] Phase 29: Add local downloads for generated records, reports, recording notes, and previewable files.
 
 ## Working Files
 
@@ -78,6 +79,7 @@ Complete. Mobile P0/P1/P2 interaction audit items are implemented and verified.
 - Consultation history is always sorted by occurrence time descending. Sequence numbers stay fixed even when a record is backfilled or its time changes.
 - Consultation cards are editable summaries: occurrence time, summary text, and up to four unique tags can change without rewriting the underlying formal record.
 - Deleting a consultation requires confirmation and removes its owned recording/scale/homework/other material rows. Files open in a preview before replacement or deletion.
+- Generated consultation/supervision records, case reports, and recording notes must support local PDF download. Previewable PDF and attachment files must retain a direct download action.
 
 ## Errors Encountered
 

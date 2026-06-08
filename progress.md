@@ -166,3 +166,6 @@
 - Added a shared file preview page for session attachments and legal/ethical files, with rename, replacement, and confirmed deletion.
 - Scoped recording, scale, homework, and other files by `sessionId` so each consultation opens only its own materials.
 - Added consultation-history and file-lifecycle tests; frontend test count is now `29`.
+- Added real browser downloads for consultation records, supervision feedback/records, case reports, and recording-note exports.
+- Added direct download actions to every PDF preview and browser-side PDF rendering so Chinese exports open as valid paginated documents.
+- Added tested filename sanitization, MIME selection, and export-content assembly; frontend test count is now `32`.

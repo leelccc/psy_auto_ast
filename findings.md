@@ -74,3 +74,4 @@
 - The session card is a condensed editable index, not the formal record itself. Editing summary text or tags should not mutate the formal consultation record.
 - Session files require ownership by `sessionId`; otherwise selecting the same category on different consultation cards can incorrectly expose another consultation's materials.
 - Deleting a consultation must cascade to its session-owned material rows, while file deletion should leave an explicit deleted state where a covering legal file is expected.
+- Download behavior should be centralized so generated documents and previewed PDFs use consistent filenames, valid browser-rendered PDF files, and local delivery instead of page-specific export notices.

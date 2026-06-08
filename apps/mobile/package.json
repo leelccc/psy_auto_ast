@@ -13,6 +13,7 @@
     "@expo/metro-runtime": "~6.1.2",
     "expo": "~54.0.26",
     "expo-status-bar": "~3.0.9",
+    "jspdf": "^4.2.1",
     "lucide-react-native": "^0.561.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
