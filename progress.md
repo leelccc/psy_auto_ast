@@ -52,6 +52,7 @@
 - Started Expo Web on `http://localhost:8083` because `8082` was already occupied, and visually checked home, profile detail, report editor, authorization popup, and recording summary detail in the in-app browser.
 - Increased mobile scroll bottom padding so deep-page content clears the floating bottom tab bar.
 - Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
+
 - Started a full mobile behavior audit after the user requested整理 user journeys, interaction logic, and data movement before further page polishing.
 - Created `docs/plans/2026-06-07-mobile-flow-interaction-data-audit.md` with decision precedence, core journeys, interaction rules, entity/data flow, a page-by-page audit table, and P0/P1/P2 implementation order.
 - Identified and documented the early-PRD conflict around archive record numbering; the latest rule keeps sequence assignment automatic and read-only.
@@ -79,6 +80,7 @@
 - Ran frontend tests: `npm test`, result `15 passed`.
 - Ran frontend typecheck: `npm run typecheck`, result passed.
 - Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
+
 - Marked Phase 14 complete.
 - User paused after reviewing the mobile detail workflow polish; next continuation should resume from mobile frontend refinement and any requested follow-up screens or interaction polish.
 - Resumed mobile frontend refinement after the user asked to continue.
@@ -138,3 +140,21 @@
 - Ran frontend tests: `npm test`, result `6 passed`.
 - Ran frontend typecheck: `npm run typecheck`, result passed.
 - Exported web build with `npx expo export --platform web --output-dir dist-web`, result passed.
+
+## 2026-06-08
+
+- Resumed the mobile audit backlog and completed all remaining P1/P2 items.
+- Added tested session-material helpers and real focused pages for recording, scale, homework, and other session resources.
+- Added upload/add flows that write visible material rows, distinguish original audio from preservable resources, and mark the session record draft as needing regeneration.
+- Added chapter editing and full-transcript proofreading pages; saved changes return to the recording note and become the source for later record generation.
+- Added tested regeneration safeguards: manual edits require explicit overwrite confirmation, failed regeneration preserves current content, and formal session records are not overwritten.
+- Replaced the intelligent-supervision placeholders with explicit context selection, no-context behavior, visible citations, a generating state, stop action, and conversation list.
+- Added real P2 destinations for weekly statistics, full schedule, article detail, and security settings.
+- Added schedule date switching, privacy-title mode, and a direct start-recording action.
+- Added security state for three profile-access passwords, system-calendar/login toggles, and two-step irreversible cloud-data deletion.
+- Added a real uploaded-recording row in the recording list and an overwrite-confirmed ethics-file upload flow in profile detail.
+- Browser-verified material upload and count propagation, chapter/transcript edits, regeneration overwrite confirmation, supervision citations and stop behavior, articles, statistics, schedule, and security settings at a 390x844 mobile viewport.
+- Browser console showed no runtime errors; only known React Native Web deprecation warnings for shadow and pointer-events props.
+- Frontend tests pass: `23 passed`.
+- Frontend typecheck passes.
+- Expo web export passes.

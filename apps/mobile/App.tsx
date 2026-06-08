@@ -27,6 +27,8 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Square,
+  Upload,
   X,
   Trash2,
   UserRound,
@@ -48,6 +50,15 @@ import { buildNewProfile, filterProfiles, type ProfileFilter, type ProfileListIt
 import { describeRecordingContext, getRecordingDestination, toArchiveRecording, type ArchiveRecording } from "./src/recordingFlow";
 import { getAuthorizableResources, mergeAuthorizedResources, type PrivacyResource } from "./src/privacyFlow";
 import { getSelectableCaseReportMaterials, type CaseReportMaterial } from "./src/caseReportFlow";
+import { decideRecordingRegeneration, updateAtIndex } from "./src/recordingEditorFlow";
+import {
+  addSessionMaterial,
+  getMaterialUpdateMessage,
+  materialCategoryCopy,
+  type MaterialCategory,
+  type SessionMaterial,
+} from "./src/sessionMaterials";
+import { buildSupervisionReply, type SupervisionContext } from "./src/supervisionFlow";
 import {
   formatBadge,
   metrics,
@@ -73,14 +84,76 @@ type QuickView =
   | "profileDetail"
   | "profileCreate"
   | "recordingDetail"
+  | "chapterEditor"
+  | "transcriptEditor"
+  | "sessionMaterials"
   | "recordEditor"
   | "caseReportSelect"
   | "caseReportEditor"
   | "privacyCenter"
-  | "privacyConsent";
+  | "privacyConsent"
+  | "articleDetail"
+  | "statistics"
+  | "schedule"
+  | "securitySettings";
 type Notice = { title: string; detail: string };
 type ArchiveResult = ReturnType<typeof buildArchiveResult>;
 type EditableRecordSection = { title: string; content: string };
+type EditableChapter = { time: string; title: string; current?: boolean };
+type EditableTranscriptTurn = { time: string; speaker: string; text: string };
+type RecordingItem = {
+  title: string;
+  duration: string;
+  status: string;
+  archive: string;
+  ttl: string;
+  profileName: string | null;
+  kindLabel: "来访者" | "督导师" | "受督者" | null;
+  recordLabel: string | null;
+};
+
+const articles = [
+  {
+    id: "supervision",
+    title: "如何准备一次有效督导",
+    tag: "督导",
+    summary: "从近期记录中提炼事实、咨询师反应、风险和真正需要讨论的不确定点。",
+    sections: [
+      "先写清发生了什么，避免只用“卡住了”“没效果”等结论替代事实。",
+      "区分来访者反应、咨询师自身反应与技术选择，标出最希望得到反馈的部分。",
+      "带入必要材料即可，不要默认暴露整份档案；督导结束后记录可执行的下一步。",
+    ],
+  },
+  {
+    id: "privacy",
+    title: "咨询资料保存的边界",
+    tag: "隐私",
+    summary: "理解 14 天临时保存、主动长期授权、撤回授权与原始录音销毁边界。",
+    sections: [
+      "原始录音仅临时保存 14 天，不能授权长期云端保存。",
+      "转写、纪要、记录和附件需要逐项主动授权，默认不会长期保留。",
+      "撤回授权后，若原临时期限已经结束，对应资料应立即销毁。",
+    ],
+  },
+  {
+    id: "risk",
+    title: "危机风险记录的提醒",
+    tag: "安全",
+    summary: "风险记录应包含观察依据、当事人表述、已采取行动与后续复核安排。",
+    sections: [
+      "记录具体事实与原话，避免只写“高风险”而没有判断依据。",
+      "写明已完成的评估、告知、转介或紧急联系，以及相关时间点。",
+      "保留下一次复核安排，并在风险变化时更新正式记录。",
+    ],
+  },
+];
+
+const initialSessionMaterials: SessionMaterial[] = [
+  { id: "recording-1", category: "recording", title: "第 6 次咨询原始录音", meta: "音频 · 52:18 · 剩余 13 天", preservable: false },
+  { id: "scale-1", category: "scale", title: "SAS 焦虑自评量表", meta: "PDF · 6月5日上传 · 可参与记录生成", preservable: true },
+  { id: "homework-1", category: "homework", title: "睡前想法记录", meta: "图片 · 已提交 · 可参与记录生成", preservable: true },
+  { id: "other-1", category: "other", title: "工作事件时间线", meta: "PDF · 已解析文字 · 可参与记录生成", preservable: true },
+];
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
   { key: "home", label: "首页", icon: Home },
@@ -130,7 +203,7 @@ export default function App() {
     duration: "42:18",
   });
   const [archiveReturn, setArchiveReturn] = useState<QuickView>("recording");
-  const [activeRecording, setActiveRecording] = useState<(typeof recordings)[number]>(recordings[0]);
+  const [activeRecording, setActiveRecording] = useState<RecordingItem>(recordings[0]);
   const [authorizedResources, setAuthorizedResources] = useState<string[]>([]);
   const [consentResources, setConsentResources] = useState<PrivacyResource[]>(getAuthorizableResources(privacyResources));
   const [profileItems, setProfileItems] = useState<ProfileListItem[]>(profiles);
@@ -149,6 +222,14 @@ export default function App() {
   const [recordDirty, setRecordDirty] = useState(true);
   const [caseReportSections, setCaseReportSections] = useState<EditableRecordSection[]>(getCaseReportSections());
   const [caseReportFormal, setCaseReportFormal] = useState(false);
+  const [sessionMaterials, setSessionMaterials] = useState<SessionMaterial[]>(initialSessionMaterials);
+  const [activeMaterialCategory, setActiveMaterialCategory] = useState<MaterialCategory>("recording");
+  const [materialReturn, setMaterialReturn] = useState<QuickView>("profileDetail");
+  const [recordingSummary, setRecordingSummary] = useState(describeRecordingContext(recordings[0].title).summary);
+  const [recordingChapters, setRecordingChapters] = useState<EditableChapter[]>(summaryChapters);
+  const [recordingTurns, setRecordingTurns] = useState<EditableTranscriptTurn[]>(transcriptTurns);
+  const [recordingHasEdits, setRecordingHasEdits] = useState(false);
+  const [activeArticle, setActiveArticle] = useState(articles[0]);
   const { width } = useWindowDimensions();
   const isCompact = width < 430;
   const showNotice = (title: string, detail: string) => setNotice({ title, detail });
@@ -164,6 +245,31 @@ export default function App() {
     setConsentResources(resources);
     setQuickView("privacyConsent");
   };
+  const resetRecordingEditor = (recording: RecordingItem) => {
+    const context = describeRecordingContext(recording.title);
+    const isSupervision = context.actionLabel === "生成督导反馈";
+    setRecordingSummary(context.summary);
+    setRecordingChapters(isSupervision
+      ? [
+          { time: "00:06", title: "案例概念化与当前困惑", current: true },
+          { time: "11:18", title: "风险、关系与技术选择的区分" },
+          { time: "25:42", title: "后续行动与下次受督准备" },
+        ]
+      : summaryChapters);
+    setRecordingTurns(isSupervision
+      ? [
+          { time: "06:18", speaker: "咨询师", text: "我想讨论来访者在评价场景中的焦虑，以及我在推进干预时的犹豫。" },
+          { time: "08:42", speaker: "督导师", text: "可以先区分风险评估、关系反应和技术选择，再决定本阶段最优先的目标。" },
+          { time: "12:09", speaker: "咨询师", text: "我会补充风险记录，并把下一次咨询聚焦到可验证的触发事件。" },
+        ]
+      : transcriptTurns);
+    setRecordingHasEdits(false);
+  };
+  const openMaterials = (category: MaterialCategory, returnView: QuickView = "profileDetail") => {
+    setActiveMaterialCategory(category);
+    setMaterialReturn(returnView);
+    setQuickView("sessionMaterials");
+  };
   const handleBack = () => {
     if (quickView === "privacyConsent") {
       setTab(privacyReturn.tab);
@@ -172,6 +278,14 @@ export default function App() {
     }
     if (quickView === "recordEditor") {
       setQuickView(recordEditorReturn);
+      return;
+    }
+    if (quickView === "sessionMaterials") {
+      setQuickView(materialReturn);
+      return;
+    }
+    if (quickView === "chapterEditor" || quickView === "transcriptEditor") {
+      setQuickView("recordingDetail");
       return;
     }
     if (quickView === "caseReportEditor") {
@@ -200,6 +314,21 @@ export default function App() {
       setQuickView("overview");
       return;
     }
+    if (quickView === "articleDetail") {
+      setTab("recordings");
+      setQuickView("overview");
+      return;
+    }
+    if (quickView === "statistics" || quickView === "schedule") {
+      setTab("home");
+      setQuickView("overview");
+      return;
+    }
+    if (quickView === "securitySettings") {
+      setTab("account");
+      setQuickView("overview");
+      return;
+    }
     setQuickView("overview");
   };
 
@@ -223,33 +352,54 @@ export default function App() {
     if (quickView === "profileDetail") return "档案详情";
     if (quickView === "profileCreate") return "新增档案";
     if (quickView === "recordingDetail") return "录音纪要";
+    if (quickView === "chapterEditor") return "编辑章节";
+    if (quickView === "transcriptEditor") return "校对完整转写";
+    if (quickView === "sessionMaterials") return materialCategoryCopy[activeMaterialCategory].title;
     if (quickView === "recordEditor") return activeProfile.kindLabel === "来访者" ? "咨询记录编辑" : activeProfile.kindLabel === "督导师" ? "督导反馈编辑" : "督导记录编辑";
     if (quickView === "caseReportSelect") return "生成个案报告";
     if (quickView === "caseReportEditor") return "个案报告编辑";
     if (quickView === "privacyCenter") return "数据与隐私";
     if (quickView === "privacyConsent") return "长期保存授权";
+    if (quickView === "articleDetail") return "资讯详情";
+    if (quickView === "statistics") return "本周统计";
+    if (quickView === "schedule") return "日程";
+    if (quickView === "securitySettings") return "安全设置";
     if (tab === "profiles") return "档案库";
     if (tab === "recordings") return "资讯";
     if (tab === "account") return "我的";
     return "今天要做什么";
-  }, [activeProfile.kindLabel, quickView, tab]);
+  }, [activeMaterialCategory, activeProfile.kindLabel, quickView, tab]);
   const hideBottomTabs = [
     "recording",
     "archive",
     "profileCreate",
     "recordEditor",
+    "chapterEditor",
+    "transcriptEditor",
+    "sessionMaterials",
     "caseReportSelect",
     "caseReportEditor",
     "privacyConsent",
+    "articleDetail",
+    "statistics",
+    "schedule",
+    "securitySettings",
   ].includes(quickView);
 
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style="dark" />
       <View style={[styles.phoneShell, isCompact && styles.phoneShellCompact]}>
-        <Header title={title} quickView={quickView} onBack={handleBack} onNotice={showNotice} />
+        <Header title={title} quickView={quickView} onBack={handleBack} onOpenSchedule={() => setQuickView("schedule")} />
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {tab === "home" && quickView === "overview" ? <HomeScreen onOpen={setQuickView} onOpenProfiles={() => setTab("profiles")} onNotice={showNotice} /> : null}
+          {tab === "home" && quickView === "overview" ? (
+            <HomeScreen
+              onOpen={setQuickView}
+              onOpenProfiles={() => setTab("profiles")}
+              onOpenSchedule={() => setQuickView("schedule")}
+              onOpenStatistics={() => setQuickView("statistics")}
+            />
+          ) : null}
           {quickView === "recording" ? <RecordingScreen onCancel={() => setQuickView("overview")} onArchive={() => {
             setArchiveRecording({ title: "新录音 06-07", duration: "42:18" });
             setArchiveReturn("recording");
@@ -260,6 +410,7 @@ export default function App() {
               onOpen={(recording) => {
                 const destination = getRecordingDestination(recording);
                 setActiveRecording(recording);
+                resetRecordingEditor(recording);
                 if (recording.profileName && recording.kindLabel && recording.recordLabel) {
                   setActiveProfile({
                     profileName: recording.profileName,
@@ -291,14 +442,14 @@ export default function App() {
               onOpenRecords={() => setQuickView("recordingRecords")}
             />
           ) : null}
-          {quickView === "supervision" ? <SupervisionScreen onNotice={showNotice} /> : null}
+          {quickView === "supervision" ? <SupervisionScreen /> : null}
           {quickView === "profileDetail" ? <ProfileDetailScreen profile={activeProfile} onOpenRecord={() => {
             prepareRecordEditor(activeProfile.kindLabel, "profileDetail");
           }} onOpenCaseReport={() => {
             setCaseReportSections(getCaseReportSections());
             setCaseReportFormal(false);
             setQuickView("caseReportSelect");
-          }} onNotice={showNotice} /> : null}
+          }} onOpenMaterial={(category) => openMaterials(category)} onNotice={showNotice} /> : null}
           {quickView === "profileCreate" ? (
             <ProfileCreateScreen
               onNotice={showNotice}
@@ -313,12 +464,76 @@ export default function App() {
               }}
             />
           ) : null}
-          {quickView === "recordingDetail" ? <RecordingDetailScreen recording={activeRecording} onOpenRecord={() => {
-            prepareRecordEditor(activeProfile.kindLabel, "recordingDetail");
-          }} onNotice={showNotice} onOpenPrivacy={() => openPrivacy("recordingDetail", [
-            { title: `${activeRecording.title}转写`, type: "转写文本", expires: "13 天后销毁", preservable: true },
-            { title: `${activeRecording.title}录音纪要`, type: "录音纪要", expires: "13 天后销毁", preservable: true },
-          ])} /> : null}
+          {quickView === "recordingDetail" ? (
+            <RecordingDetailScreen
+              recording={activeRecording}
+              summary={recordingSummary}
+              chapters={recordingChapters}
+              turns={recordingTurns}
+              hasManualEdits={recordingHasEdits}
+              onOpenRecord={() => prepareRecordEditor(activeProfile.kindLabel, "recordingDetail")}
+              onOpenChapters={() => setQuickView("chapterEditor")}
+              onOpenTranscript={() => setQuickView("transcriptEditor")}
+              onRegenerated={() => {
+                resetRecordingEditor(activeRecording);
+                setRecordingSummary(`${describeRecordingContext(activeRecording.title).summary} 已结合最新校对内容重新生成。`);
+                showNotice("重新生成任务已完成", "纪要、章节和转写已更新；原正式记录未被覆盖。");
+              }}
+              onNotice={showNotice}
+              onOpenPrivacy={() => openPrivacy("recordingDetail", [
+                { title: `${activeRecording.title}转写`, type: "转写文本", expires: "13 天后销毁", preservable: true },
+                { title: `${activeRecording.title}录音纪要`, type: "录音纪要", expires: "13 天后销毁", preservable: true },
+              ])}
+            />
+          ) : null}
+          {quickView === "chapterEditor" ? (
+            <ChapterEditorScreen
+              chapters={recordingChapters}
+              onChange={(index, chapter) => {
+                setRecordingChapters((current) => updateAtIndex(current, index, chapter));
+                setRecordingHasEdits(true);
+              }}
+              onSave={() => {
+                setQuickView("recordingDetail");
+                showNotice("章节已保存", "章节标题和时间点已同步到当前录音纪要。");
+              }}
+            />
+          ) : null}
+          {quickView === "transcriptEditor" ? (
+            <TranscriptEditorScreen
+              turns={recordingTurns}
+              onChange={(index, turn) => {
+                setRecordingTurns((current) => updateAtIndex(current, index, turn));
+                setRecordingHasEdits(true);
+              }}
+              onSave={() => {
+                setQuickView("recordingDetail");
+                showNotice("转写校对已保存", "最新发言人与文本将用于后续纪要和记录生成。");
+              }}
+            />
+          ) : null}
+          {quickView === "sessionMaterials" ? (
+            <SessionMaterialsScreen
+              category={activeMaterialCategory}
+              materials={sessionMaterials.filter((item) => item.category === activeMaterialCategory)}
+              onOpenRecording={() => {
+                resetRecordingEditor(activeRecording);
+                setQuickView("recordingDetail");
+              }}
+              onAdd={(title, fileType) => {
+                setSessionMaterials((current) => addSessionMaterial(current, {
+                  category: activeMaterialCategory,
+                  title,
+                  fileType,
+                }));
+                setRecordDirty(true);
+                showNotice("资料已添加", getMaterialUpdateMessage(activeMaterialCategory));
+              }}
+              onAuthorize={() => openPrivacy("sessionMaterials", sessionMaterials
+                .filter((item) => item.category === activeMaterialCategory && item.preservable)
+                .map((item) => ({ title: item.title, type: materialCategoryCopy[item.category].title, expires: "14 天后销毁", preservable: true })))}
+            />
+          ) : null}
           {quickView === "recordEditor" ? <RecordEditorScreen
             profile={activeProfile}
             sections={recordEditorSections}
@@ -363,6 +578,10 @@ export default function App() {
               }}
             />
           ) : null}
+          {quickView === "articleDetail" ? <ArticleDetailScreen article={activeArticle} /> : null}
+          {quickView === "statistics" ? <StatisticsScreen /> : null}
+          {quickView === "schedule" ? <ScheduleScreen onStartRecording={() => setQuickView("recording")} /> : null}
+          {quickView === "securitySettings" ? <SecuritySettingsScreen onNotice={showNotice} /> : null}
           {tab === "profiles" && quickView === "overview" ? (
             <ProfilesScreen
               profiles={profileItems}
@@ -378,8 +597,19 @@ export default function App() {
               onCreate={() => setQuickView("profileCreate")}
             />
           ) : null}
-          {tab === "recordings" && quickView === "overview" ? <ContentScreen onNotice={showNotice} /> : null}
-          {tab === "account" && quickView === "overview" ? <AccountScreen onOpenPrivacy={() => setQuickView("privacyCenter")} onNotice={showNotice} /> : null}
+          {tab === "recordings" && quickView === "overview" ? (
+            <ContentScreen onOpen={(article) => {
+              setActiveArticle(article);
+              setQuickView("articleDetail");
+            }} />
+          ) : null}
+          {tab === "account" && quickView === "overview" ? (
+            <AccountScreen
+              onOpenPrivacy={() => setQuickView("privacyCenter")}
+              onOpenSecurity={() => setQuickView("securitySettings")}
+              onNotice={showNotice}
+            />
+          ) : null}
         </ScrollView>
         {!hideBottomTabs ? (
           <BottomTabs
@@ -396,7 +626,7 @@ export default function App() {
   );
 }
 
-function Header({ title, quickView, onBack, onNotice }: { title: string; quickView: QuickView; onBack: () => void; onNotice: (title: string, detail: string) => void }) {
+function Header({ title, quickView, onBack, onOpenSchedule }: { title: string; quickView: QuickView; onBack: () => void; onOpenSchedule: () => void }) {
   return (
     <View style={styles.header}>
       <View>
@@ -404,7 +634,7 @@ function Header({ title, quickView, onBack, onNotice }: { title: string; quickVi
         <Text style={styles.screenTitle}>{title}</Text>
       </View>
       {quickView === "overview" ? (
-        <TouchableOpacity style={styles.roundButton} activeOpacity={0.75} onPress={() => onNotice("提醒中心", "今日还有 2 个安排待处理，可从首页近期任务继续查看。")}>
+        <TouchableOpacity style={styles.roundButton} activeOpacity={0.75} onPress={onOpenSchedule}>
           <Bell size={19} color={colors.clayDark} />
         </TouchableOpacity>
       ) : (
@@ -416,7 +646,17 @@ function Header({ title, quickView, onBack, onNotice }: { title: string; quickVi
   );
 }
 
-function HomeScreen({ onOpen, onOpenProfiles, onNotice }: { onOpen: (view: QuickView) => void; onOpenProfiles: () => void; onNotice: (title: string, detail: string) => void }) {
+function HomeScreen({
+  onOpen,
+  onOpenProfiles,
+  onOpenSchedule,
+  onOpenStatistics,
+}: {
+  onOpen: (view: QuickView) => void;
+  onOpenProfiles: () => void;
+  onOpenSchedule: () => void;
+  onOpenStatistics: () => void;
+}) {
   return (
     <View style={styles.stack}>
       <View style={styles.hero}>
@@ -439,7 +679,7 @@ function HomeScreen({ onOpen, onOpenProfiles, onNotice }: { onOpen: (view: Quick
         <QuickAction icon={Sparkles} label="智能督导" detail="仅读取已选资料" onPress={() => onOpen("supervision")} />
       </View>
 
-      <SectionHeader title="本周统计" />
+      <SectionHeader title="本周统计" action="明细" onAction={onOpenStatistics} />
       <View style={styles.metricRow}>
         {metrics.map((item) => (
           <View key={item.label} style={styles.metricCard}>
@@ -449,10 +689,10 @@ function HomeScreen({ onOpen, onOpenProfiles, onNotice }: { onOpen: (view: Quick
         ))}
       </View>
 
-      <SectionHeader title="近期任务" action="近 7 天" />
+      <SectionHeader title="近期任务" action="完整日程" onAction={onOpenSchedule} />
       <View style={styles.cardStack}>
         {reminders.map((item) => (
-          <TouchableOpacity key={item.title} style={styles.listCard} activeOpacity={0.78} onPress={() => onNotice("打开日程详情", `${item.title}：${item.kind}，${item.privacy}。`)}>
+          <TouchableOpacity key={item.title} style={styles.listCard} activeOpacity={0.78} onPress={onOpenSchedule}>
             <View style={styles.timePill}>
               <Text style={styles.timePillText}>{item.time}</Text>
             </View>
@@ -527,9 +767,12 @@ function RecordingRecordsScreen({
   onOpen,
   onNotice,
 }: {
-  onOpen: (recording: (typeof recordings)[number]) => void;
+  onOpen: (recording: RecordingItem) => void;
   onNotice: (title: string, detail: string) => void;
 }) {
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadedRecordings, setUploadedRecordings] = useState<string[]>([]);
   return (
     <View style={styles.stack}>
       <View style={styles.poster}>
@@ -537,8 +780,58 @@ function RecordingRecordsScreen({
         <Text style={styles.posterTitle}>录音记录</Text>
         <Text style={styles.posterCopy}>集中查看待归档、生成中和可查看的录音，不和正在录音流程混在一起。</Text>
       </View>
-      <SectionHeader title="录音列表" action="上传" onAction={() => onNotice("上传录音", "上传后会进入录音记录列表，归档前不读取任何档案资料。")} />
+      <SectionHeader title="录音列表" action={showUpload ? "收起" : "上传"} onAction={() => setShowUpload((current) => !current)} />
+      {showUpload ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>上传已有录音</Text>
+          <TextInput
+            value={uploadName}
+            onChangeText={setUploadName}
+            placeholder="录音文件名，例如 6月8日咨询.m4a"
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+          />
+          <Text style={styles.formHelp}>上传后先进入待归档状态，不会自动读取任何档案资料。</Text>
+          <TouchableOpacity style={[styles.inlineCreateConfirm, !uploadName.trim() && styles.inlineCreateConfirmDisabled]} activeOpacity={0.78} onPress={() => {
+            if (!uploadName.trim()) {
+              onNotice("请填写文件名", "选择本地音频后，文件名会自动带入。");
+              return;
+            }
+            setUploadedRecordings((current) => [uploadName.trim(), ...current]);
+            setUploadName("");
+            setShowUpload(false);
+            onNotice("录音已上传", "录音已进入待归档列表，选择归属档案后开始转写。");
+          }}>
+            <Text style={styles.inlineCreateConfirmText}>确认上传</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <View style={styles.cardStack}>
+        {uploadedRecordings.map((title) => (
+          <TouchableOpacity
+            key={title}
+            style={styles.recordingCard}
+            activeOpacity={0.78}
+            onPress={() => onOpen({
+              title,
+              duration: "待识别",
+              status: "可查看",
+              archive: "待归档",
+              ttl: "剩余 14 天",
+              profileName: null,
+              kindLabel: null,
+              recordLabel: null,
+            })}
+          >
+            <View style={styles.recordingIcon}><Upload size={20} color={colors.clayDark} /></View>
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>{title}</Text>
+              <Text style={styles.listMeta}>刚刚上传 · 归档后开始处理</Text>
+              <View style={styles.badgeRow}><Badge label="待归档" tone="warm" /></View>
+            </View>
+            <ChevronRight size={18} color={colors.subtle} />
+          </TouchableOpacity>
+        ))}
         {recordings.map((item) => (
           <TouchableOpacity key={item.title} style={styles.recordingCard} activeOpacity={0.78} onPress={() => onOpen(item)}>
             <View style={styles.recordingIcon}>
@@ -560,7 +853,7 @@ function RecordingRecordsScreen({
   );
 }
 
-function RecordingProcessingScreen({ recording }: { recording: (typeof recordings)[number] }) {
+function RecordingProcessingScreen({ recording }: { recording: RecordingItem }) {
   return (
     <View style={styles.stack}>
       <View style={styles.noticeCard}>
@@ -664,7 +957,7 @@ function ArchiveScreen({
         ))}
       </View>
 
-      <SectionHeader title="2 选择归属档案" action="搜索" onAction={() => onNotice("搜索档案", "可按姓名、编号、备注搜索；找不到时从下方新增人员。")} />
+      <SectionHeader title="2 选择归属档案" action="按姓名 / 编号" />
       <View style={styles.searchBar}>
         <Search size={18} color={colors.subtle} />
         <TextInput
@@ -978,13 +1271,20 @@ function ProfileDetailScreen({
   profile,
   onOpenRecord,
   onOpenCaseReport,
+  onOpenMaterial,
   onNotice,
 }: {
   profile: ArchiveResult;
   onOpenRecord: () => void;
   onOpenCaseReport: () => void;
+  onOpenMaterial: (category: MaterialCategory) => void;
   onNotice: (title: string, detail: string) => void;
 }) {
+  const [showLegalUpload, setShowLegalUpload] = useState(false);
+  const [legalUploadName, setLegalUploadName] = useState("");
+  const [legalVersions, setLegalVersions] = useState<Record<string, string>>({});
+  const [pendingLegalOverwrite, setPendingLegalOverwrite] = useState<string | null>(null);
+  const [extraSession, setExtraSession] = useState(false);
   const isDefaultProfile = profile.profileName === "陈雨";
   const hasRecords = profile.recordLabel !== "尚无记录";
   const sessionNoun = profile.kindLabel === "来访者" ? "咨询" : profile.kindLabel === "督导师" ? "受督" : "督导";
@@ -1013,13 +1313,66 @@ function ProfileDetailScreen({
         </View>
       </View>
 
-      <SectionHeader title="法律及伦理文件" action="上传" onAction={() => onNotice("上传伦理文件", `${legalFiles.join("、")}采用覆盖上传，新文件会替换旧文件。`)} />
+      <SectionHeader title="法律及伦理文件" action={showLegalUpload ? "收起" : "上传"} onAction={() => setShowLegalUpload((current) => !current)} />
+      {showLegalUpload ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>覆盖上传伦理文件</Text>
+          <TextInput
+            value={legalUploadName}
+            onChangeText={setLegalUploadName}
+            placeholder={`输入 ${legalFiles.join(" / ")} 文件名`}
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+          />
+          <Text style={styles.formHelp}>同类文件只保留当前版本。已有文件时需要再次确认覆盖。</Text>
+          <TouchableOpacity style={[styles.inlineCreateConfirm, !legalUploadName.trim() && styles.inlineCreateConfirmDisabled]} activeOpacity={0.78} onPress={() => {
+            if (!legalUploadName.trim()) return;
+            const target = legalFiles.find((item) => legalUploadName.includes(item)) ?? legalFiles[0];
+            if ((isDefaultProfile || legalVersions[target]) && pendingLegalOverwrite !== target) {
+              setPendingLegalOverwrite(target);
+              onNotice("确认覆盖文件", `再次点击将用 ${legalUploadName.trim()} 覆盖现有${target}。`);
+              return;
+            }
+            setLegalVersions((current) => ({ ...current, [target]: legalUploadName.trim() }));
+            setPendingLegalOverwrite(null);
+            setLegalUploadName("");
+            setShowLegalUpload(false);
+            onNotice("伦理文件已更新", `${target}已替换为最新上传版本。`);
+          }}>
+            <Text style={styles.inlineCreateConfirmText}>{pendingLegalOverwrite ? "确认覆盖现有文件" : "上传并检查覆盖"}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <View style={styles.legalGrid}>
-        <LegalFile title={legalFiles[0]} meta={isDefaultProfile ? "已签署 · 第 2 版" : "待上传"} icon={FileText} onPress={() => onNotice(`查看${legalFiles[0]}`, "可查看当前文件，也可从上传入口覆盖为新文件。")} />
-        <LegalFile title={legalFiles[1]} meta={isDefaultProfile ? "已签署 · 6月3日" : "待上传"} icon={ClipboardList} onPress={() => onNotice(`查看${legalFiles[1]}`, "可查看当前文件；重新上传会覆盖旧文件。")} />
+        <LegalFile title={legalFiles[0]} meta={legalVersions[legalFiles[0]] ?? (isDefaultProfile ? "已签署 · 第 2 版" : "待上传")} icon={FileText} onPress={() => {
+          setLegalUploadName(legalFiles[0]);
+          setShowLegalUpload(true);
+        }} />
+        <LegalFile title={legalFiles[1]} meta={legalVersions[legalFiles[1]] ?? (isDefaultProfile ? "已签署 · 6月3日" : "待上传")} icon={ClipboardList} onPress={() => {
+          setLegalUploadName(legalFiles[1]);
+          setShowLegalUpload(true);
+        }} />
       </View>
 
-      <SectionHeader title={`${sessionNoun}历程`} action="新增记录" onAction={() => onNotice(`新增${sessionNoun}记录`, `将创建下一次${sessionNoun}卡片，可继续添加录音、量表、作业和其他材料。`)} />
+      <SectionHeader title={`${sessionNoun}历程`} action={extraSession ? "已新增" : "新增记录"} onAction={() => {
+        setExtraSession(true);
+        onNotice(`已新增${sessionNoun}记录`, `空白记录卡已创建，可继续添加录音、量表、作业和其他材料。`);
+      }} />
+      {extraSession ? (
+        <SessionCard
+          index="新记录"
+          time="时间待设置"
+          summary={`尚未添加本次${sessionNoun}资料。`}
+          tags={["待补充"]}
+          recording="未添加"
+          record="未生成"
+          scale="未上传"
+          homework="未添加"
+          other="无"
+          onOpenRecord={onOpenRecord}
+          onOpenMaterial={onOpenMaterial}
+        />
+      ) : null}
       {isDefaultProfile ? (
         <>
           <SessionCard
@@ -1033,7 +1386,7 @@ function ProfileDetailScreen({
             homework="已布置"
             other="1 项"
             onOpenRecord={onOpenRecord}
-            onNotice={onNotice}
+            onOpenMaterial={onOpenMaterial}
           />
           <SessionCard
             index="第 5 次"
@@ -1046,7 +1399,7 @@ function ProfileDetailScreen({
             homework="已提交"
             other="无"
             onOpenRecord={onOpenRecord}
-            onNotice={onNotice}
+            onOpenMaterial={onOpenMaterial}
           />
         </>
       ) : hasRecords ? (
@@ -1061,7 +1414,7 @@ function ProfileDetailScreen({
           homework="未添加"
           other="无"
           onOpenRecord={onOpenRecord}
-          onNotice={onNotice}
+          onOpenMaterial={onOpenMaterial}
         />
       ) : (
         <View style={styles.emptyProfileState}>
@@ -1092,30 +1445,33 @@ function ProfileDetailScreen({
 
 function RecordingDetailScreen({
   recording,
+  summary,
+  chapters,
+  turns,
+  hasManualEdits,
   onOpenRecord,
+  onOpenChapters,
+  onOpenTranscript,
+  onRegenerated,
   onNotice,
   onOpenPrivacy,
 }: {
-  recording: (typeof recordings)[number];
+  recording: RecordingItem;
+  summary: string;
+  chapters: EditableChapter[];
+  turns: EditableTranscriptTurn[];
+  hasManualEdits: boolean;
   onOpenRecord: () => void;
+  onOpenChapters: () => void;
+  onOpenTranscript: () => void;
+  onRegenerated: () => void;
   onNotice: (title: string, detail: string) => void;
   onOpenPrivacy: () => void;
 }) {
   const context = describeRecordingContext(recording.title);
-  const detailTurns = context.actionLabel === "生成督导反馈"
-    ? [
-        { time: "06:18", speaker: "咨询师", text: "我想讨论来访者在评价场景中的焦虑，以及我在推进干预时的犹豫。" },
-        { time: "08:42", speaker: "督导师", text: "可以先区分风险评估、关系反应和技术选择，再决定本阶段最优先的目标。" },
-        { time: "12:09", speaker: "咨询师", text: "我会补充风险记录，并把下一次咨询聚焦到可验证的触发事件。" },
-      ]
-    : transcriptTurns;
-  const detailChapters = context.actionLabel === "生成督导反馈"
-    ? [
-        { time: "00:06", title: "案例概念化与当前困惑", current: true },
-        { time: "11:18", title: "风险、关系与技术选择的区分" },
-        { time: "25:42", title: "后续行动与下次受督准备" },
-      ]
-    : summaryChapters;
+  const [confirmRegeneration, setConfirmRegeneration] = useState(false);
+  const [exportReady, setExportReady] = useState(false);
+  const regenerationWarning = decideRecordingRegeneration(true, false).message;
   return (
     <View style={styles.stack}>
       <View style={styles.noticeCard}>
@@ -1131,21 +1487,35 @@ function RecordingDetailScreen({
           <Text style={styles.summaryTitle}>录音纪要</Text>
           <Badge label="可重新生成" tone="blue" />
         </View>
-        <Text style={styles.summaryCopy}>{context.summary}</Text>
+        <Text style={styles.summaryCopy}>{summary}</Text>
+        {confirmRegeneration ? (
+          <View style={styles.warningPanel}>
+            <CircleAlert size={18} color={colors.danger} />
+            <Text style={styles.warningText}>{regenerationWarning}</Text>
+          </View>
+        ) : null}
         <View style={styles.inlineActions}>
-          <GhostButton icon={RefreshCcw} label="重新生成" onPress={() => onNotice("纪要重新生成", "会基于最新转写、发言人和章节校对结果覆盖当前纪要。")} />
+          <GhostButton icon={RefreshCcw} label={confirmRegeneration ? "确认覆盖并重新生成" : "重新生成"} onPress={() => {
+            const decision = decideRecordingRegeneration(hasManualEdits, confirmRegeneration);
+            if (decision.status === "confirm") {
+              setConfirmRegeneration(true);
+              return;
+            }
+            setConfirmRegeneration(false);
+            onRegenerated();
+          }} />
           <PrimaryButton icon={Edit3} label={context.actionLabel} onPress={onOpenRecord} />
         </View>
       </View>
 
-      <SectionHeader title="章节速览" action="编辑" onAction={() => onNotice("章节编辑", "可调整章节标题、时间段和摘要；保存后同步到录音纪要。")} />
+      <SectionHeader title="章节速览" action="编辑" onAction={onOpenChapters} />
       <View style={styles.cardStack}>
-        {detailChapters.map((item) => (
+        {chapters.map((item) => (
           <ChapterRow key={item.time} time={item.time} title={item.title} current={item.current} />
         ))}
       </View>
 
-      <SectionHeader title="转写片段" action="完整文本" onAction={() => onNotice("打开完整转写", "完整文本页可逐段校对发言人和内容，并作为本次记录的生成材料。")} />
+      <SectionHeader title="转写片段" action="完整文本" onAction={onOpenTranscript} />
       <View style={styles.transcriptTools}>
         <View style={styles.transcriptToolHeader}>
           <Text style={styles.transcriptToolTitle}>转写校对</Text>
@@ -1158,7 +1528,7 @@ function RecordingDetailScreen({
         <Text style={styles.transcriptToolCopy}>可编辑发言人名称、逐段校对文本。修改后会同步影响纪要和本次记录草稿。</Text>
       </View>
       <View style={styles.transcriptCard}>
-        {detailTurns.map((item) => (
+        {turns.map((item) => (
           <View key={item.time} style={styles.transcriptTurn}>
             <Text style={styles.transcriptSpeaker}>{item.speaker} · {item.time}</Text>
             <Text style={styles.transcriptText}>{item.text}</Text>
@@ -1167,9 +1537,185 @@ function RecordingDetailScreen({
       </View>
 
       <View style={styles.exportPanel}>
-        <DataRow icon={Download} title="导出 PDF / Word" value="纪要与转写均可导出" onPress={() => onNotice("导出已准备", "将导出当前纪要和转写，不包含原始录音文件。")} />
+        <DataRow icon={Download} title="导出 PDF / Word" value={exportReady ? "导出任务已完成 · 可重新下载" : "纪要与转写均可导出"} onPress={() => {
+          setExportReady(true);
+          onNotice("导出文件已生成", "文件包含当前纪要、章节和完整转写，不包含原始录音。");
+        }} />
         <DataRow icon={ShieldCheck} title="长期保存授权" value="转写与纪要可授权，原始录音不可授权" onPress={onOpenPrivacy} />
       </View>
+    </View>
+  );
+}
+
+function ChapterEditorScreen({
+  chapters,
+  onChange,
+  onSave,
+}: {
+  chapters: EditableChapter[];
+  onChange: (index: number, chapter: EditableChapter) => void;
+  onSave: () => void;
+}) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>章节会同步到录音纪要</Text>
+        <Text style={styles.privacyCopy}>可校正时间点和标题。保存后，本次记录生成将使用最新章节结构。</Text>
+      </View>
+      {chapters.map((chapter, index) => (
+        <View key={`${chapter.time}-${index}`} style={styles.editSection}>
+          <Text style={styles.editSectionTitle}>章节 {index + 1}</Text>
+          <View style={styles.twoColumnInputs}>
+            <TextInput
+              value={chapter.time}
+              onChangeText={(time) => onChange(index, { ...chapter, time })}
+              placeholder="时间点"
+              placeholderTextColor={colors.subtle}
+              style={[styles.profileFormInput, styles.compactInput]}
+            />
+            <TextInput
+              value={chapter.title}
+              onChangeText={(title) => onChange(index, { ...chapter, title })}
+              placeholder="章节标题"
+              placeholderTextColor={colors.subtle}
+              style={[styles.profileFormInput, styles.flexInput]}
+            />
+          </View>
+        </View>
+      ))}
+      <PrimaryButton icon={Save} label="保存章节修改" onPress={onSave} wide />
+    </View>
+  );
+}
+
+function TranscriptEditorScreen({
+  turns,
+  onChange,
+  onSave,
+}: {
+  turns: EditableTranscriptTurn[];
+  onChange: (index: number, turn: EditableTranscriptTurn) => void;
+  onSave: () => void;
+}) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>逐段校对发言人与文本</Text>
+        <Text style={styles.privacyCopy}>保存后会标记为人工修改。重新生成纪要前必须确认是否覆盖这些修改。</Text>
+      </View>
+      {turns.map((turn, index) => (
+        <View key={`${turn.time}-${index}`} style={styles.editSection}>
+          <View style={styles.twoColumnInputs}>
+            <TextInput
+              value={turn.time}
+              onChangeText={(time) => onChange(index, { ...turn, time })}
+              style={[styles.profileFormInput, styles.compactInput]}
+            />
+            <TextInput
+              value={turn.speaker}
+              onChangeText={(speaker) => onChange(index, { ...turn, speaker })}
+              style={[styles.profileFormInput, styles.flexInput]}
+            />
+          </View>
+          <TextInput
+            value={turn.text}
+            onChangeText={(text) => onChange(index, { ...turn, text })}
+            multiline
+            style={[styles.profileFormInput, styles.profileFormArea]}
+          />
+        </View>
+      ))}
+      <PrimaryButton icon={Save} label="保存完整转写" onPress={onSave} wide />
+    </View>
+  );
+}
+
+function SessionMaterialsScreen({
+  category,
+  materials,
+  onOpenRecording,
+  onAdd,
+  onAuthorize,
+}: {
+  category: MaterialCategory;
+  materials: SessionMaterial[];
+  onOpenRecording: () => void;
+  onAdd: (title: string, fileType: string) => void;
+  onAuthorize: () => void;
+}) {
+  const [showUpload, setShowUpload] = useState(false);
+  const [title, setTitle] = useState("");
+  const [fileType, setFileType] = useState(category === "recording" ? "音频" : category === "homework" || category === "other" ? "PDF" : "图片");
+  const copy = materialCategoryCopy[category];
+
+  return (
+    <View style={styles.stack}>
+      <View style={styles.poster}>
+        {category === "recording" ? <Mic size={25} color={colors.clayDark} /> : <Upload size={25} color={colors.clayDark} />}
+        <Text style={styles.posterTitle}>{copy.title}</Text>
+        <Text style={styles.posterCopy}>{category === "recording" ? "原始录音仅临时保存 14 天；转写与纪要可单独授权。" : "新增资料会参与下一次生成本次记录，但不会自动覆盖已有草稿或正式版。"}</Text>
+      </View>
+
+      <SectionHeader title={`当前资料 · ${materials.length} 项`} action={showUpload ? "收起" : copy.uploadLabel} onAction={() => setShowUpload((current) => !current)} />
+      {showUpload ? (
+        <View style={styles.inlineCreateCard}>
+          <TextInput
+            value={title}
+            onChangeText={setTitle}
+            placeholder={category === "recording" ? "录音文件名" : "资料名称"}
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+          />
+          <View style={styles.segmented}>
+            {(category === "recording" ? ["音频"] : category === "homework" || category === "other" ? ["PDF", "图片", "文字备注"] : ["PDF", "图片"]).map((type) => (
+              <TouchableOpacity key={type} style={[styles.segmentButton, fileType === type && styles.segmentActive]} onPress={() => setFileType(type)}>
+                <Text style={[styles.segmentText, fileType === type && styles.segmentTextActive]}>{type}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TouchableOpacity style={[styles.inlineCreateConfirm, !title.trim() && styles.inlineCreateConfirmDisabled]} activeOpacity={0.78} onPress={() => {
+            if (!title.trim()) return;
+            onAdd(title, fileType);
+            setTitle("");
+            setShowUpload(false);
+          }}>
+            <Text style={styles.inlineCreateConfirmText}>确认添加</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {materials.length > 0 ? (
+        <View style={styles.cardStack}>
+          {materials.map((material) => (
+            <TouchableOpacity
+              key={material.id}
+              style={styles.recordingCard}
+              activeOpacity={0.78}
+              onPress={material.category === "recording" ? onOpenRecording : undefined}
+            >
+              <View style={styles.recordingIcon}>
+                {material.category === "recording" ? <Mic size={20} color={colors.clayDark} /> : <FileText size={20} color={colors.clayDark} />}
+              </View>
+              <View style={styles.listBody}>
+                <Text style={styles.listTitle}>{material.title}</Text>
+                <Text style={styles.listMeta}>{material.meta}</Text>
+                <View style={styles.badgeRow}>
+                  <Badge label={material.preservable ? "可授权长期保存" : "不可长期保存"} tone={material.preservable ? "green" : "warm"} />
+                </View>
+              </View>
+              {material.category === "recording" ? <ChevronRight size={18} color={colors.subtle} /> : null}
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : (
+        <View style={styles.emptySearchCard}>
+          <Upload size={20} color={colors.subtle} />
+          <Text style={styles.emptySearchTitle}>暂无资料</Text>
+          <Text style={styles.emptySearchCopy}>{copy.empty}</Text>
+        </View>
+      )}
+
+      {category !== "recording" && materials.length > 0 ? <GhostButton icon={ShieldCheck} label="选择资料长期保存" onPress={onAuthorize} /> : null}
     </View>
   );
 }
@@ -1520,20 +2066,140 @@ function PrivacyConsentScreen({
   );
 }
 
-function SupervisionScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
+function SupervisionScreen() {
+  const contextOptions: SupervisionContext[] = [
+    { id: "record-6", title: "陈雨 第6次咨询记录", type: "咨询记录" },
+    { id: "scale-6", title: "陈雨 SAS 量表", type: "量表" },
+    { id: "report-chen", title: "陈雨 个案报告草稿", type: "个案报告" },
+  ];
+  const [showContexts, setShowContexts] = useState(false);
+  const [showConversations, setShowConversations] = useState(false);
+  const [selectedContexts, setSelectedContexts] = useState<SupervisionContext[]>([]);
+  const [input, setInput] = useState("");
+  const [pendingQuestion, setPendingQuestion] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [messages, setMessages] = useState<Array<{ id: string; align: "left" | "right"; text: string; citations?: string[] }>>([
+    { id: "intro-user", align: "left", text: "可以帮我整理一个适合带去督导的问题清单吗？" },
+    { id: "intro-ai", align: "right", text: "可以。先选择本次允许读取的资料；未添加资料时，我只提供通用整理框架。" },
+  ]);
+
+  useEffect(() => {
+    if (!generating || !pendingQuestion) return;
+    const timeout = setTimeout(() => {
+      const reply = buildSupervisionReply(pendingQuestion, selectedContexts);
+      setMessages((current) => [...current, {
+        id: `assistant-${current.length}`,
+        align: "right",
+        text: reply.text,
+        citations: reply.citations,
+      }]);
+      setGenerating(false);
+      setPendingQuestion("");
+    }, 8000);
+    return () => clearTimeout(timeout);
+  }, [generating, pendingQuestion, selectedContexts]);
+
+  const toggleContext = (context: SupervisionContext) => {
+    setSelectedContexts((current) => current.some((item) => item.id === context.id)
+      ? current.filter((item) => item.id !== context.id)
+      : [...current, context]);
+  };
+
   return (
     <View style={styles.stack}>
       <View style={styles.aiPanel}>
         <Sparkles size={24} color={colors.clayDark} />
-        <Text style={styles.aiTitle}>本次会话未添加资料</Text>
-        <Text style={styles.aiCopy}>AI 不会读取任何档案内容。添加资料后，回答会显示引用来源。</Text>
-        <GhostButton icon={Plus} label="添加资料" onPress={() => onNotice("选择督导上下文", "可从档案、咨询记录、量表、作业和附件中手动选择；未选择时 AI 不读取资料。")} />
+        <Text style={styles.aiTitle}>{selectedContexts.length > 0 ? `已添加 ${selectedContexts.length} 项资料` : "本次会话未添加资料"}</Text>
+        <Text style={styles.aiCopy}>{selectedContexts.length > 0 ? "AI 仅可读取下方勾选资料，回答会逐项显示引用来源。" : "AI 不会读取任何档案内容。添加资料后，回答会显示引用来源。"}</Text>
+        <View style={styles.inlineActions}>
+          <GhostButton icon={Plus} label={showContexts ? "收起资料" : "添加资料"} onPress={() => setShowContexts((current) => !current)} />
+          <GhostButton icon={History} label={showConversations ? "返回会话" : "会话列表"} onPress={() => setShowConversations((current) => !current)} />
+        </View>
       </View>
-      <ChatBubble align="left" text="可以帮我整理一个适合带去督导的问题清单吗？" />
-      <ChatBubble align="right" text="可以。请先选择要参考的档案、咨询记录、个案报告或附件；未添加资料时，我只能提供通用整理框架。" />
+
+      {showContexts ? (
+        <View style={styles.consentList}>
+          {contextOptions.map((context) => (
+            <ConsentItem
+              key={context.id}
+              title={context.title}
+              meta={`${context.type} · 仅用于本次会话`}
+              selected={selectedContexts.some((item) => item.id === context.id)}
+              onPress={() => toggleContext(context)}
+            />
+          ))}
+        </View>
+      ) : null}
+
+      {showConversations ? (
+        <View style={styles.cardStack}>
+          <TouchableOpacity style={styles.listCard} activeOpacity={0.78} onPress={() => setShowConversations(false)}>
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>当前会话 · 督导问题整理</Text>
+              <Text style={styles.listMeta}>{messages.length} 条消息 · {selectedContexts.length} 项资料</Text>
+            </View>
+            <Badge label="进行中" tone="green" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.listCard} activeOpacity={0.78} onPress={() => {
+            setMessages([
+              { id: "old-user", align: "left", text: "怎么区分关系反应和技术选择？" },
+              { id: "old-ai", align: "right", text: "可以先标记咨询现场发生的事实，再分别写下你的情绪反应与技术意图。", citations: ["咨询记录：陈雨 第5次咨询记录"] },
+            ]);
+            setShowConversations(false);
+          }}>
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>陈雨咨询复盘</Text>
+              <Text style={styles.listMeta}>6月3日 · 已授权长期保存</Text>
+            </View>
+            <ChevronRight size={18} color={colors.subtle} />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <>
+          {messages.map((message) => (
+            <View key={message.id} style={styles.chatMessageGroup}>
+              <ChatBubble align={message.align} text={message.text} />
+              {message.citations && message.citations.length > 0 ? (
+                <View style={styles.citationPanel}>
+                  <Text style={styles.citationTitle}>引用来源</Text>
+                  {message.citations.map((citation) => <Text key={citation} style={styles.citationText}>{citation}</Text>)}
+                </View>
+              ) : null}
+            </View>
+          ))}
+          {generating ? (
+            <View style={styles.processingChat}>
+              <RefreshCcw size={17} color={colors.clayDark} />
+              <Text style={styles.listMeta}>正在基于 {selectedContexts.length} 项已选资料生成回答</Text>
+              <TouchableOpacity style={styles.stopButton} activeOpacity={0.78} onPress={() => {
+                setGenerating(false);
+                setPendingQuestion("");
+                setMessages((current) => [...current, { id: `stopped-${current.length}`, align: "right", text: "生成已停止，本次未完成回答未保存。" }]);
+              }}>
+                <Square size={14} color={colors.danger} fill={colors.danger} />
+                <Text style={styles.stopButtonText}>停止</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </>
+      )}
       <View style={styles.composer}>
-        <Text style={styles.composerText}>输入想讨论的主题</Text>
-        <TouchableOpacity style={styles.sendButton} activeOpacity={0.75} onPress={() => onNotice("已发送到智能督导", "当前未添加资料，AI 将只提供通用督导准备框架。")}>
+        <TextInput
+          value={input}
+          onChangeText={setInput}
+          editable={!generating}
+          placeholder="输入想讨论的主题"
+          placeholderTextColor={colors.subtle}
+          style={styles.composerInput}
+        />
+        <TouchableOpacity accessibilityLabel="发送督导问题" style={[styles.sendButton, (!input.trim() || generating) && styles.sendButtonDisabled]} activeOpacity={0.75} disabled={!input.trim() || generating} onPress={() => {
+          const question = input.trim();
+          setMessages((current) => [...current, { id: `user-${current.length}`, align: "left", text: question }]);
+          setPendingQuestion(question);
+          setInput("");
+          setGenerating(true);
+          setShowConversations(false);
+        }}>
           <Play size={17} color="#FFF9F3" fill="#FFF9F3" />
         </TouchableOpacity>
       </View>
@@ -1541,7 +2207,7 @@ function SupervisionScreen({ onNotice }: { onNotice: (title: string, detail: str
   );
 }
 
-function ContentScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
+function ContentScreen({ onOpen }: { onOpen: (article: (typeof articles)[number]) => void }) {
   return (
     <View style={styles.stack}>
       <View style={styles.poster}>
@@ -1550,14 +2216,20 @@ function ContentScreen({ onNotice }: { onNotice: (title: string, detail: string)
         <Text style={styles.posterCopy}>记录书写、隐私伦理、督导准备和风险识别的轻量参考。</Text>
       </View>
       <SectionHeader title="书写参考" />
-      <ArticleRow title="如何准备一次有效督导" tag="督导" onPress={() => onNotice("打开资讯", "文章将说明如何从咨询记录中提炼督导问题。")} />
-      <ArticleRow title="咨询资料保存的边界" tag="隐私" onPress={() => onNotice("打开资讯", "文章将解释 14 天临时保存、长期授权和撤回授权。")} />
-      <ArticleRow title="危机风险记录的提醒" tag="安全" onPress={() => onNotice("打开资讯", "文章将提示危机风险记录的必要字段和边界。")} />
+      {articles.map((article) => <ArticleRow key={article.id} title={article.title} tag={article.tag} onPress={() => onOpen(article)} />)}
     </View>
   );
 }
 
-function AccountScreen({ onOpenPrivacy, onNotice }: { onOpenPrivacy: () => void; onNotice: (title: string, detail: string) => void }) {
+function AccountScreen({
+  onOpenPrivacy,
+  onOpenSecurity,
+  onNotice,
+}: {
+  onOpenPrivacy: () => void;
+  onOpenSecurity: () => void;
+  onNotice: (title: string, detail: string) => void;
+}) {
   return (
     <View style={styles.stack}>
       <TouchableOpacity style={styles.accountCard} activeOpacity={0.78} onPress={() => onNotice("个人资料", "可编辑展示身份、专业方向和账号资料；身份展示不影响功能权限。")}>
@@ -1583,13 +2255,180 @@ function AccountScreen({ onOpenPrivacy, onNotice }: { onOpenPrivacy: () => void;
           </TouchableOpacity>
         ))}
       </View>
-      <SectionHeader title="安全" action="设置" onAction={() => onNotice("安全设置", "可设置档案访问密码、日历隐私标题和账号安全选项。")} />
+      <SectionHeader title="安全" action="设置" onAction={onOpenSecurity} />
       <View style={styles.settingsList}>
-        <SettingsRow icon={LockKeyhole} title="档案访问密码" value="三类档案独立设置" onPress={() => onNotice("档案访问密码", "可为来访者、督导师、受督者档案分别设置访问密码。")} />
-        <SettingsRow icon={CalendarDays} title="手机日历同步" value="隐私标题模式关闭" onPress={() => onNotice("手机日历同步", "可开启全局同步，也可为单条日程关闭同步或使用隐私标题。")} />
-        <SettingsRow icon={ShieldCheck} title="账号安全" value="邮箱登录" onPress={() => onNotice("账号安全", "可管理邮箱登录、账号注销和全部云端资料删除。")} />
+        <SettingsRow icon={LockKeyhole} title="档案访问密码" value="三类档案独立设置" onPress={onOpenSecurity} />
+        <SettingsRow icon={CalendarDays} title="手机日历同步" value="隐私标题模式关闭" onPress={onOpenSecurity} />
+        <SettingsRow icon={ShieldCheck} title="账号安全" value="邮箱登录" onPress={onOpenSecurity} />
       </View>
     </View>
+  );
+}
+
+function ArticleDetailScreen({ article }: { article: (typeof articles)[number] }) {
+  return (
+    <View style={styles.stack}>
+      <View style={styles.articleHero}>
+        <Badge label={article.tag} tone="blue" />
+        <Text style={styles.articleDetailTitle}>{article.title}</Text>
+        <Text style={styles.articleLead}>{article.summary}</Text>
+      </View>
+      <SectionHeader title="要点" />
+      {article.sections.map((section, index) => (
+        <View key={section} style={styles.articlePoint}>
+          <Text style={styles.articlePointIndex}>{index + 1}</Text>
+          <Text style={styles.articlePointText}>{section}</Text>
+        </View>
+      ))}
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>使用提醒</Text>
+        <Text style={styles.privacyCopy}>资讯用于工作提示，不能替代伦理规范、机构制度、专业督导或紧急风险处置。</Text>
+      </View>
+    </View>
+  );
+}
+
+function StatisticsScreen() {
+  const rows = [
+    { title: "咨询", value: "7.5 小时", detail: "6 次 · 较上周 +1.0 小时" },
+    { title: "接受督导", value: "2.0 小时", detail: "2 次 · 已完成记录" },
+    { title: "提供督导", value: "1.5 小时", detail: "1 次 · 正式版待保存" },
+  ];
+  return (
+    <View style={styles.stack}>
+      <View style={styles.metricSummary}>
+        <Text style={styles.metricSummaryLabel}>2026年6月1日 - 6月7日</Text>
+        <Text style={styles.metricSummaryValue}>11.0h</Text>
+        <Text style={styles.metricSummaryCopy}>本周专业工作总时长</Text>
+      </View>
+      <View style={styles.cardStack}>
+        {rows.map((row) => (
+          <View key={row.title} style={styles.listCard}>
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>{row.title}</Text>
+              <Text style={styles.listMeta}>{row.detail}</Text>
+            </View>
+            <Text style={styles.statValue}>{row.value}</Text>
+          </View>
+        ))}
+      </View>
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>统计口径</Text>
+        <Text style={styles.privacyCopy}>按已完成并归档的录音时长统计；未归档录音和已取消日程不计入。</Text>
+      </View>
+    </View>
+  );
+}
+
+function ScheduleScreen({ onStartRecording }: { onStartRecording: () => void }) {
+  const [selectedDay, setSelectedDay] = useState("周一 6/8");
+  const [privacyTitles, setPrivacyTitles] = useState(true);
+  const days = ["周一 6/8", "周二 6/9", "周三 6/10", "周四 6/11", "周五 6/12"];
+  const scheduleRows = selectedDay === "周一 6/8"
+    ? [
+        { time: "10:00", title: privacyTitles ? "个人安排" : "陈雨 · 第7次咨询", kind: "咨询 · 50 分钟" },
+        { time: "15:30", title: privacyTitles ? "专业安排" : "李澄 · 第4次受督", kind: "受督 · 60 分钟" },
+      ]
+    : [{ time: "14:00", title: privacyTitles ? "专业安排" : "周宁 · 第13次督导", kind: "督导 · 60 分钟" }];
+  return (
+    <View style={styles.stack}>
+      <View style={styles.segmentedScroll}>
+        {days.map((day) => (
+          <TouchableOpacity key={day} style={[styles.dayButton, selectedDay === day && styles.dayButtonActive]} onPress={() => setSelectedDay(day)}>
+            <Text style={[styles.dayButtonText, selectedDay === day && styles.dayButtonTextActive]}>{day}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <ToggleRow
+        title="隐私标题模式"
+        detail="同步到手机日历和锁屏时隐藏姓名与档案信息"
+        enabled={privacyTitles}
+        onPress={() => setPrivacyTitles((current) => !current)}
+      />
+      <SectionHeader title={selectedDay} action={`${scheduleRows.length} 项`} />
+      <View style={styles.cardStack}>
+        {scheduleRows.map((item) => (
+          <View key={`${item.time}-${item.title}`} style={styles.listCard}>
+            <View style={styles.timePill}><Text style={styles.timePillText}>{item.time}</Text></View>
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>{item.title}</Text>
+              <Text style={styles.listMeta}>{item.kind}</Text>
+            </View>
+            {item.time === "10:00" ? (
+              <TouchableOpacity style={styles.smallActionButton} onPress={onStartRecording}>
+                <Mic size={15} color={colors.clayDark} />
+                <Text style={styles.smallActionText}>录音</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function SecuritySettingsScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
+  const [calendarSync, setCalendarSync] = useState(true);
+  const [privacyTitle, setPrivacyTitle] = useState(false);
+  const [loginAlerts, setLoginAlerts] = useState(true);
+  const [passwords, setPasswords] = useState({ client: "已设置", supervisor: "未设置", supervisee: "未设置" });
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  return (
+    <View style={styles.stack}>
+      <SectionHeader title="档案访问密码" />
+      <View style={styles.settingsList}>
+        {([
+          ["client", "来访者档案"],
+          ["supervisor", "督导师档案"],
+          ["supervisee", "受督者档案"],
+        ] as const).map(([key, label]) => (
+          <SettingsRow key={key} icon={LockKeyhole} title={label} value={passwords[key]} onPress={() => {
+            setPasswords((current) => ({ ...current, [key]: current[key] === "已设置" ? "已更新" : "已设置" }));
+            onNotice("访问密码已更新", `${label}会在每次进入详情时单独验证。`);
+          }} />
+        ))}
+      </View>
+
+      <SectionHeader title="日历与登录" />
+      <View style={styles.settingsList}>
+        <ToggleRow title="手机日历同步" detail="把 App 日程同步到系统日历" enabled={calendarSync} onPress={() => setCalendarSync((current) => !current)} />
+        <ToggleRow title="隐私标题模式" detail="系统日历与锁屏仅显示“个人安排”" enabled={privacyTitle} onPress={() => setPrivacyTitle((current) => !current)} />
+        <ToggleRow title="新设备登录提醒" detail="新设备登录时发送邮箱提醒" enabled={loginAlerts} onPress={() => setLoginAlerts((current) => !current)} />
+      </View>
+
+      <SectionHeader title="账号与资料" />
+      <View style={styles.dangerCard}>
+        <Text style={styles.dangerTitle}>删除全部云端资料</Text>
+        <Text style={styles.dangerCopy}>将立即删除档案、记录、附件和会话，且不可恢复。原始录音也会立即销毁。</Text>
+        {confirmDelete ? <Text style={styles.warningText}>再次点击确认删除。原始录音和已过期授权资料无法恢复。</Text> : null}
+        <TouchableOpacity style={styles.dangerButton} activeOpacity={0.78} onPress={() => {
+          if (!confirmDelete) {
+            setConfirmDelete(true);
+            return;
+          }
+          setConfirmDelete(false);
+          onNotice("演示环境未执行删除", "真实环境会要求再次验证账号并显示不可恢复清单。");
+        }}>
+          <Trash2 size={16} color={colors.danger} />
+          <Text style={styles.dangerButtonText}>{confirmDelete ? "确认永久删除" : "删除全部云端资料"}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+function ToggleRow({ title, detail, enabled, onPress }: { title: string; detail: string; enabled: boolean; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.toggleRow} activeOpacity={0.78} onPress={onPress}>
+      <View style={styles.listBody}>
+        <Text style={styles.listTitle}>{title}</Text>
+        <Text style={styles.listMeta}>{detail}</Text>
+      </View>
+      <View style={[styles.toggleTrack, enabled && styles.toggleTrackEnabled]}>
+        <View style={[styles.toggleThumb, enabled && styles.toggleThumbEnabled]} />
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -1736,7 +2575,7 @@ function SessionCard({
   homework,
   other,
   onOpenRecord,
-  onNotice,
+  onOpenMaterial,
 }: {
   index: string;
   time: string;
@@ -1748,7 +2587,7 @@ function SessionCard({
   homework: string;
   other: string;
   onOpenRecord: () => void;
-  onNotice: (title: string, detail: string) => void;
+  onOpenMaterial: (category: MaterialCategory) => void;
 }) {
   return (
     <View style={styles.sessionCard}>
@@ -1768,11 +2607,11 @@ function SessionCard({
       </View>
 
       <View style={styles.sessionActionGrid}>
-        <SessionAction icon={Mic} label="录音" status={recording} tone={recording.includes("剩余") ? "warm" : "muted"} onPress={() => onNotice("录音资料", recording.includes("剩余") ? "可查看纪要、下载原始录音；原始录音到期自动销毁。" : "原始录音已按规则销毁，保留记录与授权资料。")} />
+        <SessionAction icon={Mic} label="录音" status={recording} tone={recording.includes("剩余") ? "warm" : "muted"} onPress={() => onOpenMaterial("recording")} />
         <SessionAction icon={Edit3} label="记录" status={record} tone={record === "草稿" ? "blue" : "green"} onPress={onOpenRecord} />
-        <SessionAction icon={ChartNoAxesColumn} label="量表" status={scale} tone={scale === "未上传" ? "muted" : "green"} onPress={() => onNotice("量表资料", scale === "未上传" ? "可上传本次量表，之后参与本次咨询记录生成。" : "可查看量表结果，并纳入本次咨询记录材料。")} />
-        <SessionAction icon={ClipboardList} label="作业" status={homework} tone={homework.includes("已") ? "green" : "muted"} onPress={() => onNotice("作业资料", homework.includes("已") ? "可查看作业内容，并纳入本次咨询记录材料。" : "可添加本次咨询作业，后续可参与记录生成。")} />
-        <SessionAction icon={Plus} label="其他" status={other} tone={other === "无" ? "muted" : "blue"} onPress={() => onNotice("其他资料", other === "无" ? "可添加图片、PDF 或备注作为本次材料。" : "可查看其他附件/备注，并选择是否授权长期保存。")} />
+        <SessionAction icon={ChartNoAxesColumn} label="量表" status={scale} tone={scale === "未上传" ? "muted" : "green"} onPress={() => onOpenMaterial("scale")} />
+        <SessionAction icon={ClipboardList} label="作业" status={homework} tone={homework.includes("已") ? "green" : "muted"} onPress={() => onOpenMaterial("homework")} />
+        <SessionAction icon={Plus} label="其他" status={other} tone={other === "无" ? "muted" : "blue"} onPress={() => onOpenMaterial("other")} />
       </View>
 
       <View style={styles.sessionFooter}>
@@ -3351,6 +4190,13 @@ const styles = StyleSheet.create({
     color: colors.subtle,
     fontWeight: "700",
   },
+  composerInput: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "700",
+    paddingVertical: 0,
+  },
   sendButton: {
     width: 36,
     height: 36,
@@ -3358,6 +4204,75 @@ const styles = StyleSheet.create({
     backgroundColor: colors.clay,
     alignItems: "center",
     justifyContent: "center",
+  },
+  sendButtonDisabled: {
+    backgroundColor: colors.subtle,
+  },
+  formHelp: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  twoColumnInputs: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  compactInput: {
+    width: 82,
+  },
+  flexInput: {
+    flex: 1,
+  },
+  chatMessageGroup: {
+    gap: 7,
+  },
+  citationPanel: {
+    alignSelf: "flex-end",
+    width: "86%",
+    borderRadius: radius.sm,
+    padding: 10,
+    backgroundColor: "#EEF5F0",
+    borderWidth: 1,
+    borderColor: "#D8E6DD",
+    gap: 4,
+  },
+  citationTitle: {
+    color: colors.sageDark,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  citationText: {
+    color: colors.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "700",
+  },
+  processingChat: {
+    minHeight: 52,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  stopButton: {
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: radius.sm,
+    backgroundColor: "#FFF3F1",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  stopButtonText: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: "900",
   },
   poster: {
     borderRadius: radius.sm,
@@ -3397,6 +4312,129 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 20,
     fontWeight: "800",
+  },
+  articleHero: {
+    borderRadius: radius.sm,
+    padding: 18,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 12,
+  },
+  articleDetailTitle: {
+    color: colors.ink,
+    fontSize: 25,
+    lineHeight: 32,
+    fontWeight: "900",
+  },
+  articleLead: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: "700",
+  },
+  articlePoint: {
+    minHeight: 74,
+    borderRadius: radius.sm,
+    padding: 13,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  articlePointIndex: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.pill,
+    backgroundColor: "#E7EEF5",
+    color: "#536F90",
+    textAlign: "center",
+    lineHeight: 28,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  articlePointText: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: "700",
+  },
+  metricSummary: {
+    minHeight: 154,
+    borderRadius: radius.sm,
+    padding: 18,
+    backgroundColor: colors.clay,
+    justifyContent: "center",
+  },
+  metricSummaryLabel: {
+    color: "rgba(255,249,243,0.82)",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  metricSummaryValue: {
+    marginTop: 8,
+    color: "#FFF9F3",
+    fontSize: 38,
+    fontWeight: "900",
+  },
+  metricSummaryCopy: {
+    marginTop: 4,
+    color: "rgba(255,249,243,0.88)",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  statValue: {
+    color: colors.clayDark,
+    fontSize: 17,
+    fontWeight: "900",
+  },
+  segmentedScroll: {
+    flexDirection: "row",
+    gap: 6,
+  },
+  dayButton: {
+    flex: 1,
+    minHeight: 54,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  dayButtonActive: {
+    backgroundColor: "#F7EDE4",
+    borderColor: "#E7B9A8",
+  },
+  dayButtonText: {
+    color: colors.muted,
+    fontSize: 11,
+    lineHeight: 15,
+    textAlign: "center",
+    fontWeight: "800",
+  },
+  dayButtonTextActive: {
+    color: colors.clayDark,
+  },
+  smallActionButton: {
+    minHeight: 34,
+    paddingHorizontal: 9,
+    borderRadius: radius.sm,
+    backgroundColor: "#FFF7EF",
+    borderWidth: 1,
+    borderColor: "#E7B9A8",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  smallActionText: {
+    color: colors.clayDark,
+    fontSize: 11,
+    fontWeight: "900",
   },
   accountCard: {
     borderRadius: radius.sm,
@@ -3452,6 +4490,69 @@ const styles = StyleSheet.create({
     gap: 11,
     borderBottomWidth: 1,
     borderBottomColor: colors.line,
+  },
+  toggleRow: {
+    minHeight: 70,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  toggleTrack: {
+    width: 44,
+    height: 26,
+    borderRadius: radius.pill,
+    padding: 3,
+    backgroundColor: colors.line,
+  },
+  toggleTrackEnabled: {
+    backgroundColor: colors.sage,
+  },
+  toggleThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+  },
+  toggleThumbEnabled: {
+    alignSelf: "flex-end",
+  },
+  dangerCard: {
+    borderRadius: radius.sm,
+    padding: 14,
+    backgroundColor: "#FFF3F1",
+    borderWidth: 1,
+    borderColor: "#E8C1BC",
+    gap: 9,
+  },
+  dangerTitle: {
+    color: colors.danger,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  dangerCopy: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  dangerButton: {
+    minHeight: 40,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: "#E8C1BC",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  dangerButtonText: {
+    color: colors.danger,
+    fontSize: 13,
+    fontWeight: "900",
   },
   tabBar: {
     position: "absolute",

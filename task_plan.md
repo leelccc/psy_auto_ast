@@ -6,7 +6,7 @@ Build a minimal backend core first, then a polished mobile frontend prototype th
 
 ## Current Phase
 
-Complete. Latest mobile behavior audit and first P0 implementation pass complete.
+Complete. Mobile P0/P1/P2 interaction audit items are implemented and verified.
 
 ## Phases
 
@@ -33,6 +33,10 @@ Complete. Latest mobile behavior audit and first P0 implementation pass complete
 - [x] Phase 20: Audit every mobile screen, card, button, label, state, and navigation outcome.
 - [x] Phase 21: Implement the highest-priority audit fixes with tests: profile library, recording routing/context, record editing/versioning, privacy center/authorization state, and case-report generation.
 - [x] Phase 22: Verify full workflows in the browser, export the app, and commit the audit pass.
+- [x] Phase 23: Complete P1 session-material lists/uploads and recording-note editing/regeneration safeguards.
+- [x] Phase 24: Complete P1 intelligent-supervision context, citation, stop, and conversation flows.
+- [x] Phase 25: Complete P2 article detail, security settings, statistics detail, and full schedule pages.
+- [x] Phase 26: Verify P1/P2 workflows, update records, export, and commit.
 
 ## Working Files
 
