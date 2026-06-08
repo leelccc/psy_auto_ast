@@ -158,3 +158,11 @@
 - Frontend tests pass: `23 passed`.
 - Frontend typecheck passes.
 - Expo web export passes.
+- Made consultation history a stateful list instead of hardcoded cards.
+- Added consultation creation with occurrence time and summary, then sorted all records by occurrence time descending while keeping sequence numbers fixed.
+- Added in-card editing for time, summary, and up to four unique tags.
+- Added two-step consultation deletion and removal of all session-owned materials.
+- Changed generated-record actions to `查看/编辑咨询记录` for drafts and `查看咨询记录` for formal versions.
+- Added a shared file preview page for session attachments and legal/ethical files, with rename, replacement, and confirmed deletion.
+- Scoped recording, scale, homework, and other files by `sessionId` so each consultation opens only its own materials.
+- Added consultation-history and file-lifecycle tests; frontend test count is now `29`.

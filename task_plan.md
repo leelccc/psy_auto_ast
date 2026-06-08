@@ -37,6 +37,8 @@ Complete. Mobile P0/P1/P2 interaction audit items are implemented and verified.
 - [x] Phase 24: Complete P1 intelligent-supervision context, citation, stop, and conversation flows.
 - [x] Phase 25: Complete P2 article detail, security settings, statistics detail, and full schedule pages.
 - [x] Phase 26: Verify P1/P2 workflows, update records, export, and commit.
+- [x] Phase 27: Make consultation history stateful with create, time sorting, editable summaries/tags, and confirmed deletion.
+- [x] Phase 28: Add session-scoped file preview, replacement, rename, and deletion flows.
 
 ## Working Files
 
@@ -73,6 +75,9 @@ Complete. Mobile P0/P1/P2 interaction audit items are implemented and verified.
 - Recording detail pages must be driven by the selected recording. Titles, durations, role labels, summaries, and record-generation labels cannot remain hardcoded.
 - Data/privacy has two layers: a management center and a per-resource authorization sheet. Confirmed authorization must update the long-term-save list.
 - Case reports are full-profile outputs. They require material selection before draft generation and must exclude destroyed/unavailable resources.
+- Consultation history is always sorted by occurrence time descending. Sequence numbers stay fixed even when a record is backfilled or its time changes.
+- Consultation cards are editable summaries: occurrence time, summary text, and up to four unique tags can change without rewriting the underlying formal record.
+- Deleting a consultation requires confirmation and removes its owned recording/scale/homework/other material rows. Files open in a preview before replacement or deletion.
 
 ## Errors Encountered
 

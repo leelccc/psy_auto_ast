@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { addSessionMaterial, getMaterialUpdateMessage, materialCategoryCopy } from "../sessionMaterials";
+import {
+  addSessionMaterial,
+  getMaterialUpdateMessage,
+  materialCategoryCopy,
+  removeMaterialsForSession,
+  removeSessionMaterial,
+  updateSessionMaterial,
+} from "../sessionMaterials";
 
 test("session materials expose focused destinations for every session card entry", () => {
   assert.equal(materialCategoryCopy.recording.title, "录音资料");
@@ -11,8 +18,8 @@ test("session materials expose focused destinations for every session card entry
 });
 
 test("adding a session attachment creates visible state and marks audio non-preservable", () => {
-  const scale = addSessionMaterial([], { category: "scale", title: "SAS 复测", fileType: "PDF" });
-  const recording = addSessionMaterial(scale, { category: "recording", title: "补充录音.m4a", fileType: "音频" });
+  const scale = addSessionMaterial([], { sessionId: "session-6", category: "scale", title: "SAS 复测", fileType: "PDF" });
+  const recording = addSessionMaterial(scale, { sessionId: "session-6", category: "recording", title: "补充录音.m4a", fileType: "音频" });
 
   assert.equal(recording[0].title, "补充录音.m4a");
   assert.equal(recording[0].preservable, false);
@@ -21,6 +28,22 @@ test("adding a session attachment creates visible state and marks audio non-pres
 });
 
 test("blank material names do not create placeholder rows", () => {
-  const current = addSessionMaterial([], { category: "other", title: "   ", fileType: "PDF" });
+  const current = addSessionMaterial([], { sessionId: "session-6", category: "other", title: "   ", fileType: "PDF" });
   assert.deepEqual(current, []);
+});
+
+test("uploaded files can be renamed, replaced, and removed inside their session", () => {
+  const initial = addSessionMaterial([], { sessionId: "session-6", category: "other", title: "事件时间线", fileType: "PDF" });
+  const updated = updateSessionMaterial(initial, initial[0].id, { title: "工作事件时间线", fileType: "图片" });
+
+  assert.equal(updated[0].title, "工作事件时间线");
+  assert.match(updated[0].meta, /图片/);
+  assert.equal(updated[0].sessionId, "session-6");
+  assert.deepEqual(removeSessionMaterial(updated, initial[0].id), []);
+});
+
+test("deleting a consultation removes all files owned by that consultation", () => {
+  const first = addSessionMaterial([], { sessionId: "session-6", category: "scale", title: "SAS", fileType: "PDF" });
+  const second = addSessionMaterial(first, { sessionId: "session-5", category: "other", title: "时间线", fileType: "PDF" });
+  assert.deepEqual(removeMaterialsForSession(second, "session-6").map((item) => item.sessionId), ["session-5"]);
 });

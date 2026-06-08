@@ -70,3 +70,7 @@
 - Recording-note regeneration is an overwrite operation. Manual chapter/transcript edits require confirmation, generation failure must preserve current content, and formal session records must remain untouched.
 - Intelligent supervision needs a strict context boundary in the UI as well as the data model: no selected material means no archive access, while selected materials produce explicit citations and can be removed or stopped during generation.
 - P2 support surfaces are part of navigation integrity: home statistics and schedule labels need real destinations, information rows need readable articles, and security rows need visible settings state instead of explanatory notices.
+- Consultation sequence and consultation chronology are separate concepts: sequence numbers remain stable, while the visual history is re-sorted by editable occurrence time.
+- The session card is a condensed editable index, not the formal record itself. Editing summary text or tags should not mutate the formal consultation record.
+- Session files require ownership by `sessionId`; otherwise selecting the same category on different consultation cards can incorrectly expose another consultation's materials.
+- Deleting a consultation must cascade to its session-owned material rows, while file deletion should leave an explicit deleted state where a covering legal file is expected.

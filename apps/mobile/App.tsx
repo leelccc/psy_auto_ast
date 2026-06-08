@@ -11,6 +11,7 @@ import {
   ClipboardList,
   Download,
   Edit3,
+  Eye,
   FileText,
   FolderOpen,
   History,
@@ -55,9 +56,20 @@ import {
   addSessionMaterial,
   getMaterialUpdateMessage,
   materialCategoryCopy,
+  removeMaterialsForSession,
+  removeSessionMaterial,
+  updateSessionMaterial,
   type MaterialCategory,
   type SessionMaterial,
 } from "./src/sessionMaterials";
+import {
+  addSessionTag,
+  formatSessionTime,
+  removeSession,
+  sortSessionsDescending,
+  updateSession,
+  type SessionHistoryItem,
+} from "./src/sessionHistory";
 import { buildSupervisionReply, type SupervisionContext } from "./src/supervisionFlow";
 import {
   formatBadge,
@@ -87,6 +99,7 @@ type QuickView =
   | "chapterEditor"
   | "transcriptEditor"
   | "sessionMaterials"
+  | "filePreview"
   | "recordEditor"
   | "caseReportSelect"
   | "caseReportEditor"
@@ -110,6 +123,14 @@ type RecordingItem = {
   profileName: string | null;
   kindLabel: "来访者" | "督导师" | "受督者" | null;
   recordLabel: string | null;
+};
+type PreviewFile = {
+  id: string;
+  ownerKey?: string;
+  title: string;
+  meta: string;
+  fileType: string;
+  source: "material" | "legal";
 };
 
 const articles = [
@@ -148,11 +169,39 @@ const articles = [
   },
 ];
 
+const initialSessionHistory: SessionHistoryItem[] = [
+  {
+    id: "session-6",
+    sequence: 6,
+    occurredAt: "2026-06-05T10:00:00+08:00",
+    summary: "围绕睡眠下降、工作评价焦虑和关系议题展开。",
+    tags: ["焦虑", "睡眠"],
+    recording: "剩余 13 天",
+    record: "草稿",
+    scale: "未上传",
+    homework: "已布置",
+    other: "1 项",
+  },
+  {
+    id: "session-5",
+    sequence: 5,
+    occurredAt: "2026-05-29T10:00:00+08:00",
+    summary: "梳理近期压力事件，并继续识别自动化想法。",
+    tags: ["长期保存", "正式版"],
+    recording: "已销毁",
+    record: "正式版",
+    scale: "SAS",
+    homework: "已提交",
+    other: "无",
+  },
+];
+
 const initialSessionMaterials: SessionMaterial[] = [
-  { id: "recording-1", category: "recording", title: "第 6 次咨询原始录音", meta: "音频 · 52:18 · 剩余 13 天", preservable: false },
-  { id: "scale-1", category: "scale", title: "SAS 焦虑自评量表", meta: "PDF · 6月5日上传 · 可参与记录生成", preservable: true },
-  { id: "homework-1", category: "homework", title: "睡前想法记录", meta: "图片 · 已提交 · 可参与记录生成", preservable: true },
-  { id: "other-1", category: "other", title: "工作事件时间线", meta: "PDF · 已解析文字 · 可参与记录生成", preservable: true },
+  { id: "session-6-recording-1", sessionId: "session-6", category: "recording", title: "第 6 次咨询原始录音", meta: "音频 · 52:18 · 剩余 13 天", preservable: false },
+  { id: "session-6-scale-1", sessionId: "session-6", category: "scale", title: "SAS 焦虑自评量表", meta: "PDF · 6月5日上传 · 可参与记录生成", preservable: true },
+  { id: "session-6-homework-1", sessionId: "session-6", category: "homework", title: "睡前想法记录", meta: "图片 · 已提交 · 可参与记录生成", preservable: true },
+  { id: "session-6-other-1", sessionId: "session-6", category: "other", title: "工作事件时间线", meta: "PDF · 已解析文字 · 可参与记录生成", preservable: true },
+  { id: "session-5-scale-1", sessionId: "session-5", category: "scale", title: "SAS 初测", meta: "PDF · 5月29日上传 · 长期保存", preservable: true },
 ];
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
@@ -193,6 +242,31 @@ function getCaseReportSections(): EditableRecordSection[] {
   ];
 }
 
+function getProfileSessions(profile: ArchiveResult): SessionHistoryItem[] {
+  if (profile.profileName === "陈雨") return initialSessionHistory;
+  if (profile.recordLabel === "尚无记录") return [];
+  const sequence = Number(profile.recordLabel.match(/\d+/)?.[0] ?? 1);
+  return [{
+    id: `session-${sequence}`,
+    sequence,
+    occurredAt: "2026-06-08T18:00:00+08:00",
+    summary: "录音已归档，完整转写和录音纪要正在后台生成。",
+    tags: ["处理中"],
+    recording: "剩余 13 天",
+    record: "待生成",
+    scale: "未上传",
+    homework: "未添加",
+    other: "无",
+  }];
+}
+
+function normalizeSessionDate(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.includes("T")) return trimmed;
+  return `${trimmed.replace(" ", "T")}:00+08:00`;
+}
+
 export default function App() {
   const [tab, setTab] = useState<TabKey>("home");
   const [quickView, setQuickView] = useState<QuickView>("overview");
@@ -222,9 +296,14 @@ export default function App() {
   const [recordDirty, setRecordDirty] = useState(true);
   const [caseReportSections, setCaseReportSections] = useState<EditableRecordSection[]>(getCaseReportSections());
   const [caseReportFormal, setCaseReportFormal] = useState(false);
+  const [sessionHistory, setSessionHistory] = useState<SessionHistoryItem[]>(initialSessionHistory);
   const [sessionMaterials, setSessionMaterials] = useState<SessionMaterial[]>(initialSessionMaterials);
   const [activeMaterialCategory, setActiveMaterialCategory] = useState<MaterialCategory>("recording");
+  const [activeSessionId, setActiveSessionId] = useState("session-6");
   const [materialReturn, setMaterialReturn] = useState<QuickView>("profileDetail");
+  const [filePreviewReturn, setFilePreviewReturn] = useState<QuickView>("sessionMaterials");
+  const [activeFile, setActiveFile] = useState<PreviewFile | null>(null);
+  const [legalFileNames, setLegalFileNames] = useState<Record<string, string>>({});
   const [recordingSummary, setRecordingSummary] = useState(describeRecordingContext(recordings[0].title).summary);
   const [recordingChapters, setRecordingChapters] = useState<EditableChapter[]>(summaryChapters);
   const [recordingTurns, setRecordingTurns] = useState<EditableTranscriptTurn[]>(transcriptTurns);
@@ -265,10 +344,16 @@ export default function App() {
       : transcriptTurns);
     setRecordingHasEdits(false);
   };
-  const openMaterials = (category: MaterialCategory, returnView: QuickView = "profileDetail") => {
+  const openMaterials = (category: MaterialCategory, sessionId: string, returnView: QuickView = "profileDetail") => {
     setActiveMaterialCategory(category);
+    setActiveSessionId(sessionId);
     setMaterialReturn(returnView);
     setQuickView("sessionMaterials");
+  };
+  const openFilePreview = (file: PreviewFile, returnView: QuickView) => {
+    setActiveFile(file);
+    setFilePreviewReturn(returnView);
+    setQuickView("filePreview");
   };
   const handleBack = () => {
     if (quickView === "privacyConsent") {
@@ -282,6 +367,10 @@ export default function App() {
     }
     if (quickView === "sessionMaterials") {
       setQuickView(materialReturn);
+      return;
+    }
+    if (quickView === "filePreview") {
+      setQuickView(filePreviewReturn);
       return;
     }
     if (quickView === "chapterEditor" || quickView === "transcriptEditor") {
@@ -355,6 +444,7 @@ export default function App() {
     if (quickView === "chapterEditor") return "编辑章节";
     if (quickView === "transcriptEditor") return "校对完整转写";
     if (quickView === "sessionMaterials") return materialCategoryCopy[activeMaterialCategory].title;
+    if (quickView === "filePreview") return "文件预览";
     if (quickView === "recordEditor") return activeProfile.kindLabel === "来访者" ? "咨询记录编辑" : activeProfile.kindLabel === "督导师" ? "督导反馈编辑" : "督导记录编辑";
     if (quickView === "caseReportSelect") return "生成个案报告";
     if (quickView === "caseReportEditor") return "个案报告编辑";
@@ -377,6 +467,7 @@ export default function App() {
     "chapterEditor",
     "transcriptEditor",
     "sessionMaterials",
+    "filePreview",
     "caseReportSelect",
     "caseReportEditor",
     "privacyConsent",
@@ -412,11 +503,13 @@ export default function App() {
                 setActiveRecording(recording);
                 resetRecordingEditor(recording);
                 if (recording.profileName && recording.kindLabel && recording.recordLabel) {
-                  setActiveProfile({
+                  const nextProfile = {
                     profileName: recording.profileName,
                     kindLabel: recording.kindLabel,
                     recordLabel: recording.recordLabel,
-                  });
+                  };
+                  setActiveProfile(nextProfile);
+                  setSessionHistory(getProfileSessions(nextProfile));
                 }
                 if (destination === "archive") {
                   setArchiveRecording(toArchiveRecording(recording));
@@ -437,19 +530,45 @@ export default function App() {
               result={archiveResult}
               onOpenProfile={() => {
                 setActiveProfile(archiveResult);
+                setSessionHistory(getProfileSessions(archiveResult));
                 setQuickView("profileDetail");
               }}
               onOpenRecords={() => setQuickView("recordingRecords")}
             />
           ) : null}
           {quickView === "supervision" ? <SupervisionScreen /> : null}
-          {quickView === "profileDetail" ? <ProfileDetailScreen profile={activeProfile} onOpenRecord={() => {
-            prepareRecordEditor(activeProfile.kindLabel, "profileDetail");
-          }} onOpenCaseReport={() => {
-            setCaseReportSections(getCaseReportSections());
-            setCaseReportFormal(false);
-            setQuickView("caseReportSelect");
-          }} onOpenMaterial={(category) => openMaterials(category)} onNotice={showNotice} /> : null}
+          {quickView === "profileDetail" ? (
+            <ProfileDetailScreen
+              profile={activeProfile}
+              sessions={sessionHistory}
+              legalFileNames={legalFileNames}
+              onSessionsChange={(nextSessions) => {
+                const remainingIds = new Set(nextSessions.map((session) => session.id));
+                const deletedIds = sessionHistory.filter((session) => !remainingIds.has(session.id)).map((session) => session.id);
+                setSessionHistory(nextSessions);
+                if (deletedIds.length > 0) {
+                  setSessionMaterials((current) => deletedIds.reduce(removeMaterialsForSession, current));
+                }
+              }}
+              onLegalFilesChange={setLegalFileNames}
+              onOpenRecord={() => prepareRecordEditor(activeProfile.kindLabel, "profileDetail")}
+              onOpenCaseReport={() => {
+                setCaseReportSections(getCaseReportSections());
+                setCaseReportFormal(false);
+                setQuickView("caseReportSelect");
+              }}
+              onOpenMaterial={(category, sessionId) => openMaterials(category, sessionId)}
+              onPreviewLegal={(title, meta) => openFilePreview({
+                id: `legal-${title}`,
+                ownerKey: title,
+                title,
+                meta,
+                fileType: "PDF",
+                source: "legal",
+              }, "profileDetail")}
+              onNotice={showNotice}
+            />
+          ) : null}
           {quickView === "profileCreate" ? (
             <ProfileCreateScreen
               onNotice={showNotice}
@@ -460,6 +579,7 @@ export default function App() {
                   kindLabel: profile.type,
                   recordLabel: "尚无记录",
                 });
+                setSessionHistory([]);
                 setQuickView("profileDetail");
               }}
             />
@@ -515,13 +635,21 @@ export default function App() {
           {quickView === "sessionMaterials" ? (
             <SessionMaterialsScreen
               category={activeMaterialCategory}
-              materials={sessionMaterials.filter((item) => item.category === activeMaterialCategory)}
+              materials={sessionMaterials.filter((item) => item.sessionId === activeSessionId && item.category === activeMaterialCategory)}
               onOpenRecording={() => {
                 resetRecordingEditor(activeRecording);
                 setQuickView("recordingDetail");
               }}
+              onPreview={(material) => openFilePreview({
+                id: material.id,
+                title: material.title,
+                meta: material.meta,
+                fileType: material.meta.split(" · ")[0],
+                source: "material",
+              }, "sessionMaterials")}
               onAdd={(title, fileType) => {
                 setSessionMaterials((current) => addSessionMaterial(current, {
+                  sessionId: activeSessionId,
                   category: activeMaterialCategory,
                   title,
                   fileType,
@@ -530,8 +658,36 @@ export default function App() {
                 showNotice("资料已添加", getMaterialUpdateMessage(activeMaterialCategory));
               }}
               onAuthorize={() => openPrivacy("sessionMaterials", sessionMaterials
-                .filter((item) => item.category === activeMaterialCategory && item.preservable)
+                .filter((item) => item.sessionId === activeSessionId && item.category === activeMaterialCategory && item.preservable)
                 .map((item) => ({ title: item.title, type: materialCategoryCopy[item.category].title, expires: "14 天后销毁", preservable: true })))}
+            />
+          ) : null}
+          {quickView === "filePreview" && activeFile ? (
+            <FilePreviewScreen
+              file={activeFile}
+              onUpdate={(title, fileType) => {
+                if (activeFile.source === "material") {
+                  setSessionMaterials((current) => updateSessionMaterial(current, activeFile.id, { title, fileType }));
+                } else {
+                  setLegalFileNames((current) => ({ ...current, [activeFile.ownerKey ?? activeFile.title]: title }));
+                }
+                setActiveFile((current) => current ? {
+                  ...current,
+                  title,
+                  fileType,
+                  meta: `${fileType} · 刚刚更新`,
+                } : current);
+                showNotice("文件已更新", "预览与所属咨询记录材料已同步更新。");
+              }}
+              onDelete={() => {
+                if (activeFile.source === "material") {
+                  setSessionMaterials((current) => removeSessionMaterial(current, activeFile.id));
+                } else {
+                  setLegalFileNames((current) => ({ ...current, [activeFile.ownerKey ?? activeFile.title]: "已删除" }));
+                }
+                setQuickView(filePreviewReturn);
+                showNotice("文件已删除", "文件已从当前资料列表移除，此操作不可恢复。");
+              }}
             />
           ) : null}
           {quickView === "recordEditor" ? <RecordEditorScreen
@@ -592,6 +748,11 @@ export default function App() {
                   kindLabel: profile.type,
                   recordLabel: profile.count === "尚无记录" ? profile.count : `${profile.count}${recordNoun}`,
                 });
+                setSessionHistory(getProfileSessions({
+                  profileName: profile.name,
+                  kindLabel: profile.type,
+                  recordLabel: profile.count === "尚无记录" ? profile.count : `${profile.count}${recordNoun}`,
+                }));
                 setQuickView("profileDetail");
               }}
               onCreate={() => setQuickView("profileCreate")}
@@ -1269,22 +1430,33 @@ function ProfileCreateScreen({
 
 function ProfileDetailScreen({
   profile,
+  sessions,
+  legalFileNames,
+  onSessionsChange,
+  onLegalFilesChange,
   onOpenRecord,
   onOpenCaseReport,
   onOpenMaterial,
+  onPreviewLegal,
   onNotice,
 }: {
   profile: ArchiveResult;
+  sessions: SessionHistoryItem[];
+  legalFileNames: Record<string, string>;
+  onSessionsChange: (sessions: SessionHistoryItem[]) => void;
+  onLegalFilesChange: (files: Record<string, string>) => void;
   onOpenRecord: () => void;
   onOpenCaseReport: () => void;
-  onOpenMaterial: (category: MaterialCategory) => void;
+  onOpenMaterial: (category: MaterialCategory, sessionId: string) => void;
+  onPreviewLegal: (title: string, meta: string) => void;
   onNotice: (title: string, detail: string) => void;
 }) {
   const [showLegalUpload, setShowLegalUpload] = useState(false);
   const [legalUploadName, setLegalUploadName] = useState("");
-  const [legalVersions, setLegalVersions] = useState<Record<string, string>>({});
   const [pendingLegalOverwrite, setPendingLegalOverwrite] = useState<string | null>(null);
-  const [extraSession, setExtraSession] = useState(false);
+  const [showCreateSession, setShowCreateSession] = useState(false);
+  const [newSessionTime, setNewSessionTime] = useState("2026-06-08 18:00");
+  const [newSessionSummary, setNewSessionSummary] = useState("");
   const isDefaultProfile = profile.profileName === "陈雨";
   const hasRecords = profile.recordLabel !== "尚无记录";
   const sessionNoun = profile.kindLabel === "来访者" ? "咨询" : profile.kindLabel === "督导师" ? "受督" : "督导";
@@ -1293,6 +1465,7 @@ function ProfileDetailScreen({
     : profile.kindLabel === "督导师"
       ? ["督导协议", "督导评价"]
       : ["督导协议", "受督者评估"];
+  const legalMetas = legalFiles.map((title, index) => legalFileNames[title] ?? (isDefaultProfile ? index === 0 ? "已签署 · 第 2 版" : "已签署 · 6月3日" : "待上传"));
   return (
     <View style={styles.stack}>
       <View style={styles.profileHeaderCard}>
@@ -1328,12 +1501,12 @@ function ProfileDetailScreen({
           <TouchableOpacity style={[styles.inlineCreateConfirm, !legalUploadName.trim() && styles.inlineCreateConfirmDisabled]} activeOpacity={0.78} onPress={() => {
             if (!legalUploadName.trim()) return;
             const target = legalFiles.find((item) => legalUploadName.includes(item)) ?? legalFiles[0];
-            if ((isDefaultProfile || legalVersions[target]) && pendingLegalOverwrite !== target) {
+            if ((isDefaultProfile || legalFileNames[target]) && legalFileNames[target] !== "已删除" && pendingLegalOverwrite !== target) {
               setPendingLegalOverwrite(target);
               onNotice("确认覆盖文件", `再次点击将用 ${legalUploadName.trim()} 覆盖现有${target}。`);
               return;
             }
-            setLegalVersions((current) => ({ ...current, [target]: legalUploadName.trim() }));
+            onLegalFilesChange({ ...legalFileNames, [target]: legalUploadName.trim() });
             setPendingLegalOverwrite(null);
             setLegalUploadName("");
             setShowLegalUpload(false);
@@ -1344,79 +1517,93 @@ function ProfileDetailScreen({
         </View>
       ) : null}
       <View style={styles.legalGrid}>
-        <LegalFile title={legalFiles[0]} meta={legalVersions[legalFiles[0]] ?? (isDefaultProfile ? "已签署 · 第 2 版" : "待上传")} icon={FileText} onPress={() => {
-          setLegalUploadName(legalFiles[0]);
-          setShowLegalUpload(true);
-        }} />
-        <LegalFile title={legalFiles[1]} meta={legalVersions[legalFiles[1]] ?? (isDefaultProfile ? "已签署 · 6月3日" : "待上传")} icon={ClipboardList} onPress={() => {
-          setLegalUploadName(legalFiles[1]);
-          setShowLegalUpload(true);
-        }} />
+        <LegalFile
+          title={legalFiles[0]}
+          meta={legalMetas[0]}
+          icon={FileText}
+          onPress={() => {
+            if (legalMetas[0] === "待上传" || legalMetas[0] === "已删除") {
+              setLegalUploadName(legalFiles[0]);
+              setShowLegalUpload(true);
+              return;
+            }
+            onPreviewLegal(legalFiles[0], `PDF · ${legalMetas[0]}`);
+          }}
+        />
+        <LegalFile
+          title={legalFiles[1]}
+          meta={legalMetas[1]}
+          icon={ClipboardList}
+          onPress={() => {
+            if (legalMetas[1] === "待上传" || legalMetas[1] === "已删除") {
+              setLegalUploadName(legalFiles[1]);
+              setShowLegalUpload(true);
+              return;
+            }
+            onPreviewLegal(legalFiles[1], `PDF · ${legalMetas[1]}`);
+          }}
+        />
       </View>
 
-      <SectionHeader title={`${sessionNoun}历程`} action={extraSession ? "已新增" : "新增记录"} onAction={() => {
-        setExtraSession(true);
-        onNotice(`已新增${sessionNoun}记录`, `空白记录卡已创建，可继续添加录音、量表、作业和其他材料。`);
-      }} />
-      {extraSession ? (
-        <SessionCard
-          index="新记录"
-          time="时间待设置"
-          summary={`尚未添加本次${sessionNoun}资料。`}
-          tags={["待补充"]}
-          recording="未添加"
-          record="未生成"
-          scale="未上传"
-          homework="未添加"
-          other="无"
-          onOpenRecord={onOpenRecord}
-          onOpenMaterial={onOpenMaterial}
-        />
+      <SectionHeader title={`${sessionNoun}历程`} action={showCreateSession ? "收起" : "新增记录"} onAction={() => setShowCreateSession((current) => !current)} />
+      {showCreateSession ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>新增{sessionNoun}记录</Text>
+          <TextInput
+            value={newSessionTime}
+            onChangeText={setNewSessionTime}
+            placeholder="日期时间，例如 2026-06-08 18:00"
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+          />
+          <TextInput
+            value={newSessionSummary}
+            onChangeText={setNewSessionSummary}
+            placeholder="本次摘要，可创建后继续修改"
+            placeholderTextColor={colors.subtle}
+            style={[styles.archiveTextInput, styles.archiveTextArea]}
+            multiline
+          />
+          <TouchableOpacity style={styles.inlineCreateConfirm} activeOpacity={0.78} onPress={() => {
+            const occurredAt = normalizeSessionDate(newSessionTime);
+            if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) {
+              onNotice("日期时间格式不正确", "请按 2026-06-08 18:00 的格式填写。");
+              return;
+            }
+            const sequence = Math.max(0, ...sessions.map((session) => session.sequence)) + 1;
+            onSessionsChange(sortSessionsDescending([...sessions, {
+              id: `session-${sequence}`,
+              sequence,
+              occurredAt,
+              summary: newSessionSummary.trim() || `尚未补充本次${sessionNoun}摘要。`,
+              tags: ["待补充"],
+              recording: "未添加",
+              record: "未生成",
+              scale: "未上传",
+              homework: "未添加",
+              other: "无",
+            }]));
+            setShowCreateSession(false);
+            setNewSessionSummary("");
+            onNotice(`已新增第 ${sequence} 次${sessionNoun}`, "咨询历程已按时间倒序重新排列。");
+          }}>
+            <Text style={styles.inlineCreateConfirmText}>创建记录</Text>
+          </TouchableOpacity>
+        </View>
       ) : null}
-      {isDefaultProfile ? (
-        <>
-          <SessionCard
-            index="第 6 次"
-            time="2026年6月5日 10:00"
-            summary="围绕睡眠下降、工作评价焦虑和关系议题展开。"
-            tags={["焦虑", "睡眠"]}
-            recording="剩余 13 天"
-            record="草稿"
-            scale="未上传"
-            homework="已布置"
-            other="1 项"
-            onOpenRecord={onOpenRecord}
-            onOpenMaterial={onOpenMaterial}
-          />
-          <SessionCard
-            index="第 5 次"
-            time="2026年5月29日 10:00"
-            summary="梳理近期压力事件，并继续识别自动化想法。"
-            tags={["长期保存", "正式版"]}
-            recording="已销毁"
-            record="正式版"
-            scale="SAS"
-            homework="已提交"
-            other="无"
-            onOpenRecord={onOpenRecord}
-            onOpenMaterial={onOpenMaterial}
-          />
-        </>
-      ) : hasRecords ? (
+
+      {sessions.length > 0 ? sortSessionsDescending(sessions).map((session) => (
         <SessionCard
-          index={profile.recordLabel.replace(/咨询|受督|督导/g, "").trim()}
-          time="刚刚归档"
-          summary="录音已归档，完整转写和录音纪要正在后台生成。"
-          tags={["处理中"]}
-          recording="剩余 13 天"
-          record="待生成"
-          scale="未上传"
-          homework="未添加"
-          other="无"
+          key={session.id}
+          session={session}
+          sessionNoun={sessionNoun}
+          onChange={(patch) => onSessionsChange(updateSession(sessions, session.id, patch))}
+          onDelete={() => onSessionsChange(removeSession(sessions, session.id))}
           onOpenRecord={onOpenRecord}
-          onOpenMaterial={onOpenMaterial}
+          onOpenMaterial={(category) => onOpenMaterial(category, session.id)}
+          onNotice={onNotice}
         />
-      ) : (
+      )) : (
         <View style={styles.emptyProfileState}>
           <View style={styles.emptyProfileIcon}>
             <ClipboardList size={22} color={colors.clayDark} />
@@ -1431,7 +1618,7 @@ function ProfileDetailScreen({
         <Text style={styles.privacyCopy}>录音只能临时保存 14 天；记录、量表、作业和其他附件可在对应卡片内主动授权长期保存。草稿保存为正式版后，正式版不可直接编辑。</Text>
       </View>
 
-      {profile.kindLabel === "来访者" && hasRecords ? (
+      {profile.kindLabel === "来访者" && sessions.length > 0 ? (
         <PrimaryButton
           icon={Sparkles}
           label="生成个案报告"
@@ -1634,12 +1821,14 @@ function SessionMaterialsScreen({
   category,
   materials,
   onOpenRecording,
+  onPreview,
   onAdd,
   onAuthorize,
 }: {
   category: MaterialCategory;
   materials: SessionMaterial[];
   onOpenRecording: () => void;
+  onPreview: (material: SessionMaterial) => void;
   onAdd: (title: string, fileType: string) => void;
   onAuthorize: () => void;
 }) {
@@ -1691,7 +1880,7 @@ function SessionMaterialsScreen({
               key={material.id}
               style={styles.recordingCard}
               activeOpacity={0.78}
-              onPress={material.category === "recording" ? onOpenRecording : undefined}
+              onPress={material.category === "recording" ? onOpenRecording : () => onPreview(material)}
             >
               <View style={styles.recordingIcon}>
                 {material.category === "recording" ? <Mic size={20} color={colors.clayDark} /> : <FileText size={20} color={colors.clayDark} />}
@@ -1703,7 +1892,7 @@ function SessionMaterialsScreen({
                   <Badge label={material.preservable ? "可授权长期保存" : "不可长期保存"} tone={material.preservable ? "green" : "warm"} />
                 </View>
               </View>
-              {material.category === "recording" ? <ChevronRight size={18} color={colors.subtle} /> : null}
+              <ChevronRight size={18} color={colors.subtle} />
             </TouchableOpacity>
           ))}
         </View>
@@ -1716,6 +1905,83 @@ function SessionMaterialsScreen({
       )}
 
       {category !== "recording" && materials.length > 0 ? <GhostButton icon={ShieldCheck} label="选择资料长期保存" onPress={onAuthorize} /> : null}
+    </View>
+  );
+}
+
+function FilePreviewScreen({
+  file,
+  onUpdate,
+  onDelete,
+}: {
+  file: PreviewFile;
+  onUpdate: (title: string, fileType: string) => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(file.title);
+  const [fileType, setFileType] = useState(file.fileType);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const previewCopy = fileType === "图片"
+    ? "图片预览区域"
+    : fileType === "音频"
+      ? "音频波形与播放区域"
+      : fileType === "文字备注"
+        ? "文字内容预览区域"
+        : "PDF 文档预览区域";
+
+  return (
+    <View style={styles.stack}>
+      <View style={styles.filePreviewCanvas}>
+        <View style={styles.filePreviewIcon}>
+          {fileType === "图片" ? <Eye size={30} color={colors.clayDark} /> : <FileText size={30} color={colors.clayDark} />}
+        </View>
+        <Text style={styles.filePreviewTitle}>{file.title}</Text>
+        <Text style={styles.filePreviewMeta}>{file.meta}</Text>
+        <Text style={styles.filePreviewPlaceholder}>{previewCopy}</Text>
+      </View>
+
+      {editing ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>修改文件</Text>
+          <TextInput value={title} onChangeText={setTitle} style={styles.archiveTextInput} />
+          <View style={styles.segmented}>
+            {["PDF", "图片", "文字备注"].map((type) => (
+              <TouchableOpacity key={type} style={[styles.segmentButton, fileType === type && styles.segmentActive]} onPress={() => setFileType(type)}>
+                <Text style={[styles.segmentText, fileType === type && styles.segmentTextActive]}>{type}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <PrimaryButton icon={Save} label="保存修改 / 替换文件" onPress={() => {
+            if (!title.trim()) return;
+            onUpdate(title.trim(), fileType);
+            setEditing(false);
+          }} wide />
+        </View>
+      ) : null}
+
+      <View style={styles.inlineActions}>
+        <GhostButton icon={Edit3} label={editing ? "取消修改" : "修改 / 替换"} onPress={() => {
+          setEditing((current) => !current);
+          setConfirmDelete(false);
+        }} />
+        <TouchableOpacity style={[styles.dangerButton, styles.flexActionButton]} activeOpacity={0.78} onPress={() => {
+          if (!confirmDelete) {
+            setConfirmDelete(true);
+            return;
+          }
+          onDelete();
+        }}>
+          <Trash2 size={16} color={colors.danger} />
+          <Text style={styles.dangerButtonText}>{confirmDelete ? "确认删除文件" : "删除文件"}</Text>
+        </TouchableOpacity>
+      </View>
+      {confirmDelete ? (
+        <View style={styles.warningPanel}>
+          <CircleAlert size={18} color={colors.danger} />
+          <Text style={styles.warningText}>删除后会从本次咨询材料中移除，已有引用只保留“文件已删除”状态。</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -2565,60 +2831,141 @@ function LegalFile({ title, meta, icon: Icon, onPress }: { title: string; meta: 
 }
 
 function SessionCard({
-  index,
-  time,
-  summary,
-  tags,
-  recording,
-  record,
-  scale,
-  homework,
-  other,
+  session,
+  sessionNoun,
+  onChange,
+  onDelete,
   onOpenRecord,
   onOpenMaterial,
+  onNotice,
 }: {
-  index: string;
-  time: string;
-  summary: string;
-  tags: string[];
-  recording: string;
-  record: string;
-  scale: string;
-  homework: string;
-  other: string;
+  session: SessionHistoryItem;
+  sessionNoun: string;
+  onChange: (patch: Partial<Omit<SessionHistoryItem, "id">>) => void;
+  onDelete: () => void;
   onOpenRecord: () => void;
   onOpenMaterial: (category: MaterialCategory) => void;
+  onNotice: (title: string, detail: string) => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [timeDraft, setTimeDraft] = useState(session.occurredAt.slice(0, 16).replace("T", " "));
+  const [summaryDraft, setSummaryDraft] = useState(session.summary);
+  const [tagDraft, setTagDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const recordActionLabel = session.record === "未生成" || session.record === "待生成"
+    ? `生成${sessionNoun}记录`
+    : session.record === "正式版"
+      ? `查看${sessionNoun}记录`
+      : `查看/编辑${sessionNoun}记录`;
+  const saveEdit = () => {
+    const occurredAt = normalizeSessionDate(timeDraft);
+    if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) {
+      onNotice("日期时间格式不正确", "请按 2026-06-08 18:00 的格式填写。");
+      return;
+    }
+    onChange({ occurredAt, summary: summaryDraft.trim() || session.summary });
+    setEditing(false);
+    onNotice("记录摘要已更新", "咨询历程已按时间倒序重新排列。");
+  };
+
   return (
     <View style={styles.sessionCard}>
       <View style={styles.sessionTop}>
         <View style={styles.listBody}>
           <View style={styles.sessionTitleRow}>
-            <Text style={styles.sessionIndex}>{index}</Text>
-            <Text style={styles.sessionTime}>{time}</Text>
+            <Text style={styles.sessionIndex}>第 {session.sequence} 次</Text>
+            <Text style={styles.sessionTime}>{formatSessionTime(session.occurredAt)}</Text>
           </View>
-          <Text style={styles.sessionSummary}>{summary}</Text>
+          <Text style={styles.sessionSummary}>{session.summary}</Text>
         </View>
         <View style={styles.sessionTags}>
-          {tags.map((tag) => (
+          {session.tags.map((tag) => (
             <Text key={tag} style={styles.sessionTag}>{tag}</Text>
           ))}
         </View>
       </View>
 
+      <View style={styles.sessionCardTools}>
+        <TouchableOpacity style={styles.sessionToolButton} activeOpacity={0.78} onPress={() => {
+          setEditing((current) => !current);
+          setConfirmDelete(false);
+        }}>
+          <Edit3 size={14} color={colors.clayDark} />
+          <Text style={styles.sessionToolText}>{editing ? "收起编辑" : "编辑摘要"}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.sessionToolButton, confirmDelete && styles.sessionToolButtonDanger]} activeOpacity={0.78} onPress={() => {
+          if (!confirmDelete) {
+            setConfirmDelete(true);
+            return;
+          }
+          onDelete();
+        }}>
+          <Trash2 size={14} color={confirmDelete ? colors.danger : colors.clayDark} />
+          <Text style={[styles.sessionToolText, confirmDelete && styles.sessionToolTextDanger]}>{confirmDelete ? "确认删除" : "删除"}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {editing ? (
+        <View style={styles.sessionEditPanel}>
+          <TextInput
+            value={timeDraft}
+            onChangeText={setTimeDraft}
+            placeholder="日期时间，例如 2026-06-08 18:00"
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+          />
+          <TextInput
+            value={summaryDraft}
+            onChangeText={setSummaryDraft}
+            multiline
+            style={[styles.archiveTextInput, styles.archiveTextArea]}
+          />
+          <View style={styles.tagEditRow}>
+            {session.tags.map((tag) => (
+              <TouchableOpacity key={tag} style={styles.editableTag} activeOpacity={0.78} onPress={() => onChange({ tags: session.tags.filter((item) => item !== tag) })}>
+                <Text style={styles.editableTagText}>{tag} ×</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={styles.tagAddRow}>
+            <TextInput
+              value={tagDraft}
+              onChangeText={setTagDraft}
+              placeholder={session.tags.length >= 4 ? "最多 4 个标签" : "添加标签"}
+              placeholderTextColor={colors.subtle}
+              style={[styles.archiveTextInput, styles.flexInput]}
+              editable={session.tags.length < 4}
+            />
+            <TouchableOpacity style={[styles.smallActionButton, session.tags.length >= 4 && styles.smallActionDisabled]} activeOpacity={0.78} onPress={() => {
+              const nextTags = addSessionTag(session.tags, tagDraft);
+              if (nextTags === session.tags) {
+                onNotice("标签未添加", session.tags.length >= 4 ? "每次记录最多保留 4 个标签。" : "标签不能为空或重复。");
+                return;
+              }
+              onChange({ tags: nextTags });
+              setTagDraft("");
+            }}>
+              <Plus size={15} color={colors.clayDark} />
+              <Text style={styles.smallActionText}>添加</Text>
+            </TouchableOpacity>
+          </View>
+          <PrimaryButton icon={Save} label="保存摘要与标签" onPress={saveEdit} wide />
+        </View>
+      ) : null}
+
       <View style={styles.sessionActionGrid}>
-        <SessionAction icon={Mic} label="录音" status={recording} tone={recording.includes("剩余") ? "warm" : "muted"} onPress={() => onOpenMaterial("recording")} />
-        <SessionAction icon={Edit3} label="记录" status={record} tone={record === "草稿" ? "blue" : "green"} onPress={onOpenRecord} />
-        <SessionAction icon={ChartNoAxesColumn} label="量表" status={scale} tone={scale === "未上传" ? "muted" : "green"} onPress={() => onOpenMaterial("scale")} />
-        <SessionAction icon={ClipboardList} label="作业" status={homework} tone={homework.includes("已") ? "green" : "muted"} onPress={() => onOpenMaterial("homework")} />
-        <SessionAction icon={Plus} label="其他" status={other} tone={other === "无" ? "muted" : "blue"} onPress={() => onOpenMaterial("other")} />
+        <SessionAction icon={Mic} label="录音" status={session.recording} tone={session.recording.includes("剩余") ? "warm" : "muted"} onPress={() => onOpenMaterial("recording")} />
+        <SessionAction icon={Edit3} label="记录" status={session.record} tone={session.record === "草稿" ? "blue" : session.record === "正式版" ? "green" : "muted"} onPress={onOpenRecord} />
+        <SessionAction icon={ChartNoAxesColumn} label="量表" status={session.scale} tone={session.scale === "未上传" ? "muted" : "green"} onPress={() => onOpenMaterial("scale")} />
+        <SessionAction icon={ClipboardList} label="作业" status={session.homework} tone={session.homework.includes("已") ? "green" : "muted"} onPress={() => onOpenMaterial("homework")} />
+        <SessionAction icon={Plus} label="其他" status={session.other} tone={session.other === "无" ? "muted" : "blue"} onPress={() => onOpenMaterial("other")} />
       </View>
 
       <View style={styles.sessionFooter}>
         <Text style={styles.sessionRule}>记录可存草稿/正式版；敏感资料需主动授权长期保存</Text>
         <TouchableOpacity style={styles.sessionGenerateButton} activeOpacity={0.78} onPress={onOpenRecord}>
-          <Sparkles size={16} color={colors.clayDark} />
-          <Text style={styles.sessionGenerateText}>生成咨询记录</Text>
+          {session.record === "未生成" || session.record === "待生成" ? <Sparkles size={16} color={colors.clayDark} /> : <Eye size={16} color={colors.clayDark} />}
+          <Text style={styles.sessionGenerateText}>{recordActionLabel}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -3673,6 +4020,68 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
     gap: 5,
   },
+  sessionCardTools: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 8,
+  },
+  sessionToolButton: {
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  sessionToolButtonDanger: {
+    backgroundColor: "#FFF3F1",
+    borderWidth: 1,
+    borderColor: "#E8C1BC",
+  },
+  sessionToolText: {
+    color: colors.clayDark,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  sessionToolTextDanger: {
+    color: colors.danger,
+  },
+  sessionEditPanel: {
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 9,
+  },
+  tagEditRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+  },
+  editableTag: {
+    minHeight: 30,
+    paddingHorizontal: 9,
+    borderRadius: radius.pill,
+    backgroundColor: "#F5DED5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  editableTagText: {
+    color: colors.clayDark,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  tagAddRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  smallActionDisabled: {
+    opacity: 0.45,
+  },
   sessionTag: {
     overflow: "hidden",
     borderRadius: radius.pill,
@@ -3874,6 +4283,55 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     overflow: "hidden",
+  },
+  filePreviewCanvas: {
+    minHeight: 320,
+    borderRadius: radius.sm,
+    padding: 22,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  filePreviewIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  filePreviewTitle: {
+    marginTop: 8,
+    color: colors.ink,
+    fontSize: 20,
+    lineHeight: 26,
+    textAlign: "center",
+    fontWeight: "900",
+  },
+  filePreviewMeta: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    fontWeight: "700",
+  },
+  filePreviewPlaceholder: {
+    marginTop: 20,
+    width: "100%",
+    minHeight: 120,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    color: colors.subtle,
+    textAlign: "center",
+    textAlignVertical: "center",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  flexActionButton: {
+    flex: 1,
   },
   editorHeader: {
     borderRadius: radius.sm,

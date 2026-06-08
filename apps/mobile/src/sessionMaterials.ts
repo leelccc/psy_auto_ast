@@ -2,6 +2,7 @@ export type MaterialCategory = "recording" | "scale" | "homework" | "other";
 
 export type SessionMaterial = {
   id: string;
+  sessionId: string;
   category: MaterialCategory;
   title: string;
   meta: string;
@@ -33,19 +34,40 @@ export const materialCategoryCopy: Record<MaterialCategory, { title: string; upl
 
 export function addSessionMaterial(
   materials: SessionMaterial[],
-  input: { category: MaterialCategory; title: string; fileType: string },
+  input: { sessionId: string; category: MaterialCategory; title: string; fileType: string },
 ): SessionMaterial[] {
   const title = input.title.trim();
   if (!title) return materials;
 
   const material: SessionMaterial = {
-    id: `${input.category}-${materials.length + 1}`,
+    id: `${input.sessionId}-${input.category}-${materials.length + 1}`,
+    sessionId: input.sessionId,
     category: input.category,
     title,
     meta: `${input.fileType} · 刚刚添加 · 待决定长期保存`,
     preservable: input.category !== "recording",
   };
   return [material, ...materials];
+}
+
+export function updateSessionMaterial(
+  materials: SessionMaterial[],
+  id: string,
+  patch: { title: string; fileType: string },
+): SessionMaterial[] {
+  const title = patch.title.trim();
+  if (!title) return materials;
+  return materials.map((material) => material.id === id
+    ? { ...material, title, meta: `${patch.fileType} · 刚刚更新 · 待决定长期保存` }
+    : material);
+}
+
+export function removeSessionMaterial(materials: SessionMaterial[], id: string): SessionMaterial[] {
+  return materials.filter((material) => material.id !== id);
+}
+
+export function removeMaterialsForSession(materials: SessionMaterial[], sessionId: string): SessionMaterial[] {
+  return materials.filter((material) => material.sessionId !== sessionId);
 }
 
 export function getMaterialUpdateMessage(category: MaterialCategory) {
