@@ -9,6 +9,7 @@ import {
   removeSessionMaterial,
   updateSessionMaterial,
 } from "../sessionMaterials";
+import type { StoredFileReference } from "../fileService";
 
 test("session materials expose focused destinations for every session card entry", () => {
   assert.equal(materialCategoryCopy.recording.title, "录音资料");
@@ -23,6 +24,15 @@ test("adding a session attachment creates visible state and marks audio non-pres
 
   assert.equal(recording[0].title, "补充录音.m4a");
   assert.equal(recording[0].preservable, false);
+  assert.deepEqual(recording[0].file, {
+    fileId: null,
+    filename: "补充录音.m4a",
+    mimeType: "audio/mp4",
+    sizeBytes: null,
+    uploadStatus: "pending",
+    sourceKind: "prototype",
+  });
+  assert.equal(recording[1].file.mimeType, "application/pdf");
   assert.equal(recording[1].preservable, true);
   assert.match(getMaterialUpdateMessage("scale"), /重新生成草稿/);
 });
@@ -34,11 +44,24 @@ test("blank material names do not create placeholder rows", () => {
 
 test("uploaded files can be renamed, replaced, and removed inside their session", () => {
   const initial = addSessionMaterial([], { sessionId: "session-6", category: "other", title: "事件时间线", fileType: "PDF" });
-  const updated = updateSessionMaterial(initial, initial[0].id, { title: "工作事件时间线", fileType: "图片" });
+  const replacement: StoredFileReference = {
+    fileId: "file-replacement",
+    filename: "工作事件时间线.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 4096,
+    uploadStatus: "uploaded",
+    sourceKind: "minio",
+  };
+  const updated = updateSessionMaterial(initial, initial[0].id, {
+    title: "工作事件时间线",
+    fileType: "图片",
+    file: replacement,
+  });
 
   assert.equal(updated[0].title, "工作事件时间线");
   assert.match(updated[0].meta, /图片/);
   assert.equal(updated[0].sessionId, "session-6");
+  assert.deepEqual(updated[0].file, replacement);
   assert.deepEqual(removeSessionMaterial(updated, initial[0].id), []);
 });
 

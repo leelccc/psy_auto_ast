@@ -6,7 +6,7 @@ Build a minimal backend core first, then a polished mobile frontend prototype th
 
 ## Current Phase
 
-Paused at the June 9 handoff after Phase 29. Mobile P0/P1/P2 prototype interactions and browser PDF downloads are implemented and verified. The next pass should replace metadata-only file simulation with real upload/storage-backed preview and download behavior.
+Frontend MinIO integration boundaries are complete and verified. The next backend pass should implement the reserved file-service contract with real MinIO presigned upload, completion, download, replacement, deletion, and lifecycle behavior.
 
 ## Phases
 
@@ -40,7 +40,8 @@ Paused at the June 9 handoff after Phase 29. Mobile P0/P1/P2 prototype interacti
 - [x] Phase 27: Make consultation history stateful with create, time sorting, editable summaries/tags, and confirmed deletion.
 - [x] Phase 28: Add session-scoped file preview, replacement, rename, and deletion flows.
 - [x] Phase 29: Add local downloads for generated records, reports, recording notes, and previewable files.
-- [ ] Phase 30: Persist uploaded material and legal-file source objects/URLs and download the original file bytes.
+- [x] Phase 30a: Reserve typed frontend file references and MinIO file-service interfaces without connecting a backend.
+- [ ] Phase 30b: Implement backend MinIO storage and use original uploaded bytes for preview and download.
 - [ ] Phase 31: Add native Expo file download/share behavior for iOS and Android.
 - [ ] Phase 32: Continue the page-level closed-loop audit against real persistence and remove any remaining simulated actions.
 - [ ] Phase 33: Regression-test the complete mobile workflows, update handoff records, and commit.
@@ -90,10 +91,11 @@ Paused at the June 9 handoff after Phase 29. Mobile P0/P1/P2 prototype interacti
 ## Resume Checklist
 
 1. Read `progress.md`, `task_plan.md`, and `docs/prd/session-memory.md`.
-2. Start from commit `a11673c`.
-3. Inspect the upload data model before changing UI; add a durable source reference to session materials and legal/ethical files.
-4. Keep generated-document PDF downloads separate from original uploaded-file downloads.
-5. Verify changes in the in-app browser at `http://127.0.0.1:8083/`, then run typecheck, tests, and Expo Web export.
+2. Start from the latest MinIO frontend-interface commit.
+3. Implement the contract in `apps/mobile/src/fileService.ts` using authenticated FastAPI endpoints and short-lived presigned MinIO URLs.
+4. Replace prototype file references with backend-returned `fileId`, MIME, size, and uploaded state after successful completion.
+5. Keep generated-document PDF downloads separate from original uploaded-file downloads.
+6. Verify changes in the in-app browser at `http://127.0.0.1:8083/`, then run typecheck, tests, and Expo Web export.
 
 ## Errors Encountered
 

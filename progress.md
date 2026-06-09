@@ -186,3 +186,16 @@
 - Add native Expo download/share handling for iOS and Android; the current implementation is browser-based.
 - Continue the mobile page-by-page interaction and data-flow audit, prioritizing any remaining cards or actions that only simulate persistence.
 - Re-run regression flows after storage integration: consultation creation/edit/delete and time sorting, session material preview/replace/delete, record generation/versioning, case-report generation, privacy authorization, and recording archive.
+
+## 2026-06-09 MinIO Frontend Boundary
+
+- Confirmed that uploaded files will be stored privately in MinIO and downloaded as original bytes through backend-authorized short-lived URLs.
+- Added and committed the MinIO integration design in `8917ca6 docs: design minio file integration`.
+- Added a typed frontend file-service contract for upload creation, upload completion, original-file download URL retrieval, replacement, and deletion.
+- Added `StoredFileReference` metadata with `fileId`, filename, MIME type, size, upload status, and source kind.
+- Updated session materials and legal/ethical file previews to carry file references while keeping current prototype rows explicitly unconnected to backend storage.
+- Removed metadata-generated PDF copies from uploaded-file preview downloads. The preview now requests an original-file URL by `fileId`, or clearly reports that the MinIO backend is not connected.
+- Kept generated recording-note, consultation/supervision record, and case-report PDF exports on the existing generated-document path.
+- Browser-verified the legal-file preview at a 390x844 viewport: it shows `等待文件服务接入`, returns explicit MinIO-pending feedback when pressed, and logs no runtime errors.
+- Frontend verification passed: `36` tests, TypeScript typecheck, and Expo Web production export.
+- Backend MinIO implementation remains pending and should implement the contract in `apps/mobile/src/fileService.ts`.

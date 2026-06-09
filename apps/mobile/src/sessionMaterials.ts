@@ -1,3 +1,5 @@
+import type { StoredFileReference } from "./fileService";
+
 export type MaterialCategory = "recording" | "scale" | "homework" | "other";
 
 export type SessionMaterial = {
@@ -7,6 +9,14 @@ export type SessionMaterial = {
   title: string;
   meta: string;
   preservable: boolean;
+  file: StoredFileReference;
+};
+
+const materialMimeTypes: Record<string, string> = {
+  PDF: "application/pdf",
+  图片: "image/jpeg",
+  音频: "audio/mp4",
+  文字备注: "text/plain",
 };
 
 export const materialCategoryCopy: Record<MaterialCategory, { title: string; uploadLabel: string; empty: string }> = {
@@ -44,8 +54,16 @@ export function addSessionMaterial(
     sessionId: input.sessionId,
     category: input.category,
     title,
-    meta: `${input.fileType} · 刚刚添加 · 待决定长期保存`,
+    meta: `${input.fileType} · 待后端上传 · 待决定长期保存`,
     preservable: input.category !== "recording",
+    file: {
+      fileId: null,
+      filename: title,
+      mimeType: materialMimeTypes[input.fileType] ?? "application/octet-stream",
+      sizeBytes: null,
+      uploadStatus: "pending",
+      sourceKind: "prototype",
+    },
   };
   return [material, ...materials];
 }
@@ -53,12 +71,21 @@ export function addSessionMaterial(
 export function updateSessionMaterial(
   materials: SessionMaterial[],
   id: string,
-  patch: { title: string; fileType: string },
+  patch: { title: string; fileType: string; file?: StoredFileReference },
 ): SessionMaterial[] {
   const title = patch.title.trim();
   if (!title) return materials;
   return materials.map((material) => material.id === id
-    ? { ...material, title, meta: `${patch.fileType} · 刚刚更新 · 待决定长期保存` }
+    ? {
+        ...material,
+        title,
+        meta: `${patch.fileType} · 待后端替换 · 待决定长期保存`,
+        file: patch.file ?? {
+          ...material.file,
+          filename: title,
+          mimeType: materialMimeTypes[patch.fileType] ?? "application/octet-stream",
+        },
+      }
     : material);
 }
 
@@ -72,7 +99,7 @@ export function removeMaterialsForSession(materials: SessionMaterial[], sessionI
 
 export function getMaterialUpdateMessage(category: MaterialCategory) {
   if (category === "recording") {
-    return "录音上传后需先归档；转写与纪要完成后才能参与本次记录生成。";
+    return "录音上传接口已预留；接入 MinIO 后需先完成上传与归档，再进入转写和纪要。";
   }
-  return "本次材料已更新。已有记录草稿不会自动覆盖，可重新生成草稿并确认覆盖。";
+  return "文件上传接口已预留。接入 MinIO 后材料会参与记录生成；已有内容可确认后重新生成草稿。";
 }

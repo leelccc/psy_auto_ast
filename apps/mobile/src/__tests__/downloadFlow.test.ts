@@ -19,7 +19,7 @@ test("generated consultation records download as named PDF files", () => {
   assert.match(artifact.content, /继续记录触发事件/);
 });
 
-test("preview downloads preserve PDF and document extensions", () => {
+test("generated exports preserve PDF and document extensions", () => {
   assert.equal(buildDownloadArtifact({ title: "咨询协议", fileType: "PDF", sections: [] }).filename, "咨询协议.pdf");
   assert.equal(buildDownloadArtifact({ title: "咨询记录", fileType: "Word", sections: [] }).filename, "咨询记录.doc");
 });

@@ -52,6 +52,11 @@ import { describeRecordingContext, getRecordingDestination, toArchiveRecording, 
 import { getAuthorizableResources, mergeAuthorizedResources, type PrivacyResource } from "./src/privacyFlow";
 import { getSelectableCaseReportMaterials, type CaseReportMaterial } from "./src/caseReportFlow";
 import { buildDownloadArtifact, scheduleDownload } from "./src/downloadFlow";
+import {
+  createUnconfiguredFileService,
+  getOriginalFileDownloadState,
+  type StoredFileReference,
+} from "./src/fileService";
 import { decideRecordingRegeneration, updateAtIndex } from "./src/recordingEditorFlow";
 import {
   addSessionMaterial,
@@ -132,7 +137,33 @@ type PreviewFile = {
   meta: string;
   fileType: string;
   source: "material" | "legal";
+  file: StoredFileReference | null;
 };
+
+const fileService = createUnconfiguredFileService();
+
+function mimeTypeForLabel(fileType: string): string {
+  if (fileType === "PDF") return "application/pdf";
+  if (fileType === "图片") return "image/jpeg";
+  if (fileType === "音频") return "audio/mp4";
+  if (fileType === "文字备注") return "text/plain";
+  return "application/octet-stream";
+}
+
+function prototypeFile(
+  filename: string,
+  mimeType: string,
+  uploadStatus: StoredFileReference["uploadStatus"] = "pending",
+): StoredFileReference {
+  return {
+    fileId: null,
+    filename,
+    mimeType,
+    sizeBytes: null,
+    uploadStatus,
+    sourceKind: "prototype",
+  };
+}
 
 const articles = [
   {
@@ -198,11 +229,51 @@ const initialSessionHistory: SessionHistoryItem[] = [
 ];
 
 const initialSessionMaterials: SessionMaterial[] = [
-  { id: "session-6-recording-1", sessionId: "session-6", category: "recording", title: "第 6 次咨询原始录音", meta: "音频 · 52:18 · 剩余 13 天", preservable: false },
-  { id: "session-6-scale-1", sessionId: "session-6", category: "scale", title: "SAS 焦虑自评量表", meta: "PDF · 6月5日上传 · 可参与记录生成", preservable: true },
-  { id: "session-6-homework-1", sessionId: "session-6", category: "homework", title: "睡前想法记录", meta: "图片 · 已提交 · 可参与记录生成", preservable: true },
-  { id: "session-6-other-1", sessionId: "session-6", category: "other", title: "工作事件时间线", meta: "PDF · 已解析文字 · 可参与记录生成", preservable: true },
-  { id: "session-5-scale-1", sessionId: "session-5", category: "scale", title: "SAS 初测", meta: "PDF · 5月29日上传 · 长期保存", preservable: true },
+  {
+    id: "session-6-recording-1",
+    sessionId: "session-6",
+    category: "recording",
+    title: "第 6 次咨询原始录音",
+    meta: "音频 · 52:18 · 剩余 13 天",
+    preservable: false,
+    file: prototypeFile("第 6 次咨询原始录音.m4a", "audio/mp4"),
+  },
+  {
+    id: "session-6-scale-1",
+    sessionId: "session-6",
+    category: "scale",
+    title: "SAS 焦虑自评量表",
+    meta: "PDF · 6月5日上传 · 可参与记录生成",
+    preservable: true,
+    file: prototypeFile("SAS 焦虑自评量表.pdf", "application/pdf"),
+  },
+  {
+    id: "session-6-homework-1",
+    sessionId: "session-6",
+    category: "homework",
+    title: "睡前想法记录",
+    meta: "图片 · 已提交 · 可参与记录生成",
+    preservable: true,
+    file: prototypeFile("睡前想法记录.jpg", "image/jpeg"),
+  },
+  {
+    id: "session-6-other-1",
+    sessionId: "session-6",
+    category: "other",
+    title: "工作事件时间线",
+    meta: "PDF · 已解析文字 · 可参与记录生成",
+    preservable: true,
+    file: prototypeFile("工作事件时间线.pdf", "application/pdf"),
+  },
+  {
+    id: "session-5-scale-1",
+    sessionId: "session-5",
+    category: "scale",
+    title: "SAS 初测",
+    meta: "PDF · 5月29日上传 · 长期保存",
+    preservable: true,
+    file: prototypeFile("SAS 初测.pdf", "application/pdf"),
+  },
 ];
 
 const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
@@ -566,6 +637,7 @@ export default function App() {
                 meta,
                 fileType: "PDF",
                 source: "legal",
+                file: prototypeFile(legalFileNames[title] ?? `${title}.pdf`, "application/pdf"),
               }, "profileDetail")}
               onNotice={showNotice}
             />
@@ -647,6 +719,7 @@ export default function App() {
                 meta: material.meta,
                 fileType: material.meta.split(" · ")[0],
                 source: "material",
+                file: material.file,
               }, "sessionMaterials")}
               onAdd={(title, fileType) => {
                 setSessionMaterials((current) => addSessionMaterial(current, {
@@ -656,7 +729,7 @@ export default function App() {
                   fileType,
                 }));
                 setRecordDirty(true);
-                showNotice("资料已添加", getMaterialUpdateMessage(activeMaterialCategory));
+                showNotice("文件接口已预留", getMaterialUpdateMessage(activeMaterialCategory));
               }}
               onAuthorize={() => openPrivacy("sessionMaterials", sessionMaterials
                 .filter((item) => item.sessionId === activeSessionId && item.category === activeMaterialCategory && item.preservable)
@@ -666,9 +739,15 @@ export default function App() {
           {quickView === "filePreview" && activeFile ? (
             <FilePreviewScreen
               file={activeFile}
+              onNotice={showNotice}
               onUpdate={(title, fileType) => {
+                const replacementFile = prototypeFile(title, mimeTypeForLabel(fileType));
                 if (activeFile.source === "material") {
-                  setSessionMaterials((current) => updateSessionMaterial(current, activeFile.id, { title, fileType }));
+                  setSessionMaterials((current) => updateSessionMaterial(current, activeFile.id, {
+                    title,
+                    fileType,
+                    file: replacementFile,
+                  }));
                 } else {
                   setLegalFileNames((current) => ({ ...current, [activeFile.ownerKey ?? activeFile.title]: title }));
                 }
@@ -677,8 +756,9 @@ export default function App() {
                   title,
                   fileType,
                   meta: `${fileType} · 刚刚更新`,
+                  file: replacementFile,
                 } : current);
-                showNotice("文件已更新", "预览与所属咨询记录材料已同步更新。");
+                showNotice("文件接口已预留", "当前仅保存文件信息；接入后端 MinIO 后将上传并替换原文件。");
               }}
               onDelete={() => {
                 if (activeFile.source === "material") {
@@ -1490,7 +1570,7 @@ function ProfileDetailScreen({
       <SectionHeader title="法律及伦理文件" action={showLegalUpload ? "收起" : "上传"} onAction={() => setShowLegalUpload((current) => !current)} />
       {showLegalUpload ? (
         <View style={styles.inlineCreateCard}>
-          <Text style={styles.formPreviewTitle}>覆盖上传伦理文件</Text>
+          <Text style={styles.formPreviewTitle}>预留伦理文件上传</Text>
           <TextInput
             value={legalUploadName}
             onChangeText={setLegalUploadName}
@@ -1498,22 +1578,22 @@ function ProfileDetailScreen({
             placeholderTextColor={colors.subtle}
             style={styles.archiveTextInput}
           />
-          <Text style={styles.formHelp}>同类文件只保留当前版本。已有文件时需要再次确认覆盖。</Text>
+          <Text style={styles.formHelp}>当前保存文件信息；后端接入 MinIO 后，同类文件将通过先上传、再切换的方式安全覆盖。</Text>
           <TouchableOpacity style={[styles.inlineCreateConfirm, !legalUploadName.trim() && styles.inlineCreateConfirmDisabled]} activeOpacity={0.78} onPress={() => {
             if (!legalUploadName.trim()) return;
             const target = legalFiles.find((item) => legalUploadName.includes(item)) ?? legalFiles[0];
             if ((isDefaultProfile || legalFileNames[target]) && legalFileNames[target] !== "已删除" && pendingLegalOverwrite !== target) {
               setPendingLegalOverwrite(target);
-              onNotice("确认覆盖文件", `再次点击将用 ${legalUploadName.trim()} 覆盖现有${target}。`);
+              onNotice("确认替换文件信息", `再次点击将预留用 ${legalUploadName.trim()} 替换现有${target}。`);
               return;
             }
             onLegalFilesChange({ ...legalFileNames, [target]: legalUploadName.trim() });
             setPendingLegalOverwrite(null);
             setLegalUploadName("");
             setShowLegalUpload(false);
-            onNotice("伦理文件已更新", `${target}已替换为最新上传版本。`);
+            onNotice("文件接口已预留", `${target}的文件信息已保存；接入 MinIO 后才会上传并替换原文件。`);
           }}>
-            <Text style={styles.inlineCreateConfirmText}>{pendingLegalOverwrite ? "确认覆盖现有文件" : "上传并检查覆盖"}</Text>
+            <Text style={styles.inlineCreateConfirmText}>{pendingLegalOverwrite ? "确认预留替换" : "保存文件信息"}</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -1878,7 +1958,7 @@ function SessionMaterialsScreen({
             setTitle("");
             setShowUpload(false);
           }}>
-            <Text style={styles.inlineCreateConfirmText}>确认添加</Text>
+            <Text style={styles.inlineCreateConfirmText}>保存文件信息</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -1921,10 +2001,12 @@ function SessionMaterialsScreen({
 
 function FilePreviewScreen({
   file,
+  onNotice,
   onUpdate,
   onDelete,
 }: {
   file: PreviewFile;
+  onNotice: (title: string, detail: string) => void;
   onUpdate: (title: string, fileType: string) => void;
   onDelete: () => void;
 }) {
@@ -1932,7 +2014,7 @@ function FilePreviewScreen({
   const [title, setTitle] = useState(file.title);
   const [fileType, setFileType] = useState(file.fileType);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [downloaded, setDownloaded] = useState(false);
+  const downloadState = getOriginalFileDownloadState(file.file);
   const previewCopy = fileType === "图片"
     ? "图片预览区域"
     : fileType === "音频"
@@ -1972,14 +2054,20 @@ function FilePreviewScreen({
       ) : null}
 
       <View style={styles.fileActionStack}>
-        {fileType === "PDF" ? <GhostButton icon={Download} label={downloaded ? "重新下载 PDF" : "下载 PDF"} onPress={() => {
-          setDownloaded(true);
-          scheduleDownload(buildDownloadArtifact({
-            title: file.title,
-            fileType: "PDF",
-            sections: [{ title: "文件信息", content: file.meta }],
-          }));
-        }} /> : null}
+        <GhostButton icon={Download} label={downloadState.label} onPress={async () => {
+          if (!file.file?.fileId) {
+            onNotice("暂不能下载原文件", "文件服务将在后端 MinIO 接入后启用。");
+            return;
+          }
+          const result = await fileService.getDownloadUrl(file.file.fileId);
+          if (!result.ok) {
+            onNotice("暂不能下载原文件", result.message);
+            return;
+          }
+          if (typeof window !== "undefined") {
+            window.open(result.data.downloadUrl, "_blank", "noopener,noreferrer");
+          }
+        }} />
         <GhostButton icon={Edit3} label={editing ? "取消修改" : "修改 / 替换"} onPress={() => {
           setEditing((current) => !current);
           setConfirmDelete(false);
