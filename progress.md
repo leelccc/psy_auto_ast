@@ -169,3 +169,20 @@
 - Added real browser downloads for consultation records, supervision feedback/records, case reports, and recording-note exports.
 - Added direct download actions to every PDF preview and browser-side PDF rendering so Chinese exports open as valid paginated documents.
 - Added tested filename sanitization, MIME selection, and export-content assembly; frontend test count is now `32`.
+
+## 2026-06-09 Handoff
+
+- Completed the generated-document download loop and committed it as `a11673c feat: add document downloads`.
+- Consultation records, supervision records/feedback, case reports, and recording notes can generate and download valid paginated PDF files in the Web prototype.
+- PDF preview pages expose `下载 PDF / 重新下载 PDF`; generated-record editors show download feedback for the current draft or formal version.
+- Added `jspdf` as the browser PDF renderer and centralized filename sanitization, MIME selection, PDF generation, and download triggering in `apps/mobile/src/downloadFlow.ts`.
+- Browser-verified the legal-file PDF preview download state and the consultation-record PDF download action at `http://127.0.0.1:8083/`.
+- Verification at handoff: frontend typecheck passed, `32` frontend tests passed, Expo Web production export passed, and the Git worktree was clean after commit.
+- Important prototype boundary: uploaded-file rows currently contain metadata rather than persisted source file URLs/blobs. A PDF preview download therefore generates a local PDF copy from current visible data; downloading the exact originally uploaded file requires the later upload/storage integration.
+
+### Next Session
+
+- Connect uploaded materials and legal/ethical files to real file objects or backend storage URLs so preview and download use the original file bytes.
+- Add native Expo download/share handling for iOS and Android; the current implementation is browser-based.
+- Continue the mobile page-by-page interaction and data-flow audit, prioritizing any remaining cards or actions that only simulate persistence.
+- Re-run regression flows after storage integration: consultation creation/edit/delete and time sorting, session material preview/replace/delete, record generation/versioning, case-report generation, privacy authorization, and recording archive.

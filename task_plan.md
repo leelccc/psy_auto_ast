@@ -6,7 +6,7 @@ Build a minimal backend core first, then a polished mobile frontend prototype th
 
 ## Current Phase
 
-Complete. Mobile P0/P1/P2 interaction audit items are implemented and verified.
+Paused at the June 9 handoff after Phase 29. Mobile P0/P1/P2 prototype interactions and browser PDF downloads are implemented and verified. The next pass should replace metadata-only file simulation with real upload/storage-backed preview and download behavior.
 
 ## Phases
 
@@ -40,6 +40,10 @@ Complete. Mobile P0/P1/P2 interaction audit items are implemented and verified.
 - [x] Phase 27: Make consultation history stateful with create, time sorting, editable summaries/tags, and confirmed deletion.
 - [x] Phase 28: Add session-scoped file preview, replacement, rename, and deletion flows.
 - [x] Phase 29: Add local downloads for generated records, reports, recording notes, and previewable files.
+- [ ] Phase 30: Persist uploaded material and legal-file source objects/URLs and download the original file bytes.
+- [ ] Phase 31: Add native Expo file download/share behavior for iOS and Android.
+- [ ] Phase 32: Continue the page-level closed-loop audit against real persistence and remove any remaining simulated actions.
+- [ ] Phase 33: Regression-test the complete mobile workflows, update handoff records, and commit.
 
 ## Working Files
 
@@ -80,6 +84,16 @@ Complete. Mobile P0/P1/P2 interaction audit items are implemented and verified.
 - Consultation cards are editable summaries: occurrence time, summary text, and up to four unique tags can change without rewriting the underlying formal record.
 - Deleting a consultation requires confirmation and removes its owned recording/scale/homework/other material rows. Files open in a preview before replacement or deletion.
 - Generated consultation/supervision records, case reports, and recording notes must support local PDF download. Previewable PDF and attachment files must retain a direct download action.
+- The Web prototype currently generates preview-file PDF copies from visible metadata because uploaded source files are not persisted yet. Phase 30 must replace this with original-file retrieval from local file objects or backend storage.
+- Browser Blob downloads are not the final native-mobile implementation. iOS and Android should use Expo-compatible filesystem and share/download behavior.
+
+## Resume Checklist
+
+1. Read `progress.md`, `task_plan.md`, and `docs/prd/session-memory.md`.
+2. Start from commit `a11673c`.
+3. Inspect the upload data model before changing UI; add a durable source reference to session materials and legal/ethical files.
+4. Keep generated-document PDF downloads separate from original uploaded-file downloads.
+5. Verify changes in the in-app browser at `http://127.0.0.1:8083/`, then run typecheck, tests, and Expo Web export.
 
 ## Errors Encountered
 
