@@ -1,15 +1,36 @@
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
-from hashlib import sha256
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, Header, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.orm import Session as DatabaseSession
 
+from app.api.dependencies import current_user_id
+from app.api.errors import ApiError, error_response
+from app.api.routes.attachments import create_attachments_router
+from app.api.routes.account import create_account_router
+from app.api.routes.auth import router as auth_router
+from app.api.routes.calendar import router as calendar_router
+from app.api.routes.files import create_files_router
+from app.api.routes.jobs import router as jobs_router
+from app.api.routes.privacy import create_privacy_router
+from app.api.routes.recordings import create_recordings_router
+from app.api.routes.reports import create_reports_router
+from app.api.routes.security import router as security_router
+from app.api.routes.supervision import router as supervision_router
+from app.core.config import get_settings
+from app.db.session import get_db
+from app.models import Profile as DatabaseProfile
+from app.models import SessionRecord
+from app.services.calendar import sync_profile_next_session_event
+from app.services.ai import RecordingAIProvider, create_recording_ai_provider
+from app.services.resource_cleanup import cleanup_profile_resources, cleanup_session_resources
+from app.services.security import require_profile_access_grant
+from app.services.storage import MinioStorage, Storage
 
-DEMO_USER_ID = "demo-user"
 
 
 def utc_now() -> datetime:
@@ -20,188 +41,148 @@ def iso(value: datetime) -> str:
     return value.isoformat()
 
 
-def hash_secret(value: str) -> str:
-    return sha256(value.encode("utf-8")).hexdigest()
-
-
-class ApiError(HTTPException):
-    def __init__(self, status_code: int, code: str, message: str) -> None:
-        super().__init__(status_code=status_code, detail={"code": code, "message": message})
-
-
-@dataclass
-class Profile:
-    id: str
-    user_id: str
-    type: str
-    name: str
-    status: str | None = None
-    crisis_level: str | None = None
-    initial_session_count: int = 0
-    created_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass
-class Session:
-    id: str
-    user_id: str
-    profile_id: str
-    session_type: str
-    sequence_no: int
-    title: str | None = None
-    created_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass
-class Recording:
-    id: str
-    user_id: str
-    title: str
-    source_type: str
-    duration_seconds: int | None = None
-    audio_expires_at: datetime | None = None
-    created_at: datetime = field(default_factory=utc_now)
-
-
-@dataclass
-class SensitiveResource:
-    resource_type: str
-    resource_id: str
-    user_id: str
-    display_name: str
-    expires_at: datetime
-    can_long_term_preserve: bool
-
-
-@dataclass
-class ProfileAccessGrant:
-    user_id: str
-    profile_type: str
-    grant_hash: str
-    expires_at: datetime
-    used_at: datetime | None = None
-
-
-class AppState:
-    def __init__(self) -> None:
-        self.profile_passwords: dict[tuple[str, str], str] = {}
-        self.profile_grants: dict[str, ProfileAccessGrant] = {}
-        self.profiles: dict[str, Profile] = {}
-        self.sessions: dict[str, Session] = {}
-        self.recordings: dict[str, Recording] = {}
-        self.sensitive_resources: list[SensitiveResource] = []
-
-
-class SetProfilePasswordRequest(BaseModel):
-    new_password: str = Field(min_length=1)
-
-
-class VerifyProfilePasswordRequest(BaseModel):
-    password: str = Field(min_length=1)
-
-
 class CreateProfileRequest(BaseModel):
     type: str
-    name: str
+    name: str = Field(min_length=1, max_length=80)
+    code: str | None = None
     status: str | None = None
     crisis_level: str | None = None
-    initial_session_count: int = 0
+    initial_session_count: int = Field(default=0, ge=0)
+    next_session_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    notes: str = ""
+
+
+class UpdateProfileRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    code: str | None = None
+    status: str | None = None
+    crisis_level: str | None = None
+    initial_session_count: int | None = Field(default=None, ge=0)
+    next_session_at: datetime | None = None
+    metadata: dict[str, Any] | None = None
+    notes: str | None = None
+
+
+class DeleteResourceRequest(BaseModel):
+    confirmation_text: str
 
 
 class CreateSessionRequest(BaseModel):
     session_type: str
     title: str | None = None
+    started_at: datetime | None = None
+    occurred_at: datetime | None = None
+    ended_at: datetime | None = None
+    mode: str | None = None
+    summary: str = ""
+    tags: list[str] = Field(default_factory=list)
 
 
-class CreateRecordingRequest(BaseModel):
-    title: str
-    source_type: str
+class UpdateSessionRequest(BaseModel):
+    started_at: datetime | None = None
+    occurred_at: datetime | None = None
+    ended_at: datetime | None = None
+    mode: str | None = None
+    summary: str | None = None
+    tags: list[str] | None = None
 
 
-class CompleteAudioRequest(BaseModel):
-    filename: str
-    mime_type: str
-    duration_seconds: int
-
-
-def error_response(_: Request, exc: ApiError) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": {"code": exc.detail["code"], "message": exc.detail["message"], "details": {}}},
-    )
-
-
-def create_app() -> FastAPI:
+def create_app(
+    storage: Storage | None = None,
+    recording_ai_provider: RecordingAIProvider | None = None,
+    recording_audio_input_mode: str | None = None,
+) -> FastAPI:
+    settings = get_settings()
     app = FastAPI(title="Counselor Assistant API")
-    state = AppState()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:8081",
+            "http://127.0.0.1:8081",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.add_exception_handler(ApiError, error_response)
+    storage = storage or MinioStorage()
+    recording_ai_provider = recording_ai_provider or create_recording_ai_provider(settings)
+    recording_audio_input_mode = (
+        recording_audio_input_mode or settings.recording_audio_input_mode
+    )
+    if recording_audio_input_mode not in {"base64", "minio_url"}:
+        raise ValueError("录音 AI 输入模式必须是 base64 或 minio_url。")
+    app.include_router(auth_router)
+    app.include_router(security_router)
+    app.include_router(calendar_router)
+    app.include_router(jobs_router)
+    app.include_router(supervision_router)
+    app.include_router(create_files_router(storage))
+    app.include_router(create_attachments_router(storage))
+    app.include_router(create_account_router(storage))
+    app.include_router(create_recordings_router(
+        storage,
+        recording_ai_provider,
+        recording_audio_input_mode,
+    ))
+    app.include_router(create_reports_router(storage))
+    app.include_router(create_privacy_router(storage))
 
-    def current_user_id(authorization: Annotated[str | None, Header()] = None) -> str:
-        if authorization != "Bearer demo-token":
-            raise ApiError(401, "unauthorized", "请先登录。")
-        return DEMO_USER_ID
-
-    def get_profile(profile_id: str, user_id: str) -> Profile:
-        profile = state.profiles.get(profile_id)
-        if profile is None or profile.user_id != user_id:
+    def get_profile(profile_id: str, user_id: str, database: DatabaseSession) -> DatabaseProfile:
+        profile = database.scalar(
+            select(DatabaseProfile).where(
+                DatabaseProfile.id == profile_id,
+                DatabaseProfile.user_id == user_id,
+            )
+        )
+        if profile is None:
             raise ApiError(404, "profile_not_found", "档案不存在。")
         return profile
 
     def require_profile_access(
-        profile: Profile,
+        profile: DatabaseProfile,
         user_id: str,
+        database: DatabaseSession,
         x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> None:
-        if not x_profile_access_grant:
-            raise ApiError(403, "profile_access_grant_required", "进入档案详情前需要验证档案访问密码。")
-        grant = state.profile_grants.get(x_profile_access_grant)
-        if (
-            grant is None
-            or grant.user_id != user_id
-            or grant.profile_type != profile.type
-            or grant.used_at is not None
-            or grant.expires_at <= utc_now()
-        ):
-            raise ApiError(403, "profile_access_grant_invalid", "档案访问凭证无效，请重新验证密码。")
-        grant.used_at = utc_now()
+        require_profile_access_grant(
+            database,
+            user_id=user_id,
+            profile_type=profile.type,
+            raw_grant=x_profile_access_grant,
+        )
 
     @app.get("/api/v1/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "service": "counselor-assistant-api"}
-
-    @app.put("/api/v1/profile-access-passwords/{profile_type}")
-    def set_profile_password(
-        profile_type: str,
-        payload: SetProfilePasswordRequest,
-        user_id: Annotated[str, Depends(current_user_id)],
-    ) -> dict[str, Any]:
-        state.profile_passwords[(user_id, profile_type)] = hash_secret(payload.new_password)
-        return {"profile_type": profile_type, "is_set": True}
-
-    @app.post("/api/v1/profile-access-passwords/{profile_type}/verify")
-    def verify_profile_password(
-        profile_type: str,
-        payload: VerifyProfilePasswordRequest,
-        user_id: Annotated[str, Depends(current_user_id)],
-    ) -> dict[str, Any]:
-        stored_hash = state.profile_passwords.get((user_id, profile_type))
-        if stored_hash is None or stored_hash != hash_secret(payload.password):
-            raise ApiError(403, "profile_password_invalid", "档案访问密码不正确。")
-        grant = str(uuid4())
-        state.profile_grants[grant] = ProfileAccessGrant(
-            user_id=user_id,
-            profile_type=profile_type,
-            grant_hash=hash_secret(grant),
-            expires_at=utc_now() + timedelta(minutes=5),
-        )
-        return {"verified": True, "profile_type": profile_type, "profile_access_grant": grant}
+    def health(
+        database: Annotated[DatabaseSession, Depends(get_db)],
+    ) -> dict[str, object]:
+        try:
+            database.execute(text("select 1"))
+        except Exception as error:
+            raise ApiError(503, "database_unavailable", "数据库服务暂不可用。") from error
+        try:
+            storage.health_check()
+        except Exception as error:
+            raise ApiError(503, "object_storage_unavailable", "文件存储服务暂不可用。") from error
+        return {
+            "status": "ok",
+            "service": "counselor-assistant-api",
+            "components": {
+                "api": "ok",
+                "database": "ok",
+                "object_storage": "ok",
+            },
+        }
 
     @app.post("/api/v1/profiles", status_code=201)
     def create_profile(
         payload: CreateProfileRequest,
         user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
     ) -> dict[str, Any]:
-        profile = Profile(
+        now = utc_now()
+        profile = DatabaseProfile(
             id=str(uuid4()),
             user_id=user_id,
             type=payload.type,
@@ -209,100 +190,318 @@ def create_app() -> FastAPI:
             status=payload.status,
             crisis_level=payload.crisis_level,
             initial_session_count=payload.initial_session_count,
+            code=payload.code,
+            next_session_at=payload.next_session_at,
+            metadata_json=payload.metadata,
+            notes=payload.notes,
+            created_at=now,
+            updated_at=now,
         )
-        state.profiles[profile.id] = profile
-        return serialize_profile(profile)
+        database.add(profile)
+        sync_profile_next_session_event(database, profile)
+        database.commit()
+        return serialize_profile(profile, latest_sequence=profile.initial_session_count)
+
+    @app.get("/api/v1/profiles")
+    def list_profiles(
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
+        type: str | None = None,
+        keyword: str | None = None,
+        status: str | None = None,
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        query = select(DatabaseProfile).where(DatabaseProfile.user_id == user_id)
+        if type:
+            query = query.where(DatabaseProfile.type == type)
+        if status:
+            query = query.where(DatabaseProfile.status == status)
+        if keyword and keyword.strip():
+            search = f"%{keyword.strip()}%"
+            query = query.where(
+                or_(
+                    DatabaseProfile.name.ilike(search),
+                    DatabaseProfile.code.ilike(search),
+                )
+            )
+        total = database.scalar(select(func.count()).select_from(query.subquery())) or 0
+        items = database.scalars(
+            query
+            .order_by(DatabaseProfile.created_at.desc(), DatabaseProfile.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+        return {
+            "items": [
+                serialize_profile(
+                    profile,
+                    latest_sequence=max(
+                        database.scalar(
+                            select(func.max(SessionRecord.sequence_no)).where(
+                                SessionRecord.profile_id == profile.id,
+                                SessionRecord.user_id == user_id,
+                            )
+                        ) or 0,
+                        profile.initial_session_count,
+                    ),
+                    session_count=database.scalar(
+                        select(func.count())
+                        .select_from(SessionRecord)
+                        .where(
+                            SessionRecord.profile_id == profile.id,
+                            SessionRecord.user_id == user_id,
+                        )
+                    ) or 0,
+                )
+                for profile in items
+            ],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+        }
 
     @app.get("/api/v1/profiles/{profile_id}")
     def profile_detail(
         profile_id: str,
         user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
         x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
-        profile = get_profile(profile_id, user_id)
-        require_profile_access(profile, user_id, x_profile_access_grant)
-        return serialize_profile(profile)
+        profile = get_profile(profile_id, user_id, database)
+        require_profile_access(profile, user_id, database, x_profile_access_grant)
+        latest_sequence = database.scalar(
+            select(func.max(SessionRecord.sequence_no)).where(
+                SessionRecord.profile_id == profile.id,
+                SessionRecord.user_id == user_id,
+            )
+        )
+        return serialize_profile(
+            profile,
+            latest_sequence=max(latest_sequence or 0, profile.initial_session_count),
+            session_count=database.scalar(
+                select(func.count())
+                .select_from(SessionRecord)
+                .where(
+                    SessionRecord.profile_id == profile.id,
+                    SessionRecord.user_id == user_id,
+                )
+            ) or 0,
+        )
+
+    @app.patch("/api/v1/profiles/{profile_id}")
+    def update_profile(
+        profile_id: str,
+        payload: UpdateProfileRequest,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
+        x_profile_access_grant: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        profile = get_profile(profile_id, user_id, database)
+        require_profile_access(profile, user_id, database, x_profile_access_grant)
+        field_map = {
+            "name": "name",
+            "code": "code",
+            "status": "status",
+            "crisis_level": "crisis_level",
+            "initial_session_count": "initial_session_count",
+            "next_session_at": "next_session_at",
+            "metadata": "metadata_json",
+            "notes": "notes",
+        }
+        for request_field, model_field in field_map.items():
+            if request_field in payload.model_fields_set:
+                setattr(profile, model_field, getattr(payload, request_field))
+        profile.updated_at = utc_now()
+        sync_profile_next_session_event(database, profile)
+        database.commit()
+        latest_sequence = database.scalar(
+            select(func.max(SessionRecord.sequence_no)).where(
+                SessionRecord.profile_id == profile.id,
+                SessionRecord.user_id == user_id,
+            )
+        )
+        return serialize_profile(
+            profile,
+            latest_sequence=max(latest_sequence or 0, profile.initial_session_count),
+            session_count=database.scalar(
+                select(func.count())
+                .select_from(SessionRecord)
+                .where(
+                    SessionRecord.profile_id == profile.id,
+                    SessionRecord.user_id == user_id,
+                )
+            ) or 0,
+        )
+
+    @app.delete("/api/v1/profiles/{profile_id}")
+    def delete_profile(
+        profile_id: str,
+        payload: DeleteResourceRequest,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
+        x_profile_access_grant: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        if payload.confirmation_text != "删除档案":
+            raise ApiError(409, "profile_delete_confirmation_required", "请输入“删除档案”确认。")
+        profile = get_profile(profile_id, user_id, database)
+        require_profile_access(profile, user_id, database, x_profile_access_grant)
+        deleted_counts = cleanup_profile_resources(database, storage, profile=profile)
+        database.commit()
+        return {
+            "deleted": True,
+            "deleted_counts": deleted_counts,
+        }
+
+    @app.get("/api/v1/profiles/{profile_id}/sessions")
+    def list_sessions(
+        profile_id: str,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
+        x_profile_access_grant: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        profile = get_profile(profile_id, user_id, database)
+        require_profile_access(profile, user_id, database, x_profile_access_grant)
+        items = database.scalars(
+            select(SessionRecord)
+            .where(
+                SessionRecord.profile_id == profile_id,
+                SessionRecord.user_id == user_id,
+            )
+            .order_by(SessionRecord.occurred_at.desc())
+        ).all()
+        return {"items": [serialize_session(session) for session in items]}
 
     @app.post("/api/v1/profiles/{profile_id}/sessions", status_code=201)
     def create_session(
         profile_id: str,
         payload: CreateSessionRequest,
         user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
+        x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
-        profile = get_profile(profile_id, user_id)
-        existing = [session.sequence_no for session in state.sessions.values() if session.profile_id == profile.id]
-        sequence_no = max(existing, default=profile.initial_session_count) + 1
-        session = Session(
+        profile = database.scalar(
+            select(DatabaseProfile)
+            .where(
+                DatabaseProfile.id == profile_id,
+                DatabaseProfile.user_id == user_id,
+            )
+            .with_for_update()
+        )
+        if profile is None:
+            raise ApiError(404, "profile_not_found", "档案不存在。")
+        require_profile_access(profile, user_id, database, x_profile_access_grant)
+        expected_session_type = {
+            "client": "counseling",
+            "supervisor": "supervision_received",
+            "supervisee": "supervision_given",
+        }.get(profile.type)
+        if payload.session_type != expected_session_type:
+            raise ApiError(
+                422,
+                "session_type_profile_mismatch",
+                "记录类型与档案身份不匹配。",
+            )
+        current_max = database.scalar(
+            select(func.max(SessionRecord.sequence_no)).where(
+                SessionRecord.profile_id == profile.id,
+                SessionRecord.user_id == user_id,
+            )
+        )
+        sequence_no = max(current_max or 0, profile.initial_session_count) + 1
+        now = utc_now()
+        started_at = payload.started_at or payload.occurred_at or now
+        if payload.ended_at is not None and payload.ended_at < started_at:
+            raise ApiError(422, "session_time_invalid", "结束时间不能早于开始时间。")
+        session = SessionRecord(
             id=str(uuid4()),
             user_id=user_id,
             profile_id=profile.id,
             session_type=payload.session_type,
             sequence_no=sequence_no,
-            title=payload.title,
+            occurred_at=started_at,
+            ended_at=payload.ended_at,
+            mode=payload.mode,
+            summary=payload.summary or payload.title or "",
+            tags=payload.tags,
+            record_status="pending",
+            created_at=now,
+            updated_at=now,
         )
-        state.sessions[session.id] = session
-        return {
-            "id": session.id,
-            "profile_id": session.profile_id,
-            "session_type": session.session_type,
-            "sequence_no": session.sequence_no,
-            "title": session.title,
-        }
+        database.add(session)
+        database.commit()
+        return serialize_session(session)
 
-    @app.post("/api/v1/recordings", status_code=201)
-    def create_recording(
-        payload: CreateRecordingRequest,
+    @app.patch("/api/v1/sessions/{session_id}")
+    def update_session(
+        session_id: str,
+        payload: UpdateSessionRequest,
         user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
+        x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
-        recording = Recording(id=str(uuid4()), user_id=user_id, title=payload.title, source_type=payload.source_type)
-        state.recordings[recording.id] = recording
-        return {"id": recording.id, "title": recording.title, "source_type": recording.source_type}
-
-    @app.post("/api/v1/recordings/{recording_id}/audio")
-    def complete_recording_audio(
-        recording_id: str,
-        payload: CompleteAudioRequest,
-        user_id: Annotated[str, Depends(current_user_id)],
-    ) -> dict[str, Any]:
-        recording = state.recordings.get(recording_id)
-        if recording is None or recording.user_id != user_id:
-            raise ApiError(404, "recording_not_found", "录音不存在。")
-        recording.duration_seconds = payload.duration_seconds
-        recording.audio_expires_at = utc_now() + timedelta(days=14)
-        state.sensitive_resources.append(
-            SensitiveResource(
-                resource_type="audio",
-                resource_id=recording.id,
-                user_id=user_id,
-                display_name=recording.title,
-                expires_at=recording.audio_expires_at,
-                can_long_term_preserve=False,
+        session = database.scalar(
+            select(SessionRecord).where(
+                SessionRecord.id == session_id,
+                SessionRecord.user_id == user_id,
             )
         )
-        return {
-            "audio_expires_at": iso(recording.audio_expires_at),
-            "can_long_term_preserve_audio": False,
-        }
+        if session is None:
+            raise ApiError(404, "session_not_found", "记录不存在。")
+        profile = get_profile(session.profile_id, user_id, database)
+        require_profile_access(profile, user_id, database, x_profile_access_grant)
+        started_at = payload.started_at or payload.occurred_at
+        if started_at is not None:
+            session.occurred_at = started_at
+        if "ended_at" in payload.model_fields_set:
+            session.ended_at = payload.ended_at
+        if session.ended_at is not None and session.ended_at < session.occurred_at:
+            raise ApiError(422, "session_time_invalid", "结束时间不能早于开始时间。")
+        if "mode" in payload.model_fields_set:
+            session.mode = payload.mode
+        if payload.summary is not None:
+            session.summary = payload.summary
+        if payload.tags is not None:
+            session.tags = list(dict.fromkeys(payload.tags))[:4]
+        session.updated_at = utc_now()
+        database.commit()
+        return serialize_session(session)
 
-    @app.get("/api/v1/privacy/expiring-resources")
-    def expiring_resources(user_id: Annotated[str, Depends(current_user_id)]) -> dict[str, Any]:
-        items = [
-            {
-                "resource_type": resource.resource_type,
-                "resource_id": resource.resource_id,
-                "display_name": resource.display_name,
-                "can_long_term_preserve": resource.can_long_term_preserve,
-                "expires_at": iso(resource.expires_at),
-            }
-            for resource in state.sensitive_resources
-            if resource.user_id == user_id
-        ]
-        return {"items": items}
+    @app.delete("/api/v1/sessions/{session_id}")
+    def delete_session(
+        session_id: str,
+        payload: DeleteResourceRequest,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[DatabaseSession, Depends(get_db)],
+        x_profile_access_grant: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        if payload.confirmation_text != "删除记录":
+            raise ApiError(409, "session_delete_confirmation_required", "请输入“删除记录”确认。")
+        session = database.scalar(
+            select(SessionRecord).where(
+                SessionRecord.id == session_id,
+                SessionRecord.user_id == user_id,
+            )
+        )
+        if session is None:
+            raise ApiError(404, "session_not_found", "记录不存在。")
+        profile = get_profile(session.profile_id, user_id, database)
+        require_profile_access(profile, user_id, database, x_profile_access_grant)
+        deleted_counts = cleanup_session_resources(database, storage, session=session)
+        database.commit()
+        return {
+            "deleted": True,
+            "deleted_counts": deleted_counts,
+        }
 
     return app
 
 
-def serialize_profile(profile: Profile) -> dict[str, Any]:
+def serialize_profile(
+    profile: Any,
+    latest_sequence: int | None = None,
+    session_count: int = 0,
+) -> dict[str, Any]:
     return {
         "id": profile.id,
         "type": profile.type,
@@ -310,6 +509,32 @@ def serialize_profile(profile: Profile) -> dict[str, Any]:
         "status": profile.status,
         "crisis_level": profile.crisis_level,
         "initial_session_count": profile.initial_session_count,
+        "latest_sequence": latest_sequence if latest_sequence is not None else profile.initial_session_count,
+        "session_count": session_count,
+        "code": getattr(profile, "code", None),
+        "next_session_at": iso(profile.next_session_at) if getattr(profile, "next_session_at", None) else None,
+        "metadata": getattr(profile, "metadata_json", {}),
+        "notes": getattr(profile, "notes", ""),
+        "created_at": iso(profile.created_at),
+        "updated_at": iso(profile.updated_at),
+    }
+
+
+def serialize_session(session: SessionRecord) -> dict[str, Any]:
+    return {
+        "id": session.id,
+        "profile_id": session.profile_id,
+        "session_type": session.session_type,
+        "sequence_no": session.sequence_no,
+        "started_at": iso(session.occurred_at),
+        "occurred_at": iso(session.occurred_at),
+        "ended_at": iso(session.ended_at) if session.ended_at else None,
+        "mode": session.mode,
+        "summary": session.summary,
+        "tags": session.tags,
+        "record_status": session.record_status,
+        "created_at": iso(session.created_at),
+        "updated_at": iso(session.updated_at),
     }
 
 

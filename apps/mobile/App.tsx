@@ -1,5 +1,11 @@
 import { StatusBar } from "expo-status-bar";
 import {
+  RecordingPresets,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  useAudioRecorder,
+} from "expo-audio";
+import {
   Bell,
   BookOpenText,
   CalendarDays,
@@ -17,6 +23,7 @@ import {
   History,
   Home,
   LockKeyhole,
+  LogOut,
   Mic,
   Newspaper,
   Pause,
@@ -28,15 +35,16 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
-  Square,
   Upload,
   X,
   Trash2,
   UserRound,
 } from "lucide-react-native";
-import { useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useState } from "react";
 import {
   SafeAreaView,
+  ActivityIndicator,
+  Platform,
   StyleSheet,
   Text,
   TextInput,
@@ -47,24 +55,56 @@ import {
 } from "react-native";
 
 import { buildArchiveResult, describeArchiveTarget, filterArchiveCandidates, type ArchiveKind } from "./src/archiveFlow";
-import { buildNewProfile, filterProfiles, type ProfileFilter, type ProfileListItem } from "./src/profileLibrary";
-import { describeRecordingContext, getRecordingDestination, toArchiveRecording, type ArchiveRecording } from "./src/recordingFlow";
-import { getAuthorizableResources, mergeAuthorizedResources, type PrivacyResource } from "./src/privacyFlow";
-import { getSelectableCaseReportMaterials, type CaseReportMaterial } from "./src/caseReportFlow";
+import { filterProfiles, type ProfileFilter, type ProfileListItem } from "./src/profileLibrary";
+import { ApiClient, ApiError } from "./src/api/apiClient";
+import { configuredApiBaseUrl } from "./src/api/apiConfig";
+import { createAuthService, type CurrentUser } from "./src/api/authService";
+import { createAttachmentService, type ProfileAttachment } from "./src/api/attachmentService";
+import { createBackendFileService } from "./src/api/fileService";
+import { createProfileAccessService } from "./src/api/profileAccessService";
+import { createProfileService } from "./src/api/profileService";
+import { createRecordingService, type Recording } from "./src/api/recordingService";
+import { createJobService, type AIJob } from "./src/api/jobService";
+import { createReportService, type Report, type ReportSource } from "./src/api/reportService";
+import { createPrivacyService, type SensitiveResource } from "./src/api/privacyService";
+import { createCalendarService, type CalendarEvent } from "./src/api/calendarService";
+import { createSupervisionService, type SupervisionConversation } from "./src/api/supervisionService";
+import { createSessionService } from "./src/api/sessionService";
+import { createDeviceAuthSessionStore } from "./src/native/deviceAuthSession";
+import { pickLocalFile } from "./src/native/filePicker";
+import { downloadAndShareFile, uploadLocalFile } from "./src/native/fileTransfer";
+import {
+  createAudioRecordingController,
+  createExpoAudioDriver,
+  recordingMimeType,
+  toRecordedLocalFile,
+  type RecordedLocalAudio,
+} from "./src/native/audioRecording";
+import { toggleAudioPlayback } from "./src/native/audioPlayback";
+import {
+  createExpoCalendarDriver,
+  syncCalendarEvent,
+} from "./src/native/calendarSync";
+import {
+  describeRecordingContext,
+  getRecordingDestination,
+  recordingAudioCanProcess,
+  recordingDetailRequiresProfileUnlock,
+  toArchiveRecording,
+  waitForRecordingJob,
+  type ArchiveRecording,
+} from "./src/recordingFlow";
 import { buildDownloadArtifact, scheduleDownload } from "./src/downloadFlow";
 import {
-  createUnconfiguredFileService,
   getOriginalFileDownloadState,
   type StoredFileReference,
 } from "./src/fileService";
 import { decideRecordingRegeneration, updateAtIndex } from "./src/recordingEditorFlow";
 import {
-  addSessionMaterial,
   getMaterialUpdateMessage,
   materialCategoryCopy,
   removeMaterialsForSession,
   removeSessionMaterial,
-  updateSessionMaterial,
   type MaterialCategory,
   type SessionMaterial,
 } from "./src/sessionMaterials";
@@ -76,14 +116,14 @@ import {
   updateSession,
   type SessionHistoryItem,
 } from "./src/sessionHistory";
-import { buildSupervisionReply, type SupervisionContext } from "./src/supervisionFlow";
+import {
+  createConversationAndSelect,
+  deleteConversationAndSelect,
+  normalizeDisplayName,
+} from "./src/mvpUiFlows";
 import {
   formatBadge,
-  metrics,
-  privacyResources,
-  profiles,
   recordings,
-  reminders,
   recordSections,
   summaryChapters,
   transcriptTurns,
@@ -99,6 +139,7 @@ type QuickView =
   | "archive"
   | "archiveComplete"
   | "supervision"
+  | "profileUnlock"
   | "profileDetail"
   | "profileCreate"
   | "recordingDetail"
@@ -110,7 +151,6 @@ type QuickView =
   | "caseReportSelect"
   | "caseReportEditor"
   | "privacyCenter"
-  | "privacyConsent"
   | "articleDetail"
   | "statistics"
   | "schedule"
@@ -119,8 +159,16 @@ type Notice = { title: string; detail: string };
 type ArchiveResult = ReturnType<typeof buildArchiveResult>;
 type EditableRecordSection = { title: string; content: string };
 type EditableChapter = { time: string; title: string; current?: boolean };
-type EditableTranscriptTurn = { time: string; speaker: string; text: string };
+type EditableTranscriptTurn = {
+  id?: string;
+  speakerKey?: string;
+  time: string;
+  speaker: string;
+  text: string;
+};
 type RecordingItem = {
+  id?: string;
+  sessionId?: string;
   title: string;
   duration: string;
   status: string;
@@ -129,6 +177,8 @@ type RecordingItem = {
   profileName: string | null;
   kindLabel: "来访者" | "督导师" | "受督者" | null;
   recordLabel: string | null;
+  processingError?: string | null;
+  audioFileId?: string | null;
 };
 type PreviewFile = {
   id: string;
@@ -140,30 +190,31 @@ type PreviewFile = {
   file: StoredFileReference | null;
 };
 
-const fileService = createUnconfiguredFileService();
-
-function mimeTypeForLabel(fileType: string): string {
-  if (fileType === "PDF") return "application/pdf";
-  if (fileType === "图片") return "image/jpeg";
-  if (fileType === "音频") return "audio/mp4";
-  if (fileType === "文字备注") return "text/plain";
-  return "application/octet-stream";
+function sectionsFromReport(report: Report, formal: boolean): EditableRecordSection[] {
+  const content = formal && report.formalContent ? report.formalContent : report.draftContent;
+  const blocks = Array.isArray(content.blocks)
+    ? content.blocks as Array<{ title?: string; content?: string }>
+    : [];
+  return blocks.map((block, index) => ({
+    title: block.title ?? `第 ${index + 1} 部分`,
+    content: block.content ?? "",
+  }));
 }
 
-function prototypeFile(
-  filename: string,
-  mimeType: string,
-  uploadStatus: StoredFileReference["uploadStatus"] = "pending",
-): StoredFileReference {
-  return {
-    fileId: null,
-    filename,
-    mimeType,
-    sizeBytes: null,
-    uploadStatus,
-    sourceKind: "prototype",
-  };
-}
+const apiClient = new ApiClient(configuredApiBaseUrl());
+const authService = createAuthService(apiClient);
+const authSessionStore = createDeviceAuthSessionStore();
+const profileService = createProfileService(apiClient);
+const profileAccessService = createProfileAccessService(apiClient);
+const sessionService = createSessionService(apiClient);
+const attachmentService = createAttachmentService(apiClient);
+const fileService = createBackendFileService(apiClient);
+const recordingService = createRecordingService(apiClient);
+const jobService = createJobService(apiClient);
+const reportService = createReportService(apiClient);
+const privacyService = createPrivacyService(apiClient);
+const calendarService = createCalendarService(apiClient);
+const supervisionService = createSupervisionService(apiClient);
 
 const articles = [
   {
@@ -198,81 +249,6 @@ const articles = [
       "写明已完成的评估、告知、转介或紧急联系，以及相关时间点。",
       "保留下一次复核安排，并在风险变化时更新正式记录。",
     ],
-  },
-];
-
-const initialSessionHistory: SessionHistoryItem[] = [
-  {
-    id: "session-6",
-    sequence: 6,
-    occurredAt: "2026-06-05T10:00:00+08:00",
-    summary: "围绕睡眠下降、工作评价焦虑和关系议题展开。",
-    tags: ["焦虑", "睡眠"],
-    recording: "剩余 13 天",
-    record: "草稿",
-    scale: "未上传",
-    homework: "已布置",
-    other: "1 项",
-  },
-  {
-    id: "session-5",
-    sequence: 5,
-    occurredAt: "2026-05-29T10:00:00+08:00",
-    summary: "梳理近期压力事件，并继续识别自动化想法。",
-    tags: ["长期保存", "正式版"],
-    recording: "已销毁",
-    record: "正式版",
-    scale: "SAS",
-    homework: "已提交",
-    other: "无",
-  },
-];
-
-const initialSessionMaterials: SessionMaterial[] = [
-  {
-    id: "session-6-recording-1",
-    sessionId: "session-6",
-    category: "recording",
-    title: "第 6 次咨询原始录音",
-    meta: "音频 · 52:18 · 剩余 13 天",
-    preservable: false,
-    file: prototypeFile("第 6 次咨询原始录音.m4a", "audio/mp4"),
-  },
-  {
-    id: "session-6-scale-1",
-    sessionId: "session-6",
-    category: "scale",
-    title: "SAS 焦虑自评量表",
-    meta: "PDF · 6月5日上传 · 可参与记录生成",
-    preservable: true,
-    file: prototypeFile("SAS 焦虑自评量表.pdf", "application/pdf"),
-  },
-  {
-    id: "session-6-homework-1",
-    sessionId: "session-6",
-    category: "homework",
-    title: "睡前想法记录",
-    meta: "图片 · 已提交 · 可参与记录生成",
-    preservable: true,
-    file: prototypeFile("睡前想法记录.jpg", "image/jpeg"),
-  },
-  {
-    id: "session-6-other-1",
-    sessionId: "session-6",
-    category: "other",
-    title: "工作事件时间线",
-    meta: "PDF · 已解析文字 · 可参与记录生成",
-    preservable: true,
-    file: prototypeFile("工作事件时间线.pdf", "application/pdf"),
-  },
-  {
-    id: "session-5-scale-1",
-    sessionId: "session-5",
-    category: "scale",
-    title: "SAS 初测",
-    meta: "PDF · 5月29日上传 · 长期保存",
-    preservable: true,
-    file: prototypeFile("SAS 初测.pdf", "application/pdf"),
   },
 ];
 
@@ -314,24 +290,6 @@ function getCaseReportSections(): EditableRecordSection[] {
   ];
 }
 
-function getProfileSessions(profile: ArchiveResult): SessionHistoryItem[] {
-  if (profile.profileName === "陈雨") return initialSessionHistory;
-  if (profile.recordLabel === "尚无记录") return [];
-  const sequence = Number(profile.recordLabel.match(/\d+/)?.[0] ?? 1);
-  return [{
-    id: `session-${sequence}`,
-    sequence,
-    occurredAt: "2026-06-08T18:00:00+08:00",
-    summary: "录音已归档，完整转写和录音纪要正在后台生成。",
-    tags: ["处理中"],
-    recording: "剩余 13 天",
-    record: "待生成",
-    scale: "未上传",
-    homework: "未添加",
-    other: "无",
-  }];
-}
-
 function normalizeSessionDate(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -339,7 +297,78 @@ function normalizeSessionDate(value: string): string {
   return `${trimmed.replace(" ", "T")}:00+08:00`;
 }
 
+function formatDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function parseDuration(value: string): number {
+  const parts = value.split(":").map(Number);
+  if (parts.some(Number.isNaN)) return 0;
+  return parts.reduce((total, part) => total * 60 + part, 0);
+}
+
+function recordingTtl(recording: Recording): string {
+  if (recording.audioDestroyedAt) return "原始录音已销毁";
+  if (!recording.audioExpiresAt) return "未上传原始录音";
+  const remaining = Math.max(
+    0,
+    Math.ceil((new Date(recording.audioExpiresAt).getTime() - Date.now()) / 86_400_000),
+  );
+  return remaining > 0 ? `剩余 ${remaining} 天` : "等待销毁";
+}
+
+function mapRecordingItem(recording: Recording): RecordingItem {
+  const labels: Record<ArchiveKind, RecordingItem["kindLabel"]> = {
+    client: "来访者",
+    supervisor: "督导师",
+    supervisee: "受督者",
+  };
+  const recordNoun = recording.profile?.type === "client"
+    ? "咨询"
+    : recording.profile?.type === "supervisor"
+      ? "受督"
+      : "督导";
+  const status = recording.aiStatus === "completed"
+    ? "可查看"
+    : recording.aiStatus === "failed"
+      ? "处理失败"
+      : recording.aiStatus === "processing"
+        ? "生成中"
+        : "待处理";
+  return {
+    id: recording.id,
+    sessionId: recording.session?.id,
+    title: recording.title,
+    duration: recording.durationSeconds == null ? "待识别" : formatDuration(recording.durationSeconds),
+    status,
+    archive: recording.archiveStatus === "archived" ? "已归档" : "待归档",
+    ttl: recordingTtl(recording),
+    profileName: recording.profile?.name ?? null,
+    kindLabel: recording.profile ? labels[recording.profile.type] : null,
+    recordLabel: recording.session ? `第 ${recording.session.sequenceNo} 次${recordNoun}` : null,
+    processingError: recording.processingError,
+    audioFileId: recording.audioFileId,
+  };
+}
+
+function archiveKindForProfile(profile: ProfileListItem): ArchiveKind {
+  if (profile.type === "督导师") return "supervisor";
+  if (profile.type === "受督者") return "supervisee";
+  return "client";
+}
+
+function archiveKindForLabel(label: ArchiveResult["kindLabel"]): ArchiveKind {
+  if (label === "督导师") return "supervisor";
+  if (label === "受督者") return "supervisee";
+  return "client";
+}
+
 export default function App() {
+  const [authStatus, setAuthStatus] = useState<"loading" | "guest" | "authenticated">("loading");
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("home");
   const [quickView, setQuickView] = useState<QuickView>("overview");
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -348,11 +377,18 @@ export default function App() {
     title: "新录音 06-07",
     duration: "42:18",
   });
+  const [archiveRecordingId, setArchiveRecordingId] = useState<string | null>(null);
+  const [archiveAudioFileId, setArchiveAudioFileId] = useState<string | null>(null);
   const [archiveReturn, setArchiveReturn] = useState<QuickView>("recording");
   const [activeRecording, setActiveRecording] = useState<RecordingItem>(recordings[0]);
-  const [authorizedResources, setAuthorizedResources] = useState<string[]>([]);
-  const [consentResources, setConsentResources] = useState<PrivacyResource[]>(getAuthorizableResources(privacyResources));
-  const [profileItems, setProfileItems] = useState<ProfileListItem[]>(profiles);
+  const [recordingItems, setRecordingItems] = useState<RecordingItem[]>([]);
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [activeRecordingJob, setActiveRecordingJob] = useState<AIJob | null>(null);
+  const [recordingProcessingBusy, setRecordingProcessingBusy] = useState(false);
+  const [profileItems, setProfileItems] = useState<ProfileListItem[]>([]);
+  const [dashboardEvents, setDashboardEvents] = useState<CalendarEvent[]>([]);
+  const [profilesLoading, setProfilesLoading] = useState(true);
+  const [profilesError, setProfilesError] = useState<string | null>(null);
   const [recordEditorReturn, setRecordEditorReturn] = useState<QuickView>("profileDetail");
   const [privacyReturn, setPrivacyReturn] = useState<{ quickView: QuickView; tab: TabKey }>({
     quickView: "overview",
@@ -363,19 +399,26 @@ export default function App() {
     kindLabel: "来访者",
     recordLabel: "第 6 次咨询",
   });
+  const [activeProfileId, setActiveProfileId] = useState("profile-chen-yu");
+  const [pendingProfile, setPendingProfile] = useState<ProfileListItem | null>(null);
+  const [pendingRecordingAfterUnlock, setPendingRecordingAfterUnlock] = useState<RecordingItem | null>(null);
+  const [profilePasswordSet, setProfilePasswordSet] = useState(false);
   const [recordEditorSections, setRecordEditorSections] = useState<EditableRecordSection[]>(getRecordEditorSections("来访者"));
   const [recordFormal, setRecordFormal] = useState(false);
   const [recordDirty, setRecordDirty] = useState(true);
+  const [activeRecordReportId, setActiveRecordReportId] = useState<string | null>(null);
   const [caseReportSections, setCaseReportSections] = useState<EditableRecordSection[]>(getCaseReportSections());
   const [caseReportFormal, setCaseReportFormal] = useState(false);
-  const [sessionHistory, setSessionHistory] = useState<SessionHistoryItem[]>(initialSessionHistory);
-  const [sessionMaterials, setSessionMaterials] = useState<SessionMaterial[]>(initialSessionMaterials);
+  const [caseReportSources, setCaseReportSources] = useState<ReportSource[]>([]);
+  const [activeCaseReportId, setActiveCaseReportId] = useState<string | null>(null);
+  const [sessionHistory, setSessionHistory] = useState<SessionHistoryItem[]>([]);
+  const [sessionMaterials, setSessionMaterials] = useState<SessionMaterial[]>([]);
   const [activeMaterialCategory, setActiveMaterialCategory] = useState<MaterialCategory>("recording");
   const [activeSessionId, setActiveSessionId] = useState("session-6");
   const [materialReturn, setMaterialReturn] = useState<QuickView>("profileDetail");
   const [filePreviewReturn, setFilePreviewReturn] = useState<QuickView>("sessionMaterials");
   const [activeFile, setActiveFile] = useState<PreviewFile | null>(null);
-  const [legalFileNames, setLegalFileNames] = useState<Record<string, string>>({});
+  const [legalAttachments, setLegalAttachments] = useState<ProfileAttachment[]>([]);
   const [recordingSummary, setRecordingSummary] = useState(describeRecordingContext(recordings[0].title).summary);
   const [recordingChapters, setRecordingChapters] = useState<EditableChapter[]>(summaryChapters);
   const [recordingTurns, setRecordingTurns] = useState<EditableTranscriptTurn[]>(transcriptTurns);
@@ -384,17 +427,236 @@ export default function App() {
   const { width } = useWindowDimensions();
   const isCompact = width < 430;
   const showNotice = (title: string, detail: string) => setNotice({ title, detail });
+  const errorMessage = (error: unknown) => error instanceof ApiError ? error.message : "无法连接后端服务，请稍后重试。";
+  const loadProfiles = async () => {
+    setProfilesLoading(true);
+    setProfilesError(null);
+    try {
+      setProfileItems(await profileService.list());
+    } catch (error) {
+      setProfilesError(errorMessage(error));
+    } finally {
+      setProfilesLoading(false);
+    }
+  };
+  const loadRecordings = async () => {
+    setRecordingsLoading(true);
+    try {
+      const response = await recordingService.list({ pageSize: 100 });
+      setRecordingItems(response.items.map(mapRecordingItem));
+    } catch (error) {
+      showNotice("录音列表加载失败", errorMessage(error));
+    } finally {
+      setRecordingsLoading(false);
+    }
+  };
+  const refreshRecording = async (recordingId: string): Promise<RecordingItem | null> => {
+    const response = await recordingService.list({ pageSize: 100 });
+    const items = response.items.map(mapRecordingItem);
+    setRecordingItems(items);
+    const refreshed = items.find((item) => item.id === recordingId) ?? null;
+    if (refreshed) setActiveRecording(refreshed);
+    return refreshed;
+  };
+  const runRecordingProcessing = async (
+    recordingId: string,
+    retry: boolean,
+  ): Promise<RecordingItem | null> => {
+    setRecordingProcessingBusy(true);
+    setActiveRecordingJob(null);
+    setActiveRecording((current) => current.id === recordingId
+      ? { ...current, status: "生成中", processingError: null }
+      : current);
+    try {
+      const command = retry
+        ? await recordingService.retry(recordingId)
+        : await recordingService.process(recordingId, "archived_context");
+      const job = await waitForRecordingJob(jobService.get, command.job_id);
+      setActiveRecordingJob(job);
+      const refreshed = await refreshRecording(recordingId);
+      if (job.status === "failed") {
+        showNotice("录音处理失败", job.error?.message ?? "模型服务暂时不可用，可以稍后重试。");
+      }
+      return refreshed;
+    } catch (error) {
+      const refreshed = await refreshRecording(recordingId).catch(() => null);
+      showNotice("录音处理失败", errorMessage(error));
+      return refreshed;
+    } finally {
+      setRecordingProcessingBusy(false);
+    }
+  };
+  const loadRecordingDetail = async (recording: RecordingItem) => {
+    if (!recording.id) return;
+    const [summary, transcript] = await Promise.all([
+      recordingService.summary(recording.id),
+      recordingService.transcript(recording.id),
+    ]);
+    setRecordingSummary(summary.mainSummary);
+    setRecordingChapters(summary.chapterOverview.map((chapter, index) => {
+      const startMs = Number(chapter.start_ms ?? 0);
+      return {
+        time: typeof chapter.time === "string"
+          ? chapter.time
+          : formatDuration(Math.max(0, Math.floor(startMs / 1000))),
+        title: String(chapter.title ?? chapter.label ?? `章节 ${index + 1}`),
+        current: index === 0,
+      };
+    }));
+    setRecordingTurns(transcript.segments.map((segment) => ({
+      id: segment.id,
+      speakerKey: segment.speaker_key,
+      time: formatDuration(Math.floor(segment.start_ms / 1000)),
+      speaker: segment.speaker_label,
+      text: segment.text,
+    })));
+    setRecordingHasEdits(summary.manualEdited || transcript.manualEdited);
+  };
+  const loadProfileData = async (profileId: string) => {
+    try {
+      const [sessions, profileAttachments] = await Promise.all([
+        sessionService.list(profileId),
+        attachmentService.listProfile(profileId),
+      ]);
+      setSessionHistory(sessions);
+      setLegalAttachments(profileAttachments);
+      const materials = (await Promise.all(
+        sessions.map((session) => attachmentService.listSession(session.id)),
+      )).flat();
+      setSessionMaterials(materials);
+    } catch (error) {
+      setSessionHistory([]);
+      setSessionMaterials([]);
+      setLegalAttachments([]);
+      showNotice("档案数据加载失败", errorMessage(error));
+    }
+  };
+  const selectProfile = (profile: ProfileListItem) => {
+    const recordNoun = profile.type === "来访者" ? "咨询" : profile.type === "督导师" ? "受督" : "督导";
+    setActiveProfileId(profile.id);
+    setActiveProfile({
+      profileName: profile.name,
+      kindLabel: profile.type,
+      recordLabel: profile.count === "尚无记录" ? profile.count : `${profile.count}${recordNoun}`,
+    });
+    void loadProfileData(profile.id);
+  };
+  const openRecording = async (recording: RecordingItem) => {
+    const destination = getRecordingDestination(recording);
+    setActiveRecording(recording);
+    setArchiveRecordingId(recording.id ?? null);
+    setArchiveAudioFileId(recording.audioFileId ?? null);
+    const storedProfile = recording.profileName
+      ? profileItems.find((profile) => profile.name === recording.profileName)
+      : undefined;
+    if (recording.profileName && recording.kindLabel && recording.recordLabel) {
+      setActiveProfile({
+        profileName: recording.profileName,
+        kindLabel: recording.kindLabel,
+        recordLabel: recording.recordLabel,
+      });
+    }
+    if (destination === "archive") {
+      setArchiveRecording(toArchiveRecording(recording));
+      setArchiveReturn("recordingRecords");
+      setQuickView("archive");
+      return;
+    }
+    if (destination === "processing") {
+      setActiveRecordingJob(null);
+      setQuickView("recordingProcessing");
+      return;
+    }
+    if (recordingDetailRequiresProfileUnlock({
+      destination,
+      profileName: recording.profileName,
+      kindLabel: recording.kindLabel,
+    }) && storedProfile) {
+      try {
+        const kind = archiveKindForProfile(storedProfile);
+        const statuses = await profileAccessService.statuses();
+        setPendingProfile(storedProfile);
+        setPendingRecordingAfterUnlock(recording);
+        setProfilePasswordSet(statuses.find((item) => item.profile_type === kind)?.is_set ?? false);
+        setQuickView("profileUnlock");
+      } catch (error) {
+        showNotice("无法打开录音内容", errorMessage(error));
+      }
+      return;
+    }
+    try {
+      await loadRecordingDetail(recording);
+      setQuickView("recordingDetail");
+    } catch (error) {
+      showNotice("录音内容加载失败", errorMessage(error));
+    }
+  };
+  const openProfile = async (profile: ProfileListItem) => {
+    try {
+      const kind = archiveKindForProfile(profile);
+      const statuses = await profileAccessService.statuses();
+      setPendingProfile(profile);
+      setPendingRecordingAfterUnlock(null);
+      setProfilePasswordSet(statuses.find((item) => item.profile_type === kind)?.is_set ?? false);
+      setQuickView("profileUnlock");
+    } catch (error) {
+      showNotice("无法进入档案", errorMessage(error));
+    }
+  };
   const prepareRecordEditor = (kindLabel: string, returnView: QuickView) => {
+    setActiveRecordReportId(null);
     setRecordEditorReturn(returnView);
     setRecordEditorSections(getRecordEditorSections(kindLabel));
     setRecordFormal(false);
     setRecordDirty(true);
     setQuickView("recordEditor");
   };
-  const openPrivacy = (returnView: QuickView, resources: PrivacyResource[] = getAuthorizableResources(privacyResources)) => {
+  const openSessionRecord = async (sessionId: string, returnView: QuickView) => {
+    const reportType = activeProfile.kindLabel === "来访者"
+      ? "counseling_note"
+      : activeProfile.kindLabel === "督导师"
+        ? "supervision_feedback"
+        : "supervision_note";
+    try {
+      setActiveSessionId(sessionId);
+      setRecordEditorReturn(returnView);
+      let report = (await reportService.list({ sessionId, reportType }))[0];
+      if (!report) {
+        const sources = await reportService.generationSources({
+          reportType,
+          profileId: activeProfileId,
+          sessionId,
+        });
+        const generated = await reportService.generate({
+          reportType,
+          profileId: activeProfileId,
+          sessionId,
+          selectedSources: sources
+            .filter((source) => source.defaultSelected && source.analysisStatus === "available")
+            .map((source) => ({
+              resourceType: source.resourceType,
+              resourceId: source.resourceId,
+            })),
+        });
+        report = await reportService.get(generated.reportId);
+      }
+      const showFormal = Boolean(
+        report.formalContent
+        && sessionHistory.find((session) => session.id === sessionId)?.record === "正式版",
+      );
+      const sections = sectionsFromReport(report, showFormal);
+      setActiveRecordReportId(report.id);
+      setRecordEditorSections(sections.length ? sections : getRecordEditorSections(activeProfile.kindLabel));
+      setRecordFormal(showFormal);
+      setRecordDirty(false);
+      setQuickView("recordEditor");
+    } catch (error) {
+      showNotice("记录加载失败", errorMessage(error));
+    }
+  };
+  const openPrivacy = (returnView: QuickView) => {
     setPrivacyReturn({ quickView: returnView, tab });
-    setConsentResources(resources);
-    setQuickView("privacyConsent");
+    setQuickView("privacyCenter");
   };
   const resetRecordingEditor = (recording: RecordingItem) => {
     const context = describeRecordingContext(recording.title);
@@ -421,18 +683,43 @@ export default function App() {
     setActiveSessionId(sessionId);
     setMaterialReturn(returnView);
     setQuickView("sessionMaterials");
+    void attachmentService.listSession(sessionId, category)
+      .then((items) => setSessionMaterials((current) => [
+        ...current.filter((item) => item.sessionId !== sessionId || item.category !== category),
+        ...items,
+      ]))
+      .catch((error) => showNotice("附件加载失败", errorMessage(error)));
   };
   const openFilePreview = (file: PreviewFile, returnView: QuickView) => {
     setActiveFile(file);
     setFilePreviewReturn(returnView);
     setQuickView("filePreview");
   };
-  const handleBack = () => {
-    if (quickView === "privacyConsent") {
-      setTab(privacyReturn.tab);
-      setQuickView(privacyReturn.quickView);
-      return;
+  const pickAndUploadFile = async (
+    fileType: string,
+    purpose: "attachment" | "recording" = "attachment",
+  ) => {
+    const mimeTypes = fileType === "PDF"
+      ? "application/pdf"
+      : fileType === "图片"
+        ? ["image/jpeg", "image/png", "image/webp", "image/heic"]
+        : ["audio/mp4", "audio/mpeg", "audio/x-m4a", "audio/wav", "audio/webm"];
+    const picked = await pickLocalFile(mimeTypes);
+    if (!picked) return null;
+    if (picked.sizeBytes <= 0) {
+      throw new Error("无法读取文件大小，请重新选择本地文件。");
     }
+    const upload = await fileService.createUpload({
+      filename: picked.name,
+      mimeType: picked.mimeType,
+      sizeBytes: picked.sizeBytes,
+      purpose,
+    });
+    await uploadLocalFile(picked, upload.upload_url, upload.upload_headers);
+    const completed = await fileService.completeUpload(upload.file_id);
+    return { picked, stored: completed };
+  };
+  const handleBack = () => {
     if (quickView === "recordEditor") {
       setQuickView(recordEditorReturn);
       return;
@@ -462,17 +749,32 @@ export default function App() {
       return;
     }
     if (quickView === "archiveComplete" || quickView === "recordingDetail" || quickView === "recordingProcessing") {
+      if (quickView === "recordingDetail") profileAccessService.leaveProfile();
       setQuickView("recordingRecords");
       return;
     }
     if (quickView === "profileDetail" || quickView === "profileCreate") {
+      profileAccessService.leaveProfile();
       setTab("profiles");
       setQuickView("overview");
       return;
     }
+    if (quickView === "profileUnlock") {
+      const returnToRecordings = pendingRecordingAfterUnlock !== null;
+      profileAccessService.leaveProfile();
+      setPendingProfile(null);
+      setPendingRecordingAfterUnlock(null);
+      if (returnToRecordings) {
+        setQuickView("recordingRecords");
+      } else {
+        setTab("profiles");
+        setQuickView("overview");
+      }
+      return;
+    }
     if (quickView === "privacyCenter") {
-      setTab("account");
-      setQuickView("overview");
+      setTab(privacyReturn.tab);
+      setQuickView(privacyReturn.quickView);
       return;
     }
     if (quickView === "articleDetail") {
@@ -498,6 +800,53 @@ export default function App() {
   }, [quickView, tab]);
 
   useEffect(() => {
+    apiClient.setTokenChangeHandler((accessToken, nextRefreshToken) => {
+      setRefreshToken(nextRefreshToken);
+      if (nextRefreshToken) {
+        void authSessionStore.save({
+          accessToken,
+          refreshToken: nextRefreshToken,
+        });
+      } else {
+        void authSessionStore.clear();
+      }
+    });
+    void (async () => {
+      const session = await authSessionStore.load();
+      if (!session) {
+        setAuthStatus("guest");
+        return;
+      }
+      apiClient.setTokens(session.accessToken, session.refreshToken);
+      try {
+        setCurrentUser(await authService.me());
+        setAuthStatus("authenticated");
+      } catch {
+        apiClient.setTokens("demo-token", null);
+        await authSessionStore.clear();
+        setAuthStatus("guest");
+      }
+    })();
+    return () => apiClient.setTokenChangeHandler(null);
+  }, []);
+
+  useEffect(() => {
+    if (authStatus === "authenticated") {
+      void loadProfiles();
+      void loadRecordings();
+      void calendarService.listEvents()
+        .then((response) => setDashboardEvents(response.items))
+        .catch((error) => showNotice("日程加载失败", errorMessage(error)));
+    }
+  }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus === "authenticated" && quickView === "recordingRecords") {
+      void loadRecordings();
+    }
+  }, [authStatus, quickView]);
+
+  useEffect(() => {
     if (!notice) return;
     const timeout = setTimeout(() => setNotice(null), 3200);
     return () => clearTimeout(timeout);
@@ -510,6 +859,7 @@ export default function App() {
     if (quickView === "archive") return "归档确认";
     if (quickView === "archiveComplete") return "归档完成";
     if (quickView === "supervision") return "智能督导";
+    if (quickView === "profileUnlock") return "档案访问验证";
     if (quickView === "profileDetail") return "档案详情";
     if (quickView === "profileCreate") return "新增档案";
     if (quickView === "recordingDetail") return "录音纪要";
@@ -521,7 +871,6 @@ export default function App() {
     if (quickView === "caseReportSelect") return "生成个案报告";
     if (quickView === "caseReportEditor") return "个案报告编辑";
     if (quickView === "privacyCenter") return "数据与隐私";
-    if (quickView === "privacyConsent") return "长期保存授权";
     if (quickView === "articleDetail") return "资讯详情";
     if (quickView === "statistics") return "本周统计";
     if (quickView === "schedule") return "日程";
@@ -535,6 +884,7 @@ export default function App() {
     "recording",
     "archive",
     "profileCreate",
+    "profileUnlock",
     "recordEditor",
     "chapterEditor",
     "transcriptEditor",
@@ -542,12 +892,41 @@ export default function App() {
     "filePreview",
     "caseReportSelect",
     "caseReportEditor",
-    "privacyConsent",
     "articleDetail",
     "statistics",
     "schedule",
     "securitySettings",
   ].includes(quickView);
+
+  if (authStatus === "loading") {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.authLoading}>
+          <ActivityIndicator size="large" color={colors.clayDark} />
+          <Text style={styles.authLoadingText}>正在恢复安全会话...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (authStatus === "guest") {
+    return (
+      <AuthScreen
+        onLogin={async (email, password) => {
+          await authService.login(email, password);
+          const user = await authService.me();
+          setCurrentUser(user);
+          setAuthStatus("authenticated");
+        }}
+        onRegister={async (email, password, displayName) => {
+          await authService.register({ email, password, displayName });
+          const user = await authService.me();
+          setCurrentUser(user);
+          setAuthStatus("authenticated");
+        }}
+      />
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -557,87 +936,259 @@ export default function App() {
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {tab === "home" && quickView === "overview" ? (
             <HomeScreen
+              profiles={profileItems}
+              recordings={recordingItems}
+              events={dashboardEvents}
               onOpen={setQuickView}
               onOpenProfiles={() => setTab("profiles")}
               onOpenSchedule={() => setQuickView("schedule")}
               onOpenStatistics={() => setQuickView("statistics")}
             />
           ) : null}
-          {quickView === "recording" ? <RecordingScreen onCancel={() => setQuickView("overview")} onArchive={() => {
-            setArchiveRecording({ title: "新录音 06-07", duration: "42:18" });
-            setArchiveReturn("recording");
-            setQuickView("archive");
-          }} onNotice={showNotice} /> : null}
+          {quickView === "recording" ? <RecordingScreen
+            onCancel={() => setQuickView("overview")}
+            onSave={async (audio) => {
+              try {
+                const localFile = await toRecordedLocalFile(audio, Platform.OS);
+                const title = `新录音 ${new Date().toLocaleDateString("zh-CN")}`;
+                const upload = await fileService.createUpload({
+                  filename: localFile.name,
+                  mimeType: audio.mimeType,
+                  sizeBytes: localFile.sizeBytes,
+                  purpose: "recording",
+                });
+                await uploadLocalFile(localFile, upload.upload_url, upload.upload_headers);
+                const stored = await fileService.completeUpload(upload.file_id);
+                if (!stored.fileId) throw new Error("录音文件未完成上传。");
+                const recording = await recordingService.create(title, "in_app_recording");
+                await recordingService.bindAudio(
+                  recording.id,
+                  stored.fileId,
+                  audio.durationSeconds,
+                );
+                setArchiveRecordingId(recording.id);
+                setArchiveAudioFileId(stored.fileId);
+                setArchiveRecording({
+                  title,
+                  duration: formatDuration(audio.durationSeconds),
+                });
+                setArchiveReturn("recording");
+                setQuickView("archive");
+              } catch (error) {
+                showNotice("录音保存失败", errorMessage(error));
+              }
+            }}
+            onNotice={showNotice}
+          /> : null}
           {quickView === "recordingRecords" ? (
             <RecordingRecordsScreen
-              onOpen={(recording) => {
-                const destination = getRecordingDestination(recording);
-                setActiveRecording(recording);
-                resetRecordingEditor(recording);
-                if (recording.profileName && recording.kindLabel && recording.recordLabel) {
-                  const nextProfile = {
-                    profileName: recording.profileName,
-                    kindLabel: recording.kindLabel,
-                    recordLabel: recording.recordLabel,
-                  };
-                  setActiveProfile(nextProfile);
-                  setSessionHistory(getProfileSessions(nextProfile));
+              items={recordingItems}
+              loading={recordingsLoading}
+              onOpen={(recording) => void openRecording(recording)}
+              onUpload={async () => {
+                try {
+                  const uploaded = await pickAndUploadFile("音频", "recording");
+                  if (!uploaded?.stored.fileId) return;
+                  const recording = await recordingService.create(
+                    uploaded.picked.name.replace(/\.[^.]+$/, ""),
+                    "uploaded_audio",
+                  );
+                  await recordingService.bindAudio(recording.id, uploaded.stored.fileId, null);
+                  await loadRecordings();
+                  showNotice("录音已上传", "录音已进入待归档列表，选择档案后开始生成转写和纪要。");
+                } catch (error) {
+                  showNotice("录音上传失败", errorMessage(error));
                 }
-                if (destination === "archive") {
-                  setArchiveRecording(toArchiveRecording(recording));
-                  setArchiveReturn("recordingRecords");
-                }
-                setQuickView(destination === "archive" ? "archive" : destination === "processing" ? "recordingProcessing" : "recordingDetail");
               }}
               onNotice={showNotice}
             />
           ) : null}
-          {quickView === "recordingProcessing" ? <RecordingProcessingScreen recording={activeRecording} /> : null}
-          {quickView === "archive" ? <ArchiveScreen recording={archiveRecording} onNotice={showNotice} onComplete={(result) => {
-            setArchiveResult(result);
-            setQuickView("archiveComplete");
-          }} /> : null}
+          {quickView === "recordingProcessing" ? (
+            <RecordingProcessingScreen
+              recording={activeRecording}
+              job={activeRecordingJob}
+              busy={recordingProcessingBusy}
+              onRefresh={async () => {
+                if (!activeRecording.id) return;
+                try {
+                  await refreshRecording(activeRecording.id);
+                } catch (error) {
+                  showNotice("状态刷新失败", errorMessage(error));
+                }
+              }}
+              onRetry={async () => {
+                if (!activeRecording.id) return;
+                await runRecordingProcessing(
+                  activeRecording.id,
+                  activeRecording.status === "处理失败",
+                );
+              }}
+              onOpenResult={() => void openRecording(activeRecording)}
+            />
+          ) : null}
+          {quickView === "archive" ? <ArchiveScreen
+            recording={archiveRecording}
+            audioFileId={archiveAudioFileId}
+            profiles={profileItems}
+            onNotice={showNotice}
+            onArchive={async (input) => {
+              if (!archiveRecordingId) {
+                throw new Error("录音尚未保存到后端，请重新进入录音流程。");
+              }
+              const archived = await recordingService.archive(
+                archiveRecordingId,
+                {
+                  profileType: input.kind,
+                  profileId: input.profileId,
+                  createProfile: input.newProfileName
+                    ? { name: input.newProfileName, status: "active" }
+                    : undefined,
+                  createSession: { summary: input.note },
+                },
+              );
+              await runRecordingProcessing(archiveRecordingId, false);
+              await loadProfiles();
+              const profileName = input.newProfileName
+                ?? profileItems.find((item) => item.id === archived.profile_id)?.name
+                ?? "已选档案";
+              const kindLabel = input.kind === "client"
+                ? "来访者"
+                : input.kind === "supervisor"
+                  ? "督导师"
+                  : "受督者";
+              const recordNoun = input.kind === "client"
+                ? "咨询"
+                : input.kind === "supervisor"
+                  ? "受督"
+                  : "督导";
+              return {
+                profileName,
+                kindLabel,
+                recordLabel: `第 ${archived.sequence_no} 次${recordNoun}`,
+              };
+            }}
+            onComplete={(result) => {
+              setArchiveResult(result);
+              setQuickView("archiveComplete");
+            }}
+          /> : null}
           {quickView === "archiveComplete" && archiveResult ? (
             <ArchiveCompleteScreen
               result={archiveResult}
               onOpenProfile={() => {
-                setActiveProfile(archiveResult);
-                setSessionHistory(getProfileSessions(archiveResult));
-                setQuickView("profileDetail");
+                const storedProfile = profileItems.find((profile) => profile.name === archiveResult.profileName);
+                if (storedProfile) {
+                  void openProfile(storedProfile);
+                } else {
+                  showNotice("档案正在刷新", "请从档案库重新进入刚创建的档案。");
+                  void loadProfiles();
+                }
               }}
               onOpenRecords={() => setQuickView("recordingRecords")}
             />
           ) : null}
-          {quickView === "supervision" ? <SupervisionScreen /> : null}
+          {quickView === "supervision" ? <SupervisionScreen profiles={profileItems} onNotice={showNotice} /> : null}
+          {quickView === "profileUnlock" && pendingProfile ? (
+            <ProfileUnlockScreen
+              profile={pendingProfile}
+              passwordSet={profilePasswordSet}
+              onSubmit={async (password) => {
+                try {
+                  const kind = archiveKindForProfile(pendingProfile);
+                  if (!profilePasswordSet) {
+                    await profileAccessService.setPassword(kind, password);
+                  }
+                  await profileAccessService.verify(kind, password);
+                  selectProfile(pendingProfile);
+                  if (pendingRecordingAfterUnlock) {
+                    await loadRecordingDetail(pendingRecordingAfterUnlock);
+                    setPendingRecordingAfterUnlock(null);
+                    setPendingProfile(null);
+                    setQuickView("recordingDetail");
+                  } else {
+                    setPendingProfile(null);
+                    setQuickView("profileDetail");
+                  }
+                } catch (error) {
+                  showNotice("档案验证失败", errorMessage(error));
+                }
+              }}
+            />
+          ) : null}
           {quickView === "profileDetail" ? (
             <ProfileDetailScreen
               profile={activeProfile}
               sessions={sessionHistory}
-              legalFileNames={legalFileNames}
-              onSessionsChange={(nextSessions) => {
-                const remainingIds = new Set(nextSessions.map((session) => session.id));
-                const deletedIds = sessionHistory.filter((session) => !remainingIds.has(session.id)).map((session) => session.id);
-                setSessionHistory(nextSessions);
-                if (deletedIds.length > 0) {
-                  setSessionMaterials((current) => deletedIds.reduce(removeMaterialsForSession, current));
+              legalAttachments={legalAttachments}
+              onCreateSession={async (input) => {
+                try {
+                  const created = await sessionService.create(activeProfileId, input);
+                  setSessionHistory((current) => sortSessionsDescending([...current, created]));
+                  showNotice(`已新增第 ${created.sequence} 次记录`, "记录已保存到后端数据库。");
+                } catch (error) {
+                  showNotice("记录创建失败", errorMessage(error));
                 }
               }}
-              onLegalFilesChange={setLegalFileNames}
-              onOpenRecord={() => prepareRecordEditor(activeProfile.kindLabel, "profileDetail")}
+              onUpdateSession={async (sessionId, patch) => {
+                try {
+                  const updated = await sessionService.update(sessionId, patch);
+                  setSessionHistory((current) => updateSession(current, sessionId, updated));
+                } catch (error) {
+                  showNotice("记录更新失败", errorMessage(error));
+                }
+              }}
+              onDeleteSession={async (sessionId) => {
+                try {
+                  await sessionService.delete(sessionId);
+                  setSessionHistory((current) => removeSession(current, sessionId));
+                  setSessionMaterials((current) => removeMaterialsForSession(current, sessionId));
+                  showNotice("记录已删除", "后端记录及其关联关系已更新。");
+                } catch (error) {
+                  showNotice("记录删除失败", errorMessage(error));
+                }
+              }}
+              onUploadLegal={async (title, category, existing) => {
+                try {
+                  const uploaded = await pickAndUploadFile("PDF");
+                  if (!uploaded?.stored.fileId) return;
+                  const attachment = existing
+                    ? await attachmentService.replaceProfile(existing.id, uploaded.stored.fileId)
+                    : await attachmentService.createProfile({
+                        profileId: activeProfileId,
+                        category,
+                        fileId: uploaded.stored.fileId,
+                      });
+                  setLegalAttachments((current) => [
+                    attachment,
+                    ...current.filter((item) => item.category !== category),
+                  ]);
+                  showNotice(existing ? "法律文件已替换" : "法律文件已上传", `${title}已保存到 MinIO 并绑定当前档案。`);
+                } catch (error) {
+                  showNotice("法律文件上传失败", errorMessage(error));
+                }
+              }}
+              onOpenRecord={(sessionId) => void openSessionRecord(sessionId, "profileDetail")}
               onOpenCaseReport={() => {
-                setCaseReportSections(getCaseReportSections());
-                setCaseReportFormal(false);
-                setQuickView("caseReportSelect");
+                void reportService.generationSources({
+                  reportType: "case_report",
+                  profileId: activeProfileId,
+                }).then((sources) => {
+                  setCaseReportSources(sources);
+                  setCaseReportFormal(false);
+                  setQuickView("caseReportSelect");
+                }).catch((error) => {
+                  showNotice("报告资料加载失败", errorMessage(error));
+                });
               }}
               onOpenMaterial={(category, sessionId) => openMaterials(category, sessionId)}
-              onPreviewLegal={(title, meta) => openFilePreview({
-                id: `legal-${title}`,
-                ownerKey: title,
-                title,
-                meta,
-                fileType: "PDF",
+              onPreviewLegal={(attachment) => openFilePreview({
+                id: attachment.id,
+                ownerKey: attachment.category,
+                title: attachment.title,
+                meta: attachment.meta,
+                fileType: attachment.meta.split(" · ")[0],
                 source: "legal",
-                file: prototypeFile(legalFileNames[title] ?? `${title}.pdf`, "application/pdf"),
+                file: attachment.file,
               }, "profileDetail")}
               onNotice={showNotice}
             />
@@ -645,15 +1196,20 @@ export default function App() {
           {quickView === "profileCreate" ? (
             <ProfileCreateScreen
               onNotice={showNotice}
-              onCreate={(profile) => {
-                setProfileItems((current) => [profile, ...current]);
-                setActiveProfile({
-                  profileName: profile.name,
-                  kindLabel: profile.type,
-                  recordLabel: "尚无记录",
-                });
-                setSessionHistory([]);
-                setQuickView("profileDetail");
+              onCreate={async (input) => {
+                try {
+                  const profile = await profileService.create({
+                    type: input.kind,
+                    name: input.name,
+                    code: input.code || undefined,
+                    status: "active",
+                    nextSessionAt: normalizeSessionDate(input.next) || undefined,
+                  });
+                  setProfileItems((current) => [profile, ...current]);
+                  await openProfile(profile);
+                } catch (error) {
+                  showNotice("档案创建失败", errorMessage(error));
+                }
               }}
             />
           ) : null}
@@ -664,19 +1220,24 @@ export default function App() {
               chapters={recordingChapters}
               turns={recordingTurns}
               hasManualEdits={recordingHasEdits}
-              onOpenRecord={() => prepareRecordEditor(activeProfile.kindLabel, "recordingDetail")}
+              onOpenRecord={() => {
+                if (activeRecording.sessionId) {
+                  void openSessionRecord(activeRecording.sessionId, "recordingDetail");
+                } else {
+                  prepareRecordEditor(activeProfile.kindLabel, "recordingDetail");
+                }
+              }}
               onOpenChapters={() => setQuickView("chapterEditor")}
               onOpenTranscript={() => setQuickView("transcriptEditor")}
               onRegenerated={() => {
-                resetRecordingEditor(activeRecording);
-                setRecordingSummary(`${describeRecordingContext(activeRecording.title).summary} 已结合最新校对内容重新生成。`);
-                showNotice("重新生成任务已完成", "纪要、章节和转写已更新；原正式记录未被覆盖。");
+                if (!activeRecording.id) return;
+                void recordingService.regenerateSummary(activeRecording.id, recordingHasEdits)
+                  .then(() => loadRecordingDetail(activeRecording))
+                  .then(() => showNotice("重新生成任务已完成", "纪要和章节已从后端更新；原正式记录未被覆盖。"))
+                  .catch((error) => showNotice("重新生成失败", errorMessage(error)));
               }}
               onNotice={showNotice}
-              onOpenPrivacy={() => openPrivacy("recordingDetail", [
-                { title: `${activeRecording.title}转写`, type: "转写文本", expires: "13 天后销毁", preservable: true },
-                { title: `${activeRecording.title}录音纪要`, type: "录音纪要", expires: "13 天后销毁", preservable: true },
-              ])}
+              onOpenPrivacy={() => openPrivacy("recordingDetail")}
             />
           ) : null}
           {quickView === "chapterEditor" ? (
@@ -687,8 +1248,18 @@ export default function App() {
                 setRecordingHasEdits(true);
               }}
               onSave={() => {
-                setQuickView("recordingDetail");
-                showNotice("章节已保存", "章节标题和时间点已同步到当前录音纪要。");
+                if (!activeRecording.id) return;
+                void recordingService.updateSummary(
+                  activeRecording.id,
+                  recordingSummary,
+                  recordingChapters.map((chapter) => ({
+                    start_ms: parseDuration(chapter.time) * 1000,
+                    title: chapter.title,
+                  })),
+                ).then(() => {
+                  setQuickView("recordingDetail");
+                  showNotice("章节已保存", "章节标题和时间点已同步到后端录音纪要。");
+                }).catch((error) => showNotice("章节保存失败", errorMessage(error)));
               }}
             />
           ) : null}
@@ -700,8 +1271,22 @@ export default function App() {
                 setRecordingHasEdits(true);
               }}
               onSave={() => {
-                setQuickView("recordingDetail");
-                showNotice("转写校对已保存", "最新发言人与文本将用于后续纪要和记录生成。");
+                if (!activeRecording.id) return;
+                const speakerUpdates = new Map<string, string>();
+                recordingTurns.forEach((turn) => {
+                  if (turn.speakerKey) speakerUpdates.set(turn.speakerKey, turn.speaker);
+                });
+                void Promise.all([
+                  ...recordingTurns
+                    .filter((turn): turn is EditableTranscriptTurn & { id: string } => Boolean(turn.id))
+                    .map((turn) => recordingService.updateSegment(turn.id, turn.text)),
+                  ...[...speakerUpdates].map(([speakerKey, speaker]) => (
+                    recordingService.updateSpeaker(activeRecording.id!, speakerKey, speaker)
+                  )),
+                ]).then(() => {
+                  setQuickView("recordingDetail");
+                  showNotice("转写校对已保存", "最新发言人与文本已保存到后端。");
+                }).catch((error) => showNotice("转写保存失败", errorMessage(error)));
               }}
             />
           ) : null}
@@ -721,50 +1306,111 @@ export default function App() {
                 source: "material",
                 file: material.file,
               }, "sessionMaterials")}
-              onAdd={(title, fileType) => {
-                setSessionMaterials((current) => addSessionMaterial(current, {
-                  sessionId: activeSessionId,
-                  category: activeMaterialCategory,
-                  title,
-                  fileType,
-                }));
-                setRecordDirty(true);
-                showNotice("文件接口已预留", getMaterialUpdateMessage(activeMaterialCategory));
+              onAdd={async (fileType) => {
+                try {
+                  const uploaded = await pickAndUploadFile(
+                    fileType,
+                    activeMaterialCategory === "recording" ? "recording" : "attachment",
+                  );
+                  if (!uploaded?.stored.fileId) return;
+                  if (activeMaterialCategory === "recording") {
+                    const recording = await recordingService.create(
+                      uploaded.picked.name.replace(/\.[^.]+$/, ""),
+                      "uploaded_audio",
+                    );
+                    await recordingService.bindAudio(
+                      recording.id,
+                      uploaded.stored.fileId,
+                      null,
+                    );
+                    await recordingService.archive(recording.id, {
+                      profileType: archiveKindForLabel(activeProfile.kindLabel),
+                      profileId: activeProfileId,
+                      sessionId: activeSessionId,
+                    });
+                    await recordingService.process(recording.id, "archived_context");
+                    showNotice("录音已上传并处理", "原始录音已归档，转写和纪要已由后端生成。");
+                    return;
+                  }
+                  const material = await attachmentService.create({
+                    sessionId: activeSessionId,
+                    category: activeMaterialCategory,
+                    fileId: uploaded.stored.fileId,
+                  });
+                  setSessionMaterials((current) => [material, ...current]);
+                  showNotice("资料已上传", getMaterialUpdateMessage(activeMaterialCategory));
+                } catch (error) {
+                  showNotice("资料上传失败", errorMessage(error));
+                }
               }}
-              onAuthorize={() => openPrivacy("sessionMaterials", sessionMaterials
-                .filter((item) => item.sessionId === activeSessionId && item.category === activeMaterialCategory && item.preservable)
-                .map((item) => ({ title: item.title, type: materialCategoryCopy[item.category].title, expires: "14 天后销毁", preservable: true })))}
+              onAuthorize={() => openPrivacy("sessionMaterials")}
             />
           ) : null}
           {quickView === "filePreview" && activeFile ? (
             <FilePreviewScreen
               file={activeFile}
               onNotice={showNotice}
-              onUpdate={(title, fileType) => {
-                const replacementFile = prototypeFile(title, mimeTypeForLabel(fileType));
+              onUpdate={async (_title, fileType) => {
                 if (activeFile.source === "material") {
-                  setSessionMaterials((current) => updateSessionMaterial(current, activeFile.id, {
-                    title,
-                    fileType,
-                    file: replacementFile,
-                  }));
-                } else {
-                  setLegalFileNames((current) => ({ ...current, [activeFile.ownerKey ?? activeFile.title]: title }));
+                  try {
+                    const uploaded = await pickAndUploadFile(fileType);
+                    if (!uploaded?.stored.fileId) return;
+                    const replacement = await attachmentService.replace(
+                      activeFile.id,
+                      uploaded.stored.fileId,
+                    );
+                    setSessionMaterials((current) => current.map(
+                      (item) => item.id === replacement.id ? replacement : item,
+                    ));
+                    setActiveFile({
+                      id: replacement.id,
+                      title: replacement.title,
+                      meta: replacement.meta,
+                      fileType: replacement.meta.split(" · ")[0],
+                      source: "material",
+                      file: replacement.file,
+                    });
+                    showNotice("文件已替换", "旧文件已从 MinIO 销毁，新文件已绑定到当前资料。");
+                  } catch (error) {
+                    showNotice("文件替换失败", errorMessage(error));
+                  }
+                  return;
                 }
-                setActiveFile((current) => current ? {
-                  ...current,
-                  title,
-                  fileType,
-                  meta: `${fileType} · 刚刚更新`,
-                  file: replacementFile,
-                } : current);
-                showNotice("文件接口已预留", "当前仅保存文件信息；接入后端 MinIO 后将上传并替换原文件。");
+                try {
+                  const uploaded = await pickAndUploadFile(fileType);
+                  if (!uploaded?.stored.fileId) return;
+                  const replacement = await attachmentService.replaceProfile(
+                    activeFile.id,
+                    uploaded.stored.fileId,
+                  );
+                  setLegalAttachments((current) => current.map(
+                    (item) => item.id === replacement.id ? replacement : item,
+                  ));
+                  setActiveFile({
+                    id: replacement.id,
+                    ownerKey: replacement.category,
+                    title: replacement.title,
+                    meta: replacement.meta,
+                    fileType: replacement.meta.split(" · ")[0],
+                    source: "legal",
+                    file: replacement.file,
+                  });
+                  showNotice("法律文件已替换", "旧文件已销毁，新文件已绑定当前档案。");
+                } catch (error) {
+                  showNotice("法律文件替换失败", errorMessage(error));
+                }
               }}
-              onDelete={() => {
-                if (activeFile.source === "material") {
-                  setSessionMaterials((current) => removeSessionMaterial(current, activeFile.id));
-                } else {
-                  setLegalFileNames((current) => ({ ...current, [activeFile.ownerKey ?? activeFile.title]: "已删除" }));
+              onDelete={async () => {
+                try {
+                  await attachmentService.delete(activeFile.id);
+                  if (activeFile.source === "material") {
+                    setSessionMaterials((current) => removeSessionMaterial(current, activeFile.id));
+                  } else {
+                    setLegalAttachments((current) => current.filter((item) => item.id !== activeFile.id));
+                  }
+                } catch (error) {
+                  showNotice("文件删除失败", errorMessage(error));
+                  return;
                 }
                 setQuickView(filePreviewReturn);
                 showNotice("文件已删除", "文件已从当前资料列表移除，此操作不可恢复。");
@@ -779,63 +1425,136 @@ export default function App() {
             onSectionsChange={setRecordEditorSections}
             onFormalChange={setRecordFormal}
             onDirtyChange={setRecordDirty}
-            onOpenPrivacy={() => openPrivacy("recordEditor", [
-            { title: `${activeProfile.profileName} ${activeProfile.recordLabel}记录草稿`, type: "本次记录", expires: "14 天后销毁", preservable: true },
-            { title: `${activeProfile.profileName} ${activeProfile.recordLabel}正式版`, type: "本次记录", expires: "生成后 14 天销毁", preservable: true },
-          ])} onNotice={showNotice} /> : null}
-          {quickView === "caseReportSelect" ? <CaseReportMaterialScreen profile={activeProfile} onGenerate={() => setQuickView("caseReportEditor")} /> : null}
+            onSaveFormal={async () => {
+              if (!activeRecordReportId) throw new Error("记录尚未绑定后端报告。");
+              await reportService.update(activeRecordReportId, {
+                content: { blocks: recordEditorSections },
+              });
+              await reportService.saveFormal(activeRecordReportId, true);
+              setSessionHistory((current) => current.map((session) => (
+                session.id === activeSessionId ? { ...session, record: "正式版" } : session
+              )));
+            }}
+            onCopyFormalToDraft={async () => {
+              if (!activeRecordReportId) return;
+              const report = await reportService.copyFormalToDraft(activeRecordReportId);
+              setRecordEditorSections(sectionsFromReport(report, false));
+            }}
+            onDownload={async () => {
+              if (!activeRecordReportId) return;
+              const exported = await reportService.export(
+                activeRecordReportId,
+                "pdf",
+                recordFormal ? "formal" : "draft",
+              );
+              const download = await fileService.getDownloadUrl(exported.fileId);
+              await downloadAndShareFile(
+                download.download_url,
+                `${activeProfile.profileName}-${activeProfile.recordLabel}.pdf`,
+                "application/pdf",
+              );
+            }}
+            onOpenPrivacy={() => openPrivacy("recordEditor")} onNotice={showNotice} /> : null}
+          {quickView === "caseReportSelect" ? <CaseReportMaterialScreen
+            profile={activeProfile}
+            sources={caseReportSources}
+            onGenerate={async (selected) => {
+              try {
+                const generated = await reportService.generate({
+                  reportType: "case_report",
+                  profileId: activeProfileId,
+                  selectedSources: selected.map((source) => ({
+                    resourceType: source.resourceType,
+                    resourceId: source.resourceId,
+                  })),
+                  confirmOverwriteDraft: Boolean(activeCaseReportId),
+                });
+                const report = await reportService.get(generated.reportId);
+                const blocks = Array.isArray(report.draftContent.blocks)
+                  ? report.draftContent.blocks as Array<{ title?: string; content?: string }>
+                  : [];
+                setActiveCaseReportId(report.id);
+                setCaseReportSections(blocks.map((block) => ({
+                  title: block.title ?? "未命名章节",
+                  content: block.content ?? "",
+                })));
+                setCaseReportFormal(false);
+                setQuickView("caseReportEditor");
+              } catch (error) {
+                showNotice("个案报告生成失败", errorMessage(error));
+              }
+            }}
+          /> : null}
           {quickView === "caseReportEditor" ? <CaseReportEditorScreen
             profile={activeProfile}
             sections={caseReportSections}
             formal={caseReportFormal}
             onSectionsChange={setCaseReportSections}
             onFormalChange={setCaseReportFormal}
-            onOpenPrivacy={() => openPrivacy("caseReportEditor", [
-            { title: `${activeProfile.profileName} 个案报告草稿`, type: "个案报告", expires: "14 天后销毁", preservable: true },
-            { title: `${activeProfile.profileName} 个案报告正式版`, type: "个案报告", expires: "生成后 14 天销毁", preservable: true },
-          ])} onNotice={showNotice} /> : null}
+            onSaveFormal={async () => {
+              if (!activeCaseReportId) return;
+              await reportService.update(activeCaseReportId, {
+                content: { blocks: caseReportSections },
+              });
+              await reportService.saveFormal(activeCaseReportId, true);
+            }}
+            onCopyFormalToDraft={async () => {
+              if (!activeCaseReportId) return;
+              const report = await reportService.copyFormalToDraft(activeCaseReportId);
+              const blocks = Array.isArray(report.draftContent.blocks)
+                ? report.draftContent.blocks as Array<{ title?: string; content?: string }>
+                : [];
+              setCaseReportSections(blocks.map((block) => ({
+                title: block.title ?? "未命名章节",
+                content: block.content ?? "",
+              })));
+            }}
+            onDownload={async () => {
+              if (!activeCaseReportId) return;
+              const exported = await reportService.export(
+                activeCaseReportId,
+                "pdf",
+                caseReportFormal ? "formal" : "draft",
+              );
+              const download = await fileService.getDownloadUrl(exported.fileId);
+              await downloadAndShareFile(
+                download.download_url,
+                `${activeProfile.profileName}-个案报告.pdf`,
+                "application/pdf",
+              );
+            }}
+            onOpenPrivacy={() => openPrivacy("caseReportEditor")} onNotice={showNotice} /> : null}
           {quickView === "privacyCenter" ? (
             <PrivacyCenterScreen
-              authorizedResources={authorizedResources}
-              onAuthorize={() => openPrivacy("privacyCenter")}
               onNotice={showNotice}
             />
           ) : null}
-          {quickView === "privacyConsent" ? (
-            <PrivacyConsentScreen
-              resources={consentResources}
-              onCancel={() => {
-                setTab(privacyReturn.tab);
-                setQuickView(privacyReturn.quickView);
-              }}
-              onComplete={(selected) => {
-                setAuthorizedResources((current) => mergeAuthorizedResources(current, selected));
-                setTab(privacyReturn.tab);
-                setQuickView(privacyReturn.quickView);
+          {quickView === "articleDetail" ? <ArticleDetailScreen article={activeArticle} /> : null}
+          {quickView === "statistics" ? <StatisticsScreen recordings={recordingItems} /> : null}
+          {quickView === "schedule" ? <ScheduleScreen onStartRecording={() => setQuickView("recording")} onNotice={showNotice} /> : null}
+          {quickView === "securitySettings" ? (
+            <SecuritySettingsScreen
+              onNotice={showNotice}
+              onDeleteAccount={async (password) => {
+                await authService.deleteAccount(password);
+                apiClient.setTokens("demo-token", null);
+                profileAccessService.leaveProfile();
+                await authSessionStore.clear();
+                setCurrentUser(null);
+                setProfileItems([]);
+                setTab("home");
+                setQuickView("overview");
+                setAuthStatus("guest");
               }}
             />
           ) : null}
-          {quickView === "articleDetail" ? <ArticleDetailScreen article={activeArticle} /> : null}
-          {quickView === "statistics" ? <StatisticsScreen /> : null}
-          {quickView === "schedule" ? <ScheduleScreen onStartRecording={() => setQuickView("recording")} /> : null}
-          {quickView === "securitySettings" ? <SecuritySettingsScreen onNotice={showNotice} /> : null}
           {tab === "profiles" && quickView === "overview" ? (
             <ProfilesScreen
               profiles={profileItems}
-              onOpenDetail={(profile) => {
-                const recordNoun = profile.type === "来访者" ? "咨询" : profile.type === "督导师" ? "受督" : "督导";
-                setActiveProfile({
-                  profileName: profile.name,
-                  kindLabel: profile.type,
-                  recordLabel: profile.count === "尚无记录" ? profile.count : `${profile.count}${recordNoun}`,
-                });
-                setSessionHistory(getProfileSessions({
-                  profileName: profile.name,
-                  kindLabel: profile.type,
-                  recordLabel: profile.count === "尚无记录" ? profile.count : `${profile.count}${recordNoun}`,
-                }));
-                setQuickView("profileDetail");
-              }}
+              loading={profilesLoading}
+              error={profilesError}
+              onRetry={() => void loadProfiles()}
+              onOpenDetail={openProfile}
               onCreate={() => setQuickView("profileCreate")}
             />
           ) : null}
@@ -847,9 +1566,28 @@ export default function App() {
           ) : null}
           {tab === "account" && quickView === "overview" ? (
             <AccountScreen
-              onOpenPrivacy={() => setQuickView("privacyCenter")}
+              user={currentUser}
+              onOpenPrivacy={() => openPrivacy("overview")}
               onOpenSecurity={() => setQuickView("securitySettings")}
               onNotice={showNotice}
+              onUpdateProfile={async (displayName) => {
+                const updated = await authService.updateMe(displayName);
+                setCurrentUser(updated);
+              }}
+              onLogout={async () => {
+                try {
+                  if (refreshToken) await authService.logout(refreshToken);
+                } finally {
+                  apiClient.setTokens("demo-token", null);
+                  profileAccessService.leaveProfile();
+                  await authSessionStore.clear();
+                  setCurrentUser(null);
+                  setProfileItems([]);
+                  setTab("home");
+                  setQuickView("overview");
+                  setAuthStatus("guest");
+                }
+              }}
             />
           ) : null}
         </ScrollView>
@@ -863,6 +1601,116 @@ export default function App() {
           />
         ) : null}
         {notice ? <ActionNotice notice={notice} onClose={() => setNotice(null)} /> : null}
+      </View>
+    </SafeAreaView>
+  );
+}
+
+function AuthScreen({
+  onLogin,
+  onRegister,
+}: {
+  onLogin: (email: string, password: string) => Promise<void>;
+  onRegister: (email: string, password: string, displayName: string) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canSubmit = email.trim().includes("@")
+    && password.length >= 8
+    && (mode === "login" || displayName.trim().length > 0);
+
+  const submit = async () => {
+    if (!canSubmit || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (mode === "login") {
+        await onLogin(email.trim().toLowerCase(), password);
+      } else {
+        await onRegister(email.trim().toLowerCase(), password, displayName.trim());
+      }
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "登录服务暂不可用，请稍后重试。");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.authShell}>
+        <View style={styles.authBrand}>
+          <View style={styles.authBrandIcon}>
+            <ShieldCheck size={27} color={colors.clayDark} />
+          </View>
+          <Text style={styles.kicker}>咨询师助手</Text>
+          <Text style={styles.authTitle}>{mode === "login" ? "欢迎回来" : "创建安全工作空间"}</Text>
+          <Text style={styles.authCopy}>
+            {mode === "login"
+              ? "登录后访问你的档案、录音、报告与督导记录。"
+              : "账号数据存储在后端，档案访问密码按类型独立保护。"}
+          </Text>
+        </View>
+        <View style={styles.authCard}>
+          {mode === "register" ? (
+            <TextInput
+              value={displayName}
+              onChangeText={setDisplayName}
+              placeholder="姓名或工作称呼"
+              placeholderTextColor={colors.subtle}
+              style={styles.profileFormInput}
+              textContentType="name"
+            />
+          ) : null}
+          <TextInput
+            value={email}
+            onChangeText={setEmail}
+            placeholder="邮箱"
+            placeholderTextColor={colors.subtle}
+            style={styles.profileFormInput}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="emailAddress"
+          />
+          <TextInput
+            value={password}
+            onChangeText={setPassword}
+            placeholder="密码（至少 8 位）"
+            placeholderTextColor={colors.subtle}
+            style={styles.profileFormInput}
+            secureTextEntry
+            textContentType={mode === "login" ? "password" : "newPassword"}
+          />
+          {error ? <Text style={styles.authError}>{error}</Text> : null}
+          <TouchableOpacity
+            style={[styles.primaryButton, styles.wideButton, !canSubmit && styles.pendingPrimaryButton]}
+            activeOpacity={0.78}
+            disabled={!canSubmit || submitting}
+            onPress={() => void submit()}
+          >
+            {submitting ? <ActivityIndicator color="#FFF9F3" /> : <LockKeyhole size={18} color="#FFF9F3" />}
+            <Text style={styles.primaryButtonText}>
+              {submitting ? "正在验证..." : mode === "login" ? "安全登录" : "创建账号"}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.75}
+            onPress={() => {
+              setMode((current) => current === "login" ? "register" : "login");
+              setError(null);
+            }}
+          >
+            <Text style={styles.authSwitch}>
+              {mode === "login" ? "还没有账号？创建账号" : "已有账号？返回登录"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.authFootnote}>开发演示账号：demo@example.com / Demo1234!</Text>
       </View>
     </SafeAreaView>
   );
@@ -889,41 +1737,76 @@ function Header({ title, quickView, onBack, onOpenSchedule }: { title: string; q
 }
 
 function HomeScreen({
+  profiles,
+  recordings: recordingRows,
+  events,
   onOpen,
   onOpenProfiles,
   onOpenSchedule,
   onOpenStatistics,
 }: {
+  profiles: ProfileListItem[];
+  recordings: RecordingItem[];
+  events: CalendarEvent[];
   onOpen: (view: QuickView) => void;
   onOpenProfiles: () => void;
   onOpenSchedule: () => void;
   onOpenStatistics: () => void;
 }) {
+  const categoryLabels: Record<string, string> = {
+    counseling: "咨询",
+    supervision_received: "接受督导",
+    supervision_provided: "提供督导",
+    personal: "个人安排",
+  };
+  const upcoming = [...events]
+    .filter((event) => event.status === "pending" && new Date(event.endAt ?? event.startAt).getTime() >= Date.now())
+    .sort((left, right) => Date.parse(left.startAt) - Date.parse(right.startAt));
+  const todayKey = new Date().toDateString();
+  const todayEvents = upcoming.filter((event) => new Date(event.startAt).toDateString() === todayKey);
+  const nextEvent = upcoming[0];
+  const pendingRecordings = recordingRows.filter(
+    (recording) => recording.archive === "待归档" || recording.status !== "可查看",
+  );
+  const metricCards = ([
+    { label: "咨询小时", kind: "来访者" as const },
+    { label: "受督小时", kind: "督导师" as const },
+    { label: "督导小时", kind: "受督者" as const },
+  ]).map((metric) => {
+    const seconds = recordingRows
+      .filter((recording) => recording.kindLabel === metric.kind && recording.archive === "已归档")
+      .reduce((total, recording) => total + parseDuration(recording.duration), 0);
+    return { label: metric.label, value: `${(seconds / 3600).toFixed(1)}h` };
+  });
   return (
     <View style={styles.stack}>
       <View style={styles.hero}>
         <View style={styles.heroTop}>
           <View>
             <Text style={styles.heroLabel}>今日提醒</Text>
-            <Text style={styles.heroTitle}>2 个安排待处理</Text>
+            <Text style={styles.heroTitle}>{todayEvents.length} 个安排待处理</Text>
           </View>
           <CalendarDays size={24} color="#FFF9F3" />
         </View>
-        <Text style={styles.heroCopy}>陈雨的第 6 次咨询将在 10:00 开始，录音结束后可直接归档并生成纪要。</Text>
+        <Text style={styles.heroCopy}>
+          {nextEvent
+            ? `${nextEvent.title}将在${new Date(nextEvent.startAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}开始。`
+            : "近期没有待处理日程，可以直接开始录音或整理档案。"}
+        </Text>
         <View style={styles.heroActions}>
           <PrimaryButton icon={Mic} label="开始录音" onPress={() => onOpen("recording")} />
         </View>
       </View>
 
       <View style={styles.quickGrid}>
-        <QuickAction icon={Mic} label="录音记录" detail="3 条待处理" onPress={() => onOpen("recordingRecords")} />
-        <QuickAction icon={FolderOpen} label="档案库" detail="24 个档案" onPress={onOpenProfiles} />
+        <QuickAction icon={Mic} label="录音记录" detail={`${pendingRecordings.length} 条待处理`} onPress={() => onOpen("recordingRecords")} />
+        <QuickAction icon={FolderOpen} label="档案库" detail={`${profiles.length} 个档案`} onPress={onOpenProfiles} />
         <QuickAction icon={Sparkles} label="智能督导" detail="仅读取已选资料" onPress={() => onOpen("supervision")} />
       </View>
 
       <SectionHeader title="本周统计" action="明细" onAction={onOpenStatistics} />
       <View style={styles.metricRow}>
-        {metrics.map((item) => (
+        {metricCards.map((item) => (
           <View key={item.label} style={styles.metricCard}>
             <Text style={styles.metricValue}>{item.value}</Text>
             <Text style={styles.metricLabel}>{item.label}</Text>
@@ -933,33 +1816,96 @@ function HomeScreen({
 
       <SectionHeader title="近期任务" action="完整日程" onAction={onOpenSchedule} />
       <View style={styles.cardStack}>
-        {reminders.map((item) => (
-          <TouchableOpacity key={item.title} style={styles.listCard} activeOpacity={0.78} onPress={onOpenSchedule}>
+        {upcoming.slice(0, 3).map((item) => (
+          <TouchableOpacity key={item.id} style={styles.listCard} activeOpacity={0.78} onPress={onOpenSchedule}>
             <View style={styles.timePill}>
-              <Text style={styles.timePillText}>{item.time}</Text>
+              <Text style={styles.timePillText}>
+                {new Date(item.startAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+              </Text>
             </View>
             <View style={styles.listBody}>
               <Text style={styles.listTitle}>{item.title}</Text>
-              <Text style={styles.listMeta}>{item.kind} · {item.privacy}</Text>
+              <Text style={styles.listMeta}>{categoryLabels[item.category] ?? item.category} · {item.systemCalendarEventId ? "手机日历已同步" : "仅 App 内"}</Text>
             </View>
             <ChevronRight size={18} color={colors.subtle} />
           </TouchableOpacity>
         ))}
+        {upcoming.length === 0 ? (
+          <View style={styles.emptySearchCard}>
+            <CalendarDays size={20} color={colors.subtle} />
+            <Text style={styles.emptySearchTitle}>近期没有待处理日程</Text>
+          </View>
+        ) : null}
       </View>
     </View>
   );
 }
 
-function RecordingScreen({ onCancel, onArchive, onNotice }: { onCancel: () => void; onArchive: () => void; onNotice: (title: string, detail: string) => void }) {
-  const [paused, setPaused] = useState(true);
+function RecordingScreen({
+  onCancel,
+  onSave,
+  onNotice,
+}: {
+  onCancel: () => void;
+  onSave: (audio: RecordedLocalAudio) => Promise<void>;
+  onNotice: (title: string, detail: string) => void;
+}) {
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const controller = useMemo(
+    () => createAudioRecordingController(createExpoAudioDriver(
+      recorder,
+      recordingMimeType(Platform.OS),
+    )),
+    [recorder],
+  );
+  const [recordingState, setRecordingState] = useState<"starting" | "recording" | "paused" | "saving">("starting");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [confirmCancel, setConfirmCancel] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void controller.start()
+      .then(() => {
+        if (active) setRecordingState("recording");
+      })
+      .catch((error) => {
+        if (active) {
+          setRecordingState("paused");
+          onNotice(
+            "无法开始录音",
+            error instanceof Error ? error.message : "请检查麦克风权限。",
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [controller]);
+
+  useEffect(() => {
+    if (recordingState !== "recording") return;
+    const interval = setInterval(
+      () => setElapsedSeconds((current) => current + 1),
+      1000,
+    );
+    return () => clearInterval(interval);
+  }, [recordingState]);
+
   return (
     <View style={styles.stack}>
       <View style={styles.recorderPanel}>
         <View style={styles.recorderRing}>
           <View style={styles.recorderDot} />
-          <Text style={styles.recorderTime}>00:42:18</Text>
-          <Text style={styles.recorderState}>{paused ? "暂停中" : "录音中"}</Text>
+          <Text style={styles.recorderTime}>{formatDuration(elapsedSeconds)}</Text>
+          <Text style={styles.recorderState}>
+            {recordingState === "starting"
+              ? "正在准备"
+              : recordingState === "paused"
+                ? "暂停中"
+                : recordingState === "saving"
+                  ? "正在保存"
+                  : "录音中"}
+          </Text>
         </View>
         <View style={styles.controlRow}>
           <TouchableOpacity style={[styles.cancelButton, confirmCancel && styles.cancelButtonDanger]} activeOpacity={0.75} onPress={() => {
@@ -968,17 +1914,42 @@ function RecordingScreen({ onCancel, onArchive, onNotice }: { onCancel: () => vo
               onNotice("再次确认取消", "再次点击确认取消会丢弃当前未保存录音。");
               return;
             }
-            onCancel();
+            void controller.stop().catch(() => undefined).finally(onCancel);
           }}>
             <Text style={[styles.cancelButtonText, confirmCancel && styles.cancelButtonTextDanger]}>{confirmCancel ? "确认取消" : "取消"}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.pauseButton} activeOpacity={0.75} onPress={() => {
-            setPaused((current) => !current);
-            onNotice(paused ? "继续录音" : "录音已暂停", paused ? "计时继续，保存后进入归档确认。" : "可继续录制、取消或保存进入归档。");
+            if (recordingState === "recording") {
+              controller.pause();
+              setRecordingState("paused");
+              onNotice("录音已暂停", "可继续录制、取消或保存进入归档。");
+            } else if (recordingState === "paused") {
+              controller.resume();
+              setRecordingState("recording");
+              onNotice("继续录音", "计时继续，保存后进入归档确认。");
+            }
           }}>
-            <Pause size={22} color="#FFF9F3" fill="#FFF9F3" />
+            {recordingState === "paused"
+              ? <Play size={22} color="#FFF9F3" fill="#FFF9F3" />
+              : <Pause size={22} color="#FFF9F3" fill="#FFF9F3" />}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.saveButton} activeOpacity={0.75} onPress={onArchive}>
+          <TouchableOpacity
+            style={styles.saveButton}
+            activeOpacity={0.75}
+            disabled={recordingState === "starting" || recordingState === "saving"}
+            onPress={async () => {
+              setRecordingState("saving");
+              try {
+                await onSave(await controller.stop());
+              } catch (error) {
+                setRecordingState("paused");
+                onNotice(
+                  "录音保存失败",
+                  error instanceof Error ? error.message : "请稍后重试。",
+                );
+              }
+            }}
+          >
             <Text style={styles.saveButtonText}>保存</Text>
           </TouchableOpacity>
         </View>
@@ -1006,15 +1977,20 @@ function RecordingScreen({ onCancel, onArchive, onNotice }: { onCancel: () => vo
 }
 
 function RecordingRecordsScreen({
+  items,
+  loading,
   onOpen,
+  onUpload,
   onNotice,
 }: {
+  items: RecordingItem[];
+  loading: boolean;
   onOpen: (recording: RecordingItem) => void;
+  onUpload: () => Promise<void>;
   onNotice: (title: string, detail: string) => void;
 }) {
   const [showUpload, setShowUpload] = useState(false);
-  const [uploadName, setUploadName] = useState("");
-  const [uploadedRecordings, setUploadedRecordings] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   return (
     <View style={styles.stack}>
       <View style={styles.poster}>
@@ -1026,56 +2002,42 @@ function RecordingRecordsScreen({
       {showUpload ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formPreviewTitle}>上传已有录音</Text>
-          <TextInput
-            value={uploadName}
-            onChangeText={setUploadName}
-            placeholder="录音文件名，例如 6月8日咨询.m4a"
-            placeholderTextColor={colors.subtle}
-            style={styles.archiveTextInput}
-          />
-          <Text style={styles.formHelp}>上传后先进入待归档状态，不会自动读取任何档案资料。</Text>
-          <TouchableOpacity style={[styles.inlineCreateConfirm, !uploadName.trim() && styles.inlineCreateConfirmDisabled]} activeOpacity={0.78} onPress={() => {
-            if (!uploadName.trim()) {
-              onNotice("请填写文件名", "选择本地音频后，文件名会自动带入。");
-              return;
-            }
-            setUploadedRecordings((current) => [uploadName.trim(), ...current]);
-            setUploadName("");
-            setShowUpload(false);
-            onNotice("录音已上传", "录音已进入待归档列表，选择归属档案后开始转写。");
+          <Text style={styles.formHelp}>从系统文件选择器选取音频。文件会直传 MinIO，完成后进入待归档状态，不会自动读取任何档案。</Text>
+          <TouchableOpacity
+            style={[styles.inlineCreateConfirm, uploading && styles.inlineCreateConfirmDisabled]}
+            activeOpacity={0.78}
+            disabled={uploading}
+            onPress={async () => {
+              setUploading(true);
+              try {
+                await onUpload();
+                setShowUpload(false);
+              } catch {
+                onNotice("录音上传失败", "请检查文件和网络后重试。");
+              } finally {
+                setUploading(false);
+              }
           }}>
-            <Text style={styles.inlineCreateConfirmText}>确认上传</Text>
+            <Text style={styles.inlineCreateConfirmText}>{uploading ? "正在上传..." : "选择并上传音频"}</Text>
           </TouchableOpacity>
         </View>
       ) : null}
       <View style={styles.cardStack}>
-        {uploadedRecordings.map((title) => (
-          <TouchableOpacity
-            key={title}
-            style={styles.recordingCard}
-            activeOpacity={0.78}
-            onPress={() => onOpen({
-              title,
-              duration: "待识别",
-              status: "可查看",
-              archive: "待归档",
-              ttl: "剩余 14 天",
-              profileName: null,
-              kindLabel: null,
-              recordLabel: null,
-            })}
-          >
-            <View style={styles.recordingIcon}><Upload size={20} color={colors.clayDark} /></View>
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{title}</Text>
-              <Text style={styles.listMeta}>刚刚上传 · 归档后开始处理</Text>
-              <View style={styles.badgeRow}><Badge label="待归档" tone="warm" /></View>
-            </View>
-            <ChevronRight size={18} color={colors.subtle} />
-          </TouchableOpacity>
-        ))}
-        {recordings.map((item) => (
-          <TouchableOpacity key={item.title} style={styles.recordingCard} activeOpacity={0.78} onPress={() => onOpen(item)}>
+        {loading ? (
+          <View style={styles.emptySearchCard}>
+            <ActivityIndicator color={colors.clayDark} />
+            <Text style={styles.emptySearchTitle}>正在加载录音</Text>
+          </View>
+        ) : null}
+        {!loading && items.length === 0 ? (
+          <View style={styles.emptySearchCard}>
+            <Mic size={20} color={colors.subtle} />
+            <Text style={styles.emptySearchTitle}>暂无录音</Text>
+            <Text style={styles.emptySearchCopy}>可以开始现场录音，或上传已有音频。</Text>
+          </View>
+        ) : null}
+        {items.map((item) => (
+          <TouchableOpacity key={item.id ?? item.title} style={styles.recordingCard} activeOpacity={0.78} onPress={() => onOpen(item)}>
             <View style={styles.recordingIcon}>
               <FileText size={20} color={colors.clayDark} />
             </View>
@@ -1095,32 +2057,242 @@ function RecordingRecordsScreen({
   );
 }
 
-function RecordingProcessingScreen({ recording }: { recording: RecordingItem }) {
+function RecordingAudioPlayer({
+  fileId,
+  available,
+  title,
+  fallbackDuration,
+  onNotice,
+}: {
+  fileId: string | null;
+  available: boolean;
+  title: string;
+  fallbackDuration: string;
+  onNotice: (title: string, detail: string) => void;
+}) {
+  const player = useAudioPlayer(null, { updateInterval: 250 });
+  const status = useAudioPlayerStatus(player);
+  const [sourceLoaded, setSourceLoaded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
+  const duration = status.duration > 0
+    ? formatDuration(Math.floor(status.duration))
+    : fallbackDuration;
+  const current = formatDuration(Math.floor(status.currentTime));
+  const progress = status.duration > 0
+    ? Math.min(100, Math.max(0, (status.currentTime / status.duration) * 100))
+    : 0;
+  const canPlay = available && Boolean(fileId);
+
+  useEffect(() => {
+    if (!fileId || !canPlay) {
+      setSourceLoaded(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    void fileService.getDownloadUrl(fileId)
+      .then((result) => {
+        if (!active) return;
+        setPlaybackUrl(result.download_url);
+        if (Platform.OS !== "web") player.replace(result.download_url);
+        setSourceLoaded(true);
+      })
+      .catch((error) => {
+        if (!active) return;
+        onNotice(
+          "录音加载失败",
+          error instanceof Error ? error.message : "无法加载原始录音。",
+        );
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+      player.pause();
+    };
+  }, [canPlay, fileId, player]);
+
+  if (Platform.OS === "web") {
+    return (
+      <View style={styles.audioPlayerCard}>
+        <View style={styles.audioPlayerBody}>
+          <Text style={styles.audioPlayerTitle}>{title}</Text>
+          {playbackUrl && canPlay
+            ? createElement("audio", {
+              controls: true,
+              preload: "metadata",
+              src: playbackUrl,
+              style: { width: "100%", height: 38 },
+            })
+            : (
+              <View style={styles.audioUnavailableRow}>
+                {loading ? <ActivityIndicator color={colors.clayDark} /> : <CircleAlert size={17} color={colors.subtle} />}
+                <Text style={styles.audioPlayerMeta}>
+                  {loading ? "正在加载原始录音..." : "原始录音不可用或已销毁"}
+                </Text>
+              </View>
+            )}
+          <Text style={styles.audioPlayerMeta}>{fallbackDuration} · 原始录音临时保存</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.audioPlayerCard}>
+      <TouchableOpacity
+        style={[styles.audioPlayButton, !canPlay && styles.audioPlayButtonDisabled]}
+        activeOpacity={0.78}
+        disabled={!canPlay || loading || !sourceLoaded}
+        accessibilityLabel={status.playing ? "暂停原始录音" : "播放原始录音"}
+        onPress={() => {
+          if (!fileId || !canPlay || loading || !sourceLoaded) return;
+          void toggleAudioPlayback({
+            sourceLoaded,
+            player,
+            loadSource: async () => {
+              throw new Error("录音地址尚未加载。");
+            },
+          })
+            .then((result) => setSourceLoaded(result.sourceLoaded))
+            .catch((error) => onNotice(
+              "录音播放失败",
+              error instanceof Error ? error.message : "无法加载原始录音。",
+            ))
+        }}
+      >
+        {loading
+          ? <ActivityIndicator color="#FFF9F3" />
+          : status.playing
+            ? <Pause size={20} color="#FFF9F3" fill="#FFF9F3" />
+            : <Play size={20} color="#FFF9F3" fill="#FFF9F3" />}
+      </TouchableOpacity>
+      <View style={styles.audioPlayerBody}>
+        <Text style={styles.audioPlayerTitle}>{title}</Text>
+        <View style={styles.audioProgressTrack}>
+          <View style={[styles.audioProgressFill, { width: `${progress}%` }]} />
+        </View>
+        <Text style={styles.audioPlayerMeta}>
+          {canPlay
+            ? `${current} / ${duration} · ${status.playing ? "正在播放" : "点击播放原始录音"}`
+            : "原始录音不可用或已销毁"}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function RecordingProcessingScreen({
+  recording,
+  job,
+  busy,
+  onRefresh,
+  onRetry,
+  onOpenResult,
+}: {
+  recording: RecordingItem;
+  job: AIJob | null;
+  busy: boolean;
+  onRefresh: () => Promise<void>;
+  onRetry: () => Promise<void>;
+  onOpenResult: () => void;
+}) {
+  const failed = recording.status === "处理失败" || job?.status === "failed";
+  const completed = recording.status === "可查看" || job?.status === "completed";
+  const pending = recording.status === "待处理";
+  const audioAvailable = recordingAudioCanProcess(recording.ttl);
+  const title = failed
+    ? "录音处理失败"
+    : completed
+      ? "录音纪要已生成"
+      : pending
+        ? "录音等待处理"
+        : "正在生成录音纪要";
+  const detail = failed
+    ? recording.processingError ?? job?.error?.message ?? "模型服务暂时不可用，请稍后重试。"
+    : completed
+      ? "完整转写、录音纪要和章节速览均已保存。"
+      : "可以离开此页面，处理完成后会在录音记录和对应档案中更新。";
   return (
     <View style={styles.stack}>
       <View style={styles.noticeCard}>
-        <Clock3 size={24} color={colors.clayDark} />
+        {failed
+          ? <CircleAlert size={24} color={colors.danger} />
+          : completed
+            ? <CheckCircle2 size={24} color={colors.sageDark} />
+            : <Clock3 size={24} color={colors.clayDark} />}
         <View style={styles.listBody}>
           <Text style={styles.listTitle}>{recording.title}</Text>
-          <Text style={styles.listMeta}>{recording.duration} · {recording.archive} · 后台处理中</Text>
+          <Text style={styles.listMeta}>{recording.duration} · {recording.archive} · {recording.status}</Text>
         </View>
       </View>
       <View style={styles.processingHero}>
         <View style={styles.processingHeroIcon}>
-          <RefreshCcw size={28} color={colors.clayDark} />
+          {busy
+            ? <ActivityIndicator color={colors.clayDark} />
+            : failed
+              ? <CircleAlert size={28} color={colors.danger} />
+              : completed
+                ? <CheckCircle2 size={28} color={colors.sageDark} />
+                : <RefreshCcw size={28} color={colors.clayDark} />}
         </View>
-        <Text style={styles.processingHeroTitle}>正在生成录音纪要</Text>
-        <Text style={styles.processingHeroCopy}>可以离开此页面，处理完成后会在录音记录和对应档案中更新。</Text>
+        <Text style={styles.processingHeroTitle}>{title}</Text>
+        <Text style={styles.processingHeroCopy}>{detail}</Text>
       </View>
       <View style={styles.processingList}>
-        <ProcessingRow title="原始录音" detail="已保存，13 天后自动销毁" status="完成" complete />
-        <ProcessingRow title="完整转写" detail="正在识别发言人与时间戳" status="处理中" />
-        <ProcessingRow title="录音纪要" detail="等待转写完成后生成" status="等待中" />
-        <ProcessingRow title="章节速览" detail="等待录音纪要生成" status="等待中" />
+        <ProcessingRow
+          title="原始录音"
+          detail={recording.ttl}
+          status={audioAvailable ? "完成" : "不可用"}
+          complete={audioAvailable}
+        />
+        <ProcessingRow
+          title="完整转写"
+          detail={failed ? "本次识别未完成" : completed ? "已保存发言人与时间戳" : "正在识别发言人与时间戳"}
+          status={failed ? "失败" : completed ? "完成" : pending ? "等待中" : "处理中"}
+          complete={completed}
+        />
+        <ProcessingRow
+          title="录音纪要"
+          detail={completed ? "已根据完整转写生成" : "等待转写完成后生成"}
+          status={failed ? "未生成" : completed ? "完成" : "等待中"}
+          complete={completed}
+        />
+        <ProcessingRow
+          title="章节速览"
+          detail={completed ? "已生成章节导航" : "等待录音纪要生成"}
+          status={failed ? "未生成" : completed ? "完成" : "等待中"}
+          complete={completed}
+        />
       </View>
+      {completed ? (
+        <PrimaryButton icon={Eye} label="查看录音纪要" onPress={onOpenResult} wide />
+      ) : (
+        <PrimaryButton
+          icon={RefreshCcw}
+          label={busy
+            ? "正在处理..."
+            : failed && audioAvailable
+              ? "重新生成"
+              : pending && audioAvailable
+                ? "开始生成"
+                : "刷新处理状态"}
+          onPress={() => {
+            if (busy) return;
+            void ((failed || pending) && audioAvailable ? onRetry() : onRefresh());
+          }}
+          wide
+        />
+      )}
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>处理失败时可重新生成</Text>
-        <Text style={styles.privacyCopy}>只要原始录音仍在 14 天保存期内，就可以重新生成；原始录音销毁后不能重试。</Text>
+        <Text style={styles.privacyCopy}>
+          {audioAvailable
+            ? "只要原始录音仍在 14 天保存期内，就可以重新生成；原始录音销毁后不能重试。"
+            : "当前原始录音不可用，无法重新识别；已生成的转写和纪要仍按各自保存期限管理。"}
+        </Text>
       </View>
     </View>
   );
@@ -1128,11 +2300,22 @@ function RecordingProcessingScreen({ recording }: { recording: RecordingItem }) 
 
 function ArchiveScreen({
   recording,
+  audioFileId,
+  profiles,
   onNotice,
+  onArchive,
   onComplete,
 }: {
   recording: ArchiveRecording;
+  audioFileId: string | null;
+  profiles: ProfileListItem[];
   onNotice: (title: string, detail: string) => void;
+  onArchive: (input: {
+    kind: ArchiveKind;
+    profileId?: string;
+    newProfileName?: string;
+    note: string;
+  }) => Promise<ArchiveResult>;
   onComplete: (result: ArchiveResult) => void;
 }) {
   const [kind, setKind] = useState<ArchiveKind>("client");
@@ -1141,25 +2324,38 @@ function ArchiveScreen({
   const [searchQuery, setSearchQuery] = useState("");
   const [newProfileName, setNewProfileName] = useState("");
   const [newProfileNote, setNewProfileNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  type ArchiveCandidateRow = {
+    id: string;
+    name: string;
+    code: string;
+    completedCount: number;
+    meta: string;
+    next: string;
+  };
   const archiveKinds = [
     { key: "client" as const, label: "来访者", detail: "咨询记录" },
     { key: "supervisor" as const, label: "督导师", detail: "受督记录" },
     { key: "supervisee" as const, label: "受督者", detail: "督导记录" },
   ];
   const candidatesByKind = {
-    client: [
-      { id: "chen-yu", name: "陈雨", code: "A08", completedCount: 6, meta: "进行中 · 已完成 6 次咨询", next: "下次 6月8日 10:00" },
-      { id: "zhou-nan", name: "周楠", code: "B12", completedCount: 3, meta: "暂停 · 已完成 3 次咨询", next: "最近 5月18日" },
-    ],
-    supervisor: [
-      { id: "li-cheng", name: "李澄", code: "S03", completedCount: 3, meta: "督导师 · 已完成 3 次受督", next: "下次 6月9日 15:30" },
-    ],
-    supervisee: [
-      { id: "zhou-ning", name: "周宁", code: "E12", completedCount: 12, meta: "受督者 · 已完成 12 次督导", next: "下次 6月12日 14:00" },
-    ],
+    client: profiles.filter((item) => item.type === "来访者"),
+    supervisor: profiles.filter((item) => item.type === "督导师"),
+    supervisee: profiles.filter((item) => item.type === "受督者"),
   };
-  const archiveCandidates = filterArchiveCandidates(candidatesByKind[kind], searchQuery);
-  const selectedCandidate = candidatesByKind[kind].find((item) => item.id === selectedProfile);
+  const archiveCandidatesModel: ArchiveCandidateRow[] = candidatesByKind[kind].map((item) => ({
+    id: item.id,
+    name: item.name,
+    code: item.displayCode ?? item.id,
+    completedCount: Number(item.count.match(/\d+/)?.[0] ?? 0),
+    meta: `${item.status} · ${item.count}`,
+    next: item.next === "未设置" ? "未设置下次安排" : `下次 ${item.next}`,
+  }));
+  const archiveCandidates = filterArchiveCandidates<ArchiveCandidateRow>(
+    archiveCandidatesModel,
+    searchQuery,
+  );
+  const selectedCandidate = archiveCandidatesModel.find((item) => item.id === selectedProfile);
   const pendingResult = selectedProfile === "new"
     ? buildArchiveResult({ kind, profileName: newProfileName.trim(), completedCount: 0 })
     : selectedCandidate
@@ -1176,6 +2372,13 @@ function ArchiveScreen({
           <Text style={styles.listMeta}>{recording.duration} · 保存后需要选择归属档案</Text>
         </View>
       </View>
+      <RecordingAudioPlayer
+        fileId={audioFileId}
+        available={Boolean(audioFileId)}
+        title={recording.title}
+        fallbackDuration={recording.duration}
+        onNotice={onNotice}
+      />
 
       <SectionHeader title="1 选择归档类型" action="必选" />
       <View style={styles.archiveKindGrid}>
@@ -1302,16 +2505,39 @@ function ArchiveScreen({
       <TouchableOpacity
         style={[styles.primaryButton, styles.wideButton, !pendingResult && styles.pendingPrimaryButton]}
         activeOpacity={0.78}
-        onPress={() => {
+        disabled={submitting}
+        onPress={async () => {
           if (!pendingResult) {
             onNotice("请先选择归属档案", "保存录音后必须选择已有人员，或新增人员后再确认归档。");
             return;
           }
-          onComplete(pendingResult);
+          setSubmitting(true);
+          try {
+            const result = await onArchive({
+              kind,
+              profileId: selectedProfile !== "new" ? selectedProfile ?? undefined : undefined,
+              newProfileName: selectedProfile === "new" ? newProfileName.trim() : undefined,
+              note: newProfileNote.trim(),
+            });
+            onComplete(result);
+          } catch (error) {
+            onNotice(
+              "录音归档失败",
+              error instanceof Error ? error.message : "请稍后重试。",
+            );
+          } finally {
+            setSubmitting(false);
+          }
         }}
       >
         <FolderOpen size={18} color="#FFF9F3" />
-        <Text style={styles.primaryButtonText}>{pendingResult ? `归档到 ${pendingResult.profileName}` : "请先选择档案"}</Text>
+        <Text style={styles.primaryButtonText}>
+          {submitting
+            ? "正在归档..."
+            : pendingResult
+              ? `归档到 ${pendingResult.profileName}`
+              : "请先选择档案"}
+        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -1360,10 +2586,16 @@ function ArchiveCompleteScreen({
 
 function ProfilesScreen({
   profiles,
+  loading,
+  error,
+  onRetry,
   onOpenDetail,
   onCreate,
 }: {
   profiles: ProfileListItem[];
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
   onOpenDetail: (profile: ProfileListItem) => void;
   onCreate: () => void;
 }) {
@@ -1404,13 +2636,28 @@ function ProfilesScreen({
         ))}
       </View>
       <View style={styles.cardStack}>
+        {loading ? (
+          <View style={styles.emptySearchCard}>
+            <Clock3 size={20} color={colors.subtle} />
+            <Text style={styles.emptySearchTitle}>正在加载档案</Text>
+            <Text style={styles.emptySearchCopy}>数据来自本地 FastAPI 与 PostgreSQL。</Text>
+          </View>
+        ) : null}
+        {!loading && error ? (
+          <View style={styles.emptySearchCard}>
+            <CircleAlert size={20} color={colors.danger} />
+            <Text style={styles.emptySearchTitle}>档案加载失败</Text>
+            <Text style={styles.emptySearchCopy}>{error}</Text>
+            <GhostButton icon={RefreshCcw} label="重新加载" onPress={onRetry} />
+          </View>
+        ) : null}
         {visibleProfiles.map((item) => (
           <TouchableOpacity key={item.id} style={styles.profileCard} activeOpacity={0.78} onPress={() => onOpenDetail(item)}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{item.name.slice(0, 1)}</Text>
             </View>
             <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{item.name} · {item.id}</Text>
+              <Text style={styles.listTitle}>{item.name} · {item.displayCode ?? item.id}</Text>
               <Text style={styles.listMeta}>{item.count} · 下次 {item.next}</Text>
               <View style={styles.badgeRow}>
                 <Badge label={item.status} tone="green" />
@@ -1420,7 +2667,7 @@ function ProfilesScreen({
             <LockKeyhole size={18} color={colors.subtle} />
           </TouchableOpacity>
         ))}
-        {visibleProfiles.length === 0 ? (
+        {!loading && !error && visibleProfiles.length === 0 ? (
           <View style={styles.emptySearchCard}>
             <Search size={20} color={colors.subtle} />
             <Text style={styles.emptySearchTitle}>没有找到匹配档案</Text>
@@ -1432,12 +2679,75 @@ function ProfilesScreen({
   );
 }
 
+function ProfileUnlockScreen({
+  profile,
+  passwordSet,
+  onSubmit,
+}: {
+  profile: ProfileListItem;
+  passwordSet: boolean;
+  onSubmit: (password: string) => Promise<void>;
+}) {
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  return (
+    <View style={styles.stack}>
+      <View style={styles.poster}>
+        <LockKeyhole size={26} color={colors.clayDark} />
+        <Text style={styles.posterTitle}>{profile.name} · {profile.type}档案</Text>
+        <Text style={styles.posterCopy}>
+          {passwordSet
+            ? "请输入该类型档案的访问密码。验证仅在当前档案页面会话内有效。"
+            : "首次进入该类型档案，请设置独立访问密码。密码只保存为后端安全哈希。"}
+        </Text>
+      </View>
+      <View style={styles.inlineCreateCard}>
+        <Text style={styles.formPreviewTitle}>
+          {passwordSet ? "验证档案访问密码" : "设置档案访问密码"}
+        </Text>
+        <TextInput
+          value={password}
+          onChangeText={setPassword}
+          placeholder="至少 8 位"
+          placeholderTextColor={colors.subtle}
+          style={styles.archiveTextInput}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+        <TouchableOpacity
+          style={[
+            styles.inlineCreateConfirm,
+            (password.length < 8 || submitting) && styles.inlineCreateConfirmDisabled,
+          ]}
+          disabled={password.length < 8 || submitting}
+          onPress={async () => {
+            setSubmitting(true);
+            try {
+              await onSubmit(password);
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          <Text style={styles.inlineCreateConfirmText}>
+            {submitting ? "正在验证..." : passwordSet ? "验证并进入" : "设置并进入"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>访问范围</Text>
+        <Text style={styles.privacyCopy}>授权只适用于当前账号和当前档案类型，离开档案后前端会立即清除授权。</Text>
+      </View>
+    </View>
+  );
+}
+
 function ProfileCreateScreen({
   onNotice,
   onCreate,
 }: {
   onNotice: (title: string, detail: string) => void;
-  onCreate: (profile: ProfileListItem) => void;
+  onCreate: (input: { kind: ArchiveKind; name: string; code: string; next: string }) => void;
 }) {
   const [kind, setKind] = useState<ArchiveKind>("client");
   const [name, setName] = useState("");
@@ -1498,8 +2808,12 @@ function ProfileCreateScreen({
             onNotice("请填写姓名", "姓名或称呼是创建档案的必要信息。");
             return;
           }
-          const profile = buildNewProfile({ kind, name, next });
-          onCreate({ ...profile, id: code.trim() || profile.id });
+          onCreate({
+            kind,
+            name: name.trim(),
+            code: code.trim(),
+            next: next.trim(),
+          });
         }}
       >
         <FolderOpen size={18} color="#FFF9F3" />
@@ -1512,9 +2826,11 @@ function ProfileCreateScreen({
 function ProfileDetailScreen({
   profile,
   sessions,
-  legalFileNames,
-  onSessionsChange,
-  onLegalFilesChange,
+  legalAttachments,
+  onCreateSession,
+  onUpdateSession,
+  onDeleteSession,
+  onUploadLegal,
   onOpenRecord,
   onOpenCaseReport,
   onOpenMaterial,
@@ -1523,18 +2839,25 @@ function ProfileDetailScreen({
 }: {
   profile: ArchiveResult;
   sessions: SessionHistoryItem[];
-  legalFileNames: Record<string, string>;
-  onSessionsChange: (sessions: SessionHistoryItem[]) => void;
-  onLegalFilesChange: (files: Record<string, string>) => void;
-  onOpenRecord: () => void;
+  legalAttachments: ProfileAttachment[];
+  onCreateSession: (input: { sessionType: string; occurredAt: string; summary: string }) => Promise<void>;
+  onUpdateSession: (
+    sessionId: string,
+    patch: { occurredAt?: string; summary?: string; tags?: string[] },
+  ) => Promise<void>;
+  onDeleteSession: (sessionId: string) => Promise<void>;
+  onUploadLegal: (
+    title: string,
+    category: string,
+    existing: ProfileAttachment | undefined,
+  ) => Promise<void>;
+  onOpenRecord: (sessionId: string) => void;
   onOpenCaseReport: () => void;
   onOpenMaterial: (category: MaterialCategory, sessionId: string) => void;
-  onPreviewLegal: (title: string, meta: string) => void;
+  onPreviewLegal: (attachment: ProfileAttachment) => void;
   onNotice: (title: string, detail: string) => void;
 }) {
   const [showLegalUpload, setShowLegalUpload] = useState(false);
-  const [legalUploadName, setLegalUploadName] = useState("");
-  const [pendingLegalOverwrite, setPendingLegalOverwrite] = useState<string | null>(null);
   const [showCreateSession, setShowCreateSession] = useState(false);
   const [newSessionTime, setNewSessionTime] = useState("2026-06-08 18:00");
   const [newSessionSummary, setNewSessionSummary] = useState("");
@@ -1542,11 +2865,23 @@ function ProfileDetailScreen({
   const hasRecords = profile.recordLabel !== "尚无记录";
   const sessionNoun = profile.kindLabel === "来访者" ? "咨询" : profile.kindLabel === "督导师" ? "受督" : "督导";
   const legalFiles = profile.kindLabel === "来访者"
-    ? ["知情同意书", "咨询协议"]
+    ? [
+        { title: "知情同意书", category: "consent" },
+        { title: "咨询协议", category: "counseling_agreement" },
+      ]
     : profile.kindLabel === "督导师"
-      ? ["督导协议", "督导评价"]
-      : ["督导协议", "受督者评估"];
-  const legalMetas = legalFiles.map((title, index) => legalFileNames[title] ?? (isDefaultProfile ? index === 0 ? "已签署 · 第 2 版" : "已签署 · 6月3日" : "待上传"));
+      ? [
+          { title: "督导协议", category: "supervision_agreement" },
+          { title: "督导评价", category: "supervision_evaluation" },
+        ]
+      : [
+          { title: "督导协议", category: "supervision_agreement" },
+          { title: "受督者评估", category: "supervisee_assessment" },
+        ];
+  const legalEntries = legalFiles.map((item) => ({
+    ...item,
+    attachment: legalAttachments.find((attachment) => attachment.category === item.category),
+  }));
   return (
     <View style={styles.stack}>
       <View style={styles.profileHeaderCard}>
@@ -1570,58 +2905,48 @@ function ProfileDetailScreen({
       <SectionHeader title="法律及伦理文件" action={showLegalUpload ? "收起" : "上传"} onAction={() => setShowLegalUpload((current) => !current)} />
       {showLegalUpload ? (
         <View style={styles.inlineCreateCard}>
-          <Text style={styles.formPreviewTitle}>预留伦理文件上传</Text>
-          <TextInput
-            value={legalUploadName}
-            onChangeText={setLegalUploadName}
-            placeholder={`输入 ${legalFiles.join(" / ")} 文件名`}
-            placeholderTextColor={colors.subtle}
-            style={styles.archiveTextInput}
-          />
-          <Text style={styles.formHelp}>当前保存文件信息；后端接入 MinIO 后，同类文件将通过先上传、再切换的方式安全覆盖。</Text>
-          <TouchableOpacity style={[styles.inlineCreateConfirm, !legalUploadName.trim() && styles.inlineCreateConfirmDisabled]} activeOpacity={0.78} onPress={() => {
-            if (!legalUploadName.trim()) return;
-            const target = legalFiles.find((item) => legalUploadName.includes(item)) ?? legalFiles[0];
-            if ((isDefaultProfile || legalFileNames[target]) && legalFileNames[target] !== "已删除" && pendingLegalOverwrite !== target) {
-              setPendingLegalOverwrite(target);
-              onNotice("确认替换文件信息", `再次点击将预留用 ${legalUploadName.trim()} 替换现有${target}。`);
-              return;
-            }
-            onLegalFilesChange({ ...legalFileNames, [target]: legalUploadName.trim() });
-            setPendingLegalOverwrite(null);
-            setLegalUploadName("");
-            setShowLegalUpload(false);
-            onNotice("文件接口已预留", `${target}的文件信息已保存；接入 MinIO 后才会上传并替换原文件。`);
-          }}>
-            <Text style={styles.inlineCreateConfirmText}>{pendingLegalOverwrite ? "确认预留替换" : "保存文件信息"}</Text>
-          </TouchableOpacity>
+          <Text style={styles.formPreviewTitle}>选择文件位置</Text>
+          <Text style={styles.formHelp}>点击后打开系统文件选择器。已有文件会先确认目标位置，再由后端销毁旧对象并切换为新文件。</Text>
+          {legalEntries.map((entry) => (
+            <TouchableOpacity
+              key={entry.category}
+              style={styles.inlineCreateConfirm}
+              activeOpacity={0.78}
+              onPress={async () => {
+                await onUploadLegal(entry.title, entry.category, entry.attachment);
+                setShowLegalUpload(false);
+              }}
+            >
+              <Text style={styles.inlineCreateConfirmText}>
+                {entry.attachment ? `替换${entry.title}` : `上传${entry.title}`}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
       ) : null}
       <View style={styles.legalGrid}>
         <LegalFile
-          title={legalFiles[0]}
-          meta={legalMetas[0]}
+          title={legalEntries[0].title}
+          meta={legalEntries[0].attachment?.meta ?? "待上传"}
           icon={FileText}
           onPress={() => {
-            if (legalMetas[0] === "待上传" || legalMetas[0] === "已删除") {
-              setLegalUploadName(legalFiles[0]);
+            if (!legalEntries[0].attachment) {
               setShowLegalUpload(true);
               return;
             }
-            onPreviewLegal(legalFiles[0], `PDF · ${legalMetas[0]}`);
+            onPreviewLegal(legalEntries[0].attachment);
           }}
         />
         <LegalFile
-          title={legalFiles[1]}
-          meta={legalMetas[1]}
+          title={legalEntries[1].title}
+          meta={legalEntries[1].attachment?.meta ?? "待上传"}
           icon={ClipboardList}
           onPress={() => {
-            if (legalMetas[1] === "待上传" || legalMetas[1] === "已删除") {
-              setLegalUploadName(legalFiles[1]);
+            if (!legalEntries[1].attachment) {
               setShowLegalUpload(true);
               return;
             }
-            onPreviewLegal(legalFiles[1], `PDF · ${legalMetas[1]}`);
+            onPreviewLegal(legalEntries[1].attachment);
           }}
         />
       </View>
@@ -1651,22 +2976,13 @@ function ProfileDetailScreen({
               onNotice("日期时间格式不正确", "请按 2026-06-08 18:00 的格式填写。");
               return;
             }
-            const sequence = Math.max(0, ...sessions.map((session) => session.sequence)) + 1;
-            onSessionsChange(sortSessionsDescending([...sessions, {
-              id: `session-${sequence}`,
-              sequence,
+            void onCreateSession({
+              sessionType: profile.kindLabel === "来访者" ? "counseling" : "supervision",
               occurredAt,
               summary: newSessionSummary.trim() || `尚未补充本次${sessionNoun}摘要。`,
-              tags: ["待补充"],
-              recording: "未添加",
-              record: "未生成",
-              scale: "未上传",
-              homework: "未添加",
-              other: "无",
-            }]));
+            });
             setShowCreateSession(false);
             setNewSessionSummary("");
-            onNotice(`已新增第 ${sequence} 次${sessionNoun}`, "咨询历程已按时间倒序重新排列。");
           }}>
             <Text style={styles.inlineCreateConfirmText}>创建记录</Text>
           </TouchableOpacity>
@@ -1678,9 +2994,13 @@ function ProfileDetailScreen({
           key={session.id}
           session={session}
           sessionNoun={sessionNoun}
-          onChange={(patch) => onSessionsChange(updateSession(sessions, session.id, patch))}
-          onDelete={() => onSessionsChange(removeSession(sessions, session.id))}
-          onOpenRecord={onOpenRecord}
+          onChange={(patch) => void onUpdateSession(session.id, {
+            occurredAt: patch.occurredAt,
+            summary: patch.summary,
+            tags: patch.tags,
+          })}
+          onDelete={() => void onDeleteSession(session.id)}
+          onOpenRecord={() => onOpenRecord(session.id)}
           onOpenMaterial={(category) => onOpenMaterial(category, session.id)}
           onNotice={onNotice}
         />
@@ -1749,6 +3069,13 @@ function RecordingDetailScreen({
           <Text style={styles.listMeta}>{recording.duration} · {recording.archive} · {recording.ttl}</Text>
         </View>
       </View>
+      <RecordingAudioPlayer
+        fileId={recording.audioFileId ?? null}
+        available={recordingAudioCanProcess(recording.ttl)}
+        title={recording.title}
+        fallbackDuration={recording.duration}
+        onNotice={onNotice}
+      />
 
       <View style={styles.summaryCard}>
         <View style={styles.summaryHeader}>
@@ -1919,11 +3246,10 @@ function SessionMaterialsScreen({
   materials: SessionMaterial[];
   onOpenRecording: () => void;
   onPreview: (material: SessionMaterial) => void;
-  onAdd: (title: string, fileType: string) => void;
+  onAdd: (fileType: string) => Promise<void>;
   onAuthorize: () => void;
 }) {
   const [showUpload, setShowUpload] = useState(false);
-  const [title, setTitle] = useState("");
   const [fileType, setFileType] = useState(category === "recording" ? "音频" : category === "homework" || category === "other" ? "PDF" : "图片");
   const copy = materialCategoryCopy[category];
 
@@ -1938,27 +3264,19 @@ function SessionMaterialsScreen({
       <SectionHeader title={`当前资料 · ${materials.length} 项`} action={showUpload ? "收起" : copy.uploadLabel} onAction={() => setShowUpload((current) => !current)} />
       {showUpload ? (
         <View style={styles.inlineCreateCard}>
-          <TextInput
-            value={title}
-            onChangeText={setTitle}
-            placeholder={category === "recording" ? "录音文件名" : "资料名称"}
-            placeholderTextColor={colors.subtle}
-            style={styles.archiveTextInput}
-          />
+          <Text style={styles.formHelp}>点击后将打开系统文件选择器，文件名和类型以真实文件为准。</Text>
           <View style={styles.segmented}>
-            {(category === "recording" ? ["音频"] : category === "homework" || category === "other" ? ["PDF", "图片", "文字备注"] : ["PDF", "图片"]).map((type) => (
+            {(category === "recording" ? ["音频"] : ["PDF", "图片"]).map((type) => (
               <TouchableOpacity key={type} style={[styles.segmentButton, fileType === type && styles.segmentActive]} onPress={() => setFileType(type)}>
                 <Text style={[styles.segmentText, fileType === type && styles.segmentTextActive]}>{type}</Text>
               </TouchableOpacity>
             ))}
           </View>
-          <TouchableOpacity style={[styles.inlineCreateConfirm, !title.trim() && styles.inlineCreateConfirmDisabled]} activeOpacity={0.78} onPress={() => {
-            if (!title.trim()) return;
-            onAdd(title, fileType);
-            setTitle("");
+          <TouchableOpacity style={styles.inlineCreateConfirm} activeOpacity={0.78} onPress={async () => {
+            await onAdd(fileType);
             setShowUpload(false);
           }}>
-            <Text style={styles.inlineCreateConfirmText}>保存文件信息</Text>
+            <Text style={styles.inlineCreateConfirmText}>选择并上传文件</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -2007,7 +3325,7 @@ function FilePreviewScreen({
 }: {
   file: PreviewFile;
   onNotice: (title: string, detail: string) => void;
-  onUpdate: (title: string, fileType: string) => void;
+  onUpdate: (title: string, fileType: string) => Promise<void>;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -2019,9 +3337,7 @@ function FilePreviewScreen({
     ? "图片预览区域"
     : fileType === "音频"
       ? "音频波形与播放区域"
-      : fileType === "文字备注"
-        ? "文字内容预览区域"
-        : "PDF 文档预览区域";
+      : "PDF 文档预览区域";
 
   return (
     <View style={styles.stack}>
@@ -2039,15 +3355,15 @@ function FilePreviewScreen({
           <Text style={styles.formPreviewTitle}>修改文件</Text>
           <TextInput value={title} onChangeText={setTitle} style={styles.archiveTextInput} />
           <View style={styles.segmented}>
-            {["PDF", "图片", "文字备注"].map((type) => (
+            {["PDF", "图片"].map((type) => (
               <TouchableOpacity key={type} style={[styles.segmentButton, fileType === type && styles.segmentActive]} onPress={() => setFileType(type)}>
                 <Text style={[styles.segmentText, fileType === type && styles.segmentTextActive]}>{type}</Text>
               </TouchableOpacity>
             ))}
           </View>
-          <PrimaryButton icon={Save} label="保存修改 / 替换文件" onPress={() => {
+          <PrimaryButton icon={Save} label="选择并替换文件" onPress={async () => {
             if (!title.trim()) return;
-            onUpdate(title.trim(), fileType);
+            await onUpdate(title.trim(), fileType);
             setEditing(false);
           }} wide />
         </View>
@@ -2056,16 +3372,22 @@ function FilePreviewScreen({
       <View style={styles.fileActionStack}>
         <GhostButton icon={Download} label={downloadState.label} onPress={async () => {
           if (!file.file?.fileId) {
-            onNotice("暂不能下载原文件", "文件服务将在后端 MinIO 接入后启用。");
+            onNotice("暂不能下载原文件", "该文件尚未完成上传，请重新选择文件。");
             return;
           }
-          const result = await fileService.getDownloadUrl(file.file.fileId);
-          if (!result.ok) {
-            onNotice("暂不能下载原文件", result.message);
-            return;
-          }
-          if (typeof window !== "undefined") {
-            window.open(result.data.downloadUrl, "_blank", "noopener,noreferrer");
+          try {
+            const result = await fileService.getDownloadUrl(file.file.fileId);
+            await downloadAndShareFile(
+              result.download_url,
+              file.file.filename,
+              file.file.mimeType,
+            );
+            onNotice("文件已下载", "文件已保存到应用目录，并已打开系统分享面板。");
+          } catch (error) {
+            onNotice(
+              "暂不能下载原文件",
+              error instanceof ApiError ? error.message : "文件下载地址获取失败。",
+            );
           }
         }} />
         <GhostButton icon={Edit3} label={editing ? "取消修改" : "修改 / 替换"} onPress={() => {
@@ -2101,6 +3423,9 @@ function RecordEditorScreen({
   onSectionsChange,
   onFormalChange,
   onDirtyChange,
+  onSaveFormal,
+  onCopyFormalToDraft,
+  onDownload,
   onOpenPrivacy,
   onNotice,
 }: {
@@ -2111,6 +3436,9 @@ function RecordEditorScreen({
   onSectionsChange: (sections: EditableRecordSection[]) => void;
   onFormalChange: (formal: boolean) => void;
   onDirtyChange: (dirty: boolean) => void;
+  onSaveFormal: () => Promise<void>;
+  onCopyFormalToDraft: () => Promise<void>;
+  onDownload: () => Promise<void>;
   onOpenPrivacy: () => void;
   onNotice: (title: string, detail: string) => void;
 }) {
@@ -2162,24 +3490,25 @@ function RecordEditorScreen({
       <View style={styles.savePanel}>
         {formal ? (
           <PrimaryButton icon={Edit3} label="复制为草稿继续修改" onPress={() => {
-            onFormalChange(false);
-            onDirtyChange(false);
-            onNotice("已复制为草稿", "正式版保持不变；保存草稿后可替换正式版。");
+            void onCopyFormalToDraft().then(() => {
+              onFormalChange(false);
+              onDirtyChange(false);
+              onNotice("已复制为草稿", "正式版保持不变；保存草稿后可替换正式版。");
+            }).catch((error) => onNotice("复制草稿失败", error instanceof Error ? error.message : "请稍后重试。"));
           }} wide />
         ) : (
           <PrimaryButton icon={Save} label="保存为正式版" onPress={() => {
-            onFormalChange(true);
-            onDirtyChange(false);
-            onNotice(`${recordType}已保存为正式版`, `本次${recordType}已进入档案；后续修改需先复制为草稿。`);
+            void onSaveFormal().then(() => {
+              onFormalChange(true);
+              onDirtyChange(false);
+              onNotice(`${recordType}已保存为正式版`, `本次${recordType}已进入档案；后续修改需先复制为草稿。`);
+            }).catch((error) => onNotice("正式版保存失败", error instanceof Error ? error.message : "请稍后重试。"));
           }} wide />
         )}
         <GhostButton icon={Download} label={`下载${recordType} PDF`} onPress={() => {
-          scheduleDownload(buildDownloadArtifact({
-            title: `${profile.profileName} ${profile.recordLabel} ${recordType}`,
-            fileType: "PDF",
-            sections,
-          }));
-          onNotice("下载已开始", `${recordType}${formal ? "正式版" : "草稿"}正在下载到本地。`);
+          void onDownload()
+            .then(() => onNotice("下载已开始", `${recordType}${formal ? "正式版" : "草稿"}正在下载到本地。`))
+            .catch((error) => onNotice("下载失败", error instanceof Error ? error.message : "请稍后重试。"));
         }} />
         <GhostButton icon={ShieldCheck} label="授权长期保存草稿与正式版" onPress={onOpenPrivacy} />
       </View>
@@ -2189,22 +3518,21 @@ function RecordEditorScreen({
 
 function CaseReportMaterialScreen({
   profile,
+  sources,
   onGenerate,
 }: {
   profile: ArchiveResult;
-  onGenerate: () => void;
+  sources: ReportSource[];
+  onGenerate: (selected: ReportSource[]) => Promise<void>;
 }) {
-  const materials: CaseReportMaterial[] = [
-    { id: "record-6", title: "第 6 次咨询记录 · 草稿", available: true },
-    { id: "record-5", title: "第 5 次咨询记录 · 正式版", available: true },
-    { id: "scale-5", title: "第 5 次 SAS 量表", available: true },
-    { id: "homework-5", title: "第 5 次咨询作业", available: true },
-    { id: "audio-4", title: "第 4 次原始录音 · 已销毁", available: false },
-  ];
-  const selectable = getSelectableCaseReportMaterials(materials);
-  const [selected, setSelected] = useState(selectable.map((item) => item.id));
-  const toggle = (id: string) => {
-    setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const selectable = sources.filter((source) => source.analysisStatus === "available");
+  const [selected, setSelected] = useState(
+    selectable.filter((source) => source.defaultSelected)
+      .map((source) => `${source.resourceType}:${source.resourceId}`),
+  );
+  const [generating, setGenerating] = useState(false);
+  const toggle = (key: string) => {
+    setSelected((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   };
 
   return (
@@ -2221,32 +3549,44 @@ function CaseReportMaterialScreen({
         <Text style={styles.privacyCopy}>默认勾选所有仍可用的咨询记录、量表、作业和附件。已销毁资料不能参与分析。</Text>
       </View>
       <View style={styles.consentList}>
-        {materials.map((material) => material.available ? (
+        {sources.map((source) => {
+          const key = `${source.resourceType}:${source.resourceId}`;
+          return source.analysisStatus === "available" ? (
           <ConsentItem
-            key={material.id}
-            title={material.title}
+            key={key}
+            title={source.label}
             meta="可参与个案报告生成"
-            selected={selected.includes(material.id)}
-            onPress={() => toggle(material.id)}
+            selected={selected.includes(key)}
+            onPress={() => toggle(key)}
           />
         ) : (
-          <View key={material.id} style={styles.lockedConsentItem}>
+          <View key={key} style={styles.lockedConsentItem}>
             <Trash2 size={18} color={colors.danger} />
             <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{material.title}</Text>
-              <Text style={styles.listMeta}>资料已销毁，无法纳入分析</Text>
+              <Text style={styles.listTitle}>{source.label}</Text>
+              <Text style={styles.listMeta}>{source.analysisStatus}，无法纳入分析</Text>
             </View>
           </View>
-        ))}
+        );
+        })}
       </View>
       <TouchableOpacity
         style={[styles.primaryButton, styles.wideButton, selected.length === 0 && styles.pendingPrimaryButton]}
         activeOpacity={0.78}
-        disabled={selected.length === 0}
-        onPress={onGenerate}
+        disabled={selected.length === 0 || generating}
+        onPress={async () => {
+          setGenerating(true);
+          try {
+            await onGenerate(selectable.filter((source) => selected.includes(
+              `${source.resourceType}:${source.resourceId}`,
+            )));
+          } finally {
+            setGenerating(false);
+          }
+        }}
       >
         <Sparkles size={18} color="#FFF9F3" />
-        <Text style={styles.primaryButtonText}>{selected.length > 0 ? `使用 ${selected.length} 项资料生成草稿` : "至少选择一项资料"}</Text>
+        <Text style={styles.primaryButtonText}>{generating ? "正在生成..." : selected.length > 0 ? `使用 ${selected.length} 项资料生成草稿` : "至少选择一项资料"}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -2258,6 +3598,9 @@ function CaseReportEditorScreen({
   formal,
   onSectionsChange,
   onFormalChange,
+  onSaveFormal,
+  onCopyFormalToDraft,
+  onDownload,
   onOpenPrivacy,
   onNotice,
 }: {
@@ -2266,6 +3609,9 @@ function CaseReportEditorScreen({
   formal: boolean;
   onSectionsChange: (sections: EditableRecordSection[]) => void;
   onFormalChange: (formal: boolean) => void;
+  onSaveFormal: () => Promise<void>;
+  onCopyFormalToDraft: () => Promise<void>;
+  onDownload: () => Promise<void>;
   onOpenPrivacy: () => void;
   onNotice: (title: string, detail: string) => void;
 }) {
@@ -2299,20 +3645,32 @@ function CaseReportEditorScreen({
       ))}
       <View style={styles.savePanel}>
         {formal ? (
-          <PrimaryButton icon={Edit3} label="复制为草稿继续修改" onPress={() => onFormalChange(false)} wide />
+          <PrimaryButton icon={Edit3} label="复制为草稿继续修改" onPress={async () => {
+            try {
+              await onCopyFormalToDraft();
+              onFormalChange(false);
+            } catch (error) {
+              onNotice("复制草稿失败", error instanceof Error ? error.message : "请稍后重试。");
+            }
+          }} wide />
         ) : (
-          <PrimaryButton icon={Save} label="保存个案报告正式版" onPress={() => {
-            onFormalChange(true);
-            onNotice("个案报告已保存为正式版", "正式版已进入档案，后续修改需要先复制为草稿。");
+          <PrimaryButton icon={Save} label="保存个案报告正式版" onPress={async () => {
+            try {
+              await onSaveFormal();
+              onFormalChange(true);
+              onNotice("个案报告已保存为正式版", "正式版已进入档案，后续修改需要先复制为草稿。");
+            } catch (error) {
+              onNotice("正式版保存失败", error instanceof Error ? error.message : "请稍后重试。");
+            }
           }} wide />
         )}
-        <GhostButton icon={Download} label="下载个案报告 PDF" onPress={() => {
-          scheduleDownload(buildDownloadArtifact({
-            title: `${profile.profileName} 个案报告`,
-            fileType: "PDF",
-            sections,
-          }));
-          onNotice("下载已开始", `个案报告${formal ? "正式版" : "草稿"}正在下载到本地，不包含原始录音。`);
+        <GhostButton icon={Download} label="下载个案报告 PDF" onPress={async () => {
+          try {
+            await onDownload();
+            onNotice("报告已导出", `个案报告${formal ? "正式版" : "草稿"}已下载并打开系统分享面板。`);
+          } catch (error) {
+            onNotice("报告导出失败", error instanceof Error ? error.message : "请稍后重试。");
+          }
         }} />
         <GhostButton icon={ShieldCheck} label="授权长期保存个案报告" onPress={onOpenPrivacy} />
       </View>
@@ -2321,15 +3679,47 @@ function CaseReportEditorScreen({
 }
 
 function PrivacyCenterScreen({
-  authorizedResources,
-  onAuthorize,
   onNotice,
 }: {
-  authorizedResources: string[];
-  onAuthorize: () => void;
   onNotice: (title: string, detail: string) => void;
 }) {
-  const expiringResources = privacyResources.filter((resource) => !authorizedResources.includes(resource.title));
+  const [expiringResources, setExpiringResources] = useState<SensitiveResource[]>([]);
+  const [longTermResources, setLongTermResources] = useState<SensitiveResource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [expiring, longTerm] = await Promise.all([
+        privacyService.expiring(),
+        privacyService.longTerm(),
+      ]);
+      setExpiringResources(expiring.items);
+      setLongTermResources(longTerm.items);
+    } catch (error) {
+      onNotice("隐私资料加载失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+  const deleteResource = async (item: SensitiveResource) => {
+    setDeletingId(item.id);
+    try {
+      await privacyService.delete(item.id);
+      setPendingDeleteId(null);
+      await load();
+      onNotice("云端资料已删除", `“${item.displayName}”及其受保护内容已从后端销毁，无法恢复。`);
+    } catch (error) {
+      onNotice("资料删除失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <View style={styles.stack}>
       <View style={styles.poster}>
@@ -2340,33 +3730,136 @@ function PrivacyCenterScreen({
 
       <SectionHeader title="即将销毁资料" action={`${expiringResources.length} 项`} />
       <View style={styles.cardStack}>
+        {loading ? <Text style={styles.listMeta}>正在读取后端保存状态...</Text> : null}
         {expiringResources.map((item) => (
-          <View key={item.title} style={styles.privacyResource}>
-            <Clock3 size={18} color={item.preservable ? colors.clayDark : colors.danger} />
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{item.title}</Text>
-              <Text style={styles.listMeta}>{item.type} · {item.expires}</Text>
+          <View key={item.id} style={styles.privacyResourceCard}>
+            <View style={styles.privacyResourceMain}>
+              <Clock3 size={18} color={item.canLongTermPreserve ? colors.clayDark : colors.danger} />
+              <View style={styles.listBody}>
+                <Text style={styles.listTitle}>{item.displayName}</Text>
+                <Text style={styles.listMeta}>
+                  {item.resourceType} · {new Date(item.expiresAt).toLocaleString("zh-CN")} 到期
+                </Text>
+              </View>
             </View>
-            <Badge label={item.preservable ? "可授权" : "不可授权"} tone={item.preservable ? "warm" : "blue"} />
+            <View style={styles.privacyResourceFooter}>
+              {item.canLongTermPreserve ? (
+              <TouchableOpacity
+                style={styles.smallActionButton}
+                onPress={async () => {
+                  try {
+                    await privacyService.authorize(item.id);
+                    await load();
+                  } catch (error) {
+                    onNotice("授权失败", error instanceof Error ? error.message : "请稍后重试。");
+                  }
+                }}
+              >
+                <ShieldCheck size={15} color={colors.clayDark} />
+                <Text style={styles.smallActionText}>长期保存</Text>
+              </TouchableOpacity>
+              ) : (
+                <Badge label="不可授权" tone="blue" />
+              )}
+              <TouchableOpacity
+                style={[
+                  styles.sessionToolButton,
+                  pendingDeleteId === item.id && styles.sessionToolButtonDanger,
+                ]}
+                onPress={() => setPendingDeleteId(
+                  pendingDeleteId === item.id ? null : item.id,
+                )}
+              >
+                <Trash2 size={14} color={pendingDeleteId === item.id ? colors.danger : colors.clayDark} />
+                <Text style={[
+                  styles.sessionToolText,
+                  pendingDeleteId === item.id && styles.sessionToolTextDanger,
+                ]}>
+                  {pendingDeleteId === item.id ? "取消删除" : "删除资料"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {pendingDeleteId === item.id ? (
+              <View style={styles.privacyDeleteConfirm}>
+                <Text style={styles.dangerCopy}>确认永久删除“{item.displayName}”？后端将立即销毁关联内容，操作不可恢复。</Text>
+                <TouchableOpacity
+                  style={styles.dangerButton}
+                  disabled={deletingId === item.id}
+                  onPress={() => void deleteResource(item)}
+                >
+                  <Trash2 size={15} color={colors.danger} />
+                  <Text style={styles.dangerButtonText}>
+                    {deletingId === item.id ? "正在删除..." : "确认永久删除"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </View>
         ))}
       </View>
-      {getAuthorizableResources(expiringResources).length > 0 ? (
-        <PrimaryButton icon={ShieldCheck} label="选择资料长期保存" onPress={onAuthorize} wide />
-      ) : null}
 
-      <SectionHeader title="已长期保存资料" action={`${authorizedResources.length} 项`} />
-      {authorizedResources.length > 0 ? (
+      <SectionHeader title="已长期保存资料" action={`${longTermResources.length} 项`} />
+      {longTermResources.length > 0 ? (
         <View style={styles.cardStack}>
-          {authorizedResources.map((title) => (
-            <TouchableOpacity key={title} style={styles.privacyResource} activeOpacity={0.78} onPress={() => onNotice("长期保存资料", `${title} 可在详情中撤回授权或立即删除。`)}>
-              <CheckCircle2 size={18} color={colors.sageDark} />
-              <View style={styles.listBody}>
-                <Text style={styles.listTitle}>{title}</Text>
-                <Text style={styles.listMeta}>保存至主动删除或撤回授权</Text>
+          {longTermResources.map((item) => (
+            <View key={item.id} style={styles.privacyResourceCard}>
+              <View style={styles.privacyResourceMain}>
+                <CheckCircle2 size={18} color={colors.sageDark} />
+                <View style={styles.listBody}>
+                  <Text style={styles.listTitle}>{item.displayName}</Text>
+                  <Text style={styles.listMeta}>已由你主动授权长期保留</Text>
+                </View>
               </View>
-              <ChevronRight size={18} color={colors.subtle} />
-            </TouchableOpacity>
+              <View style={styles.privacyResourceFooter}>
+                <TouchableOpacity
+                  style={styles.smallActionButton}
+                  onPress={async () => {
+                    try {
+                      await privacyService.revoke(item.id);
+                      await load();
+                      onNotice("已撤回长期保存", "若原临时期限已结束，后端会立即销毁资料。");
+                    } catch (error) {
+                      onNotice("撤回失败", error instanceof Error ? error.message : "请稍后重试。");
+                    }
+                  }}
+                >
+                  <X size={14} color={colors.clayDark} />
+                  <Text style={styles.smallActionText}>撤回授权</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.sessionToolButton,
+                    pendingDeleteId === item.id && styles.sessionToolButtonDanger,
+                  ]}
+                  onPress={() => setPendingDeleteId(
+                    pendingDeleteId === item.id ? null : item.id,
+                  )}
+                >
+                  <Trash2 size={14} color={pendingDeleteId === item.id ? colors.danger : colors.clayDark} />
+                  <Text style={[
+                    styles.sessionToolText,
+                    pendingDeleteId === item.id && styles.sessionToolTextDanger,
+                  ]}>
+                    {pendingDeleteId === item.id ? "取消删除" : "删除资料"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              {pendingDeleteId === item.id ? (
+                <View style={styles.privacyDeleteConfirm}>
+                  <Text style={styles.dangerCopy}>确认永久删除“{item.displayName}”？长期保存授权也会一并终止，操作不可恢复。</Text>
+                  <TouchableOpacity
+                    style={styles.dangerButton}
+                    disabled={deletingId === item.id}
+                    onPress={() => void deleteResource(item)}
+                  >
+                    <Trash2 size={15} color={colors.danger} />
+                    <Text style={styles.dangerButtonText}>
+                      {deletingId === item.id ? "正在删除..." : "确认永久删除"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+            </View>
           ))}
         </View>
       ) : (
@@ -2385,120 +3878,146 @@ function PrivacyCenterScreen({
   );
 }
 
-function PrivacyConsentScreen({
-  resources,
-  onCancel,
-  onComplete,
+function SupervisionScreen({
+  profiles,
+  onNotice,
 }: {
-  resources: PrivacyResource[];
-  onCancel: () => void;
-  onComplete: (selected: string[]) => void;
+  profiles: ProfileListItem[];
+  onNotice: (title: string, detail: string) => void;
 }) {
-  const [selected, setSelected] = useState<string[]>([]);
-  const toggleConsent = (title: string) => {
-    setSelected((current) => (current.includes(title) ? current.filter((item) => item !== title) : [...current, title]));
-  };
-  const hasSelected = selected.length > 0;
-
-  return (
-    <View style={styles.consentBackdrop}>
-      <View style={styles.consentSheet}>
-        <View style={styles.consentTopHandle} />
-        <Text style={styles.consentTitle}>是否授权长期保存？</Text>
-        <Text style={styles.consentCopy}>
-          以下资料默认 14 天后销毁。长期保存需要你主动勾选，授权后会保存到云端，直到你删除资料或撤回授权。
-        </Text>
-
-        <View style={styles.consentList}>
-          {resources.map((resource) => (
-            <ConsentItem
-              key={resource.title}
-              title={resource.title}
-              meta={`${resource.type} · ${resource.expires}`}
-              selected={selected.includes(resource.title)}
-              onPress={() => toggleConsent(resource.title)}
-            />
-          ))}
-          <View style={styles.lockedConsentItem}>
-            <Trash2 size={18} color={colors.danger} />
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>原始录音</Text>
-              <Text style={styles.listMeta}>仅临时保存 14 天，不支持长期云端保存</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.riskPanel}>
-          <ShieldCheck size={18} color={colors.sageDark} />
-          <Text style={styles.riskText}>
-            {hasSelected ? `将授权 ${selected.length} 项资料长期保存。` : "尚未选择任何资料。"}
-            你可以在「数据与隐私」中随时查看授权清单、取消授权或删除资料。
-          </Text>
-        </View>
-
-        <View style={styles.consentFooter}>
-          <TouchableOpacity style={styles.secondaryWideButton} activeOpacity={0.78} onPress={onCancel}>
-            <Text style={styles.secondaryWideText}>暂不授权</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.disabledWideButton, hasSelected && styles.enabledWideButton]}
-            activeOpacity={0.78}
-            disabled={!hasSelected}
-            onPress={() => onComplete(selected)}
-          >
-            <Text style={[styles.disabledWideText, hasSelected && styles.enabledWideText]}>{hasSelected ? `确认授权 ${selected.length} 项` : "需手动勾选"}</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function SupervisionScreen() {
-  const contextOptions: SupervisionContext[] = [
-    { id: "record-6", title: "陈雨 第6次咨询记录", type: "咨询记录" },
-    { id: "scale-6", title: "陈雨 SAS 量表", type: "量表" },
-    { id: "report-chen", title: "陈雨 个案报告草稿", type: "个案报告" },
-  ];
+  const contextOptions = profiles.map((profile) => ({
+    id: profile.id,
+    title: `${profile.name} · ${profile.type}档案`,
+    type: "档案",
+  }));
   const [showContexts, setShowContexts] = useState(false);
   const [showConversations, setShowConversations] = useState(false);
-  const [selectedContexts, setSelectedContexts] = useState<SupervisionContext[]>([]);
+  const [conversations, setConversations] = useState<SupervisionConversation[]>([]);
+  const [conversation, setConversation] = useState<SupervisionConversation | null>(null);
   const [input, setInput] = useState("");
-  const [pendingQuestion, setPendingQuestion] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [messages, setMessages] = useState<Array<{ id: string; align: "left" | "right"; text: string; citations?: string[] }>>([
-    { id: "intro-user", align: "left", text: "可以帮我整理一个适合带去督导的问题清单吗？" },
-    { id: "intro-ai", align: "right", text: "可以。先选择本次允许读取的资料；未添加资料时，我只提供通用整理框架。" },
-  ]);
+  const [newConversationTitle, setNewConversationTitle] = useState("");
+  const [creatingConversation, setCreatingConversation] = useState(false);
+  const [pendingDeleteConversationId, setPendingDeleteConversationId] = useState<string | null>(null);
+  const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
+  const [contextUnlock, setContextUnlock] = useState<{
+    profile: ProfileListItem;
+    passwordSet: boolean;
+  } | null>(null);
+  const [contextPassword, setContextPassword] = useState("");
+  const [contextUnlocking, setContextUnlocking] = useState(false);
 
   useEffect(() => {
-    if (!generating || !pendingQuestion) return;
-    const timeout = setTimeout(() => {
-      const reply = buildSupervisionReply(pendingQuestion, selectedContexts);
-      setMessages((current) => [...current, {
-        id: `assistant-${current.length}`,
-        align: "right",
-        text: reply.text,
-        citations: reply.citations,
-      }]);
-      setGenerating(false);
-      setPendingQuestion("");
-    }, 8000);
-    return () => clearTimeout(timeout);
-  }, [generating, pendingQuestion, selectedContexts]);
+    void supervisionService.list().then((items) => {
+      setConversations(items);
+      if (items[0]) {
+        setConversation(items[0]);
+      } else {
+        setConversation(null);
+        setShowConversations(true);
+      }
+    }).catch((error) => {
+      onNotice("督导会话加载失败", error instanceof Error ? error.message : "请稍后重试。");
+    });
+  }, []);
 
-  const toggleContext = (context: SupervisionContext) => {
-    setSelectedContexts((current) => current.some((item) => item.id === context.id)
-      ? current.filter((item) => item.id !== context.id)
-      : [...current, context]);
+  const refreshConversation = async (conversationId: string) => {
+    const refreshed = await supervisionService.get(conversationId);
+    setConversation(refreshed);
+    setConversations((current) => [
+      refreshed,
+      ...current.filter((item) => item.id !== refreshed.id),
+    ]);
   };
+  const createConversation = async () => {
+    setCreatingConversation(true);
+    try {
+      const result = await createConversationAndSelect(
+        (title) => supervisionService.createConversation(title),
+        newConversationTitle,
+        conversations,
+      );
+      setConversations(result.items);
+      setConversation(result.active);
+      setNewConversationTitle("");
+      setShowConversations(false);
+    } catch (error) {
+      onNotice("会话创建失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setCreatingConversation(false);
+    }
+  };
+  const deleteConversation = async (conversationId: string) => {
+    setDeletingConversationId(conversationId);
+    try {
+      const result = await deleteConversationAndSelect(
+        (id) => supervisionService.deleteConversation(id),
+        conversations,
+        conversation?.id ?? null,
+        conversationId,
+      );
+      setConversations(result.items);
+      setConversation(result.active);
+      setPendingDeleteConversationId(null);
+    } catch (error) {
+      onNotice("会话删除失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setDeletingConversationId(null);
+    }
+  };
+
+  const toggleContext = async (context: { id: string; title: string; type: string }) => {
+    if (!conversation) return;
+    const existing = conversation.contextRefs.find(
+      (item) => item.resourceType === "profile" && item.resourceId === context.id,
+    );
+    try {
+      if (existing) {
+        await supervisionService.removeContext(conversation.id, existing.id);
+      } else {
+        await supervisionService.addContext(conversation.id, [{
+          resourceType: "profile",
+          resourceId: context.id,
+        }]);
+      }
+      await refreshConversation(conversation.id);
+    } catch (error) {
+      if (
+        !existing
+        && error instanceof ApiError
+        && ["profile_access_grant_required", "profile_access_grant_invalid"].includes(error.code)
+      ) {
+        const profile = profiles.find((item) => item.id === context.id);
+        if (profile) {
+          try {
+            const kind = archiveKindForProfile(profile);
+            const statuses = await profileAccessService.statuses();
+            setContextUnlock({
+              profile,
+              passwordSet: statuses.find((item) => item.profile_type === kind)?.is_set ?? false,
+            });
+            setContextPassword("");
+            return;
+          } catch (statusError) {
+            onNotice(
+              "无法验证档案权限",
+              statusError instanceof Error ? statusError.message : "请稍后重试。",
+            );
+            return;
+          }
+        }
+      }
+      onNotice("上下文更新失败", error instanceof Error ? error.message : "请稍后重试。");
+    }
+  };
+  const selectedCount = conversation?.contextRefs.length ?? 0;
 
   return (
     <View style={styles.stack}>
       <View style={styles.aiPanel}>
         <Sparkles size={24} color={colors.clayDark} />
-        <Text style={styles.aiTitle}>{selectedContexts.length > 0 ? `已添加 ${selectedContexts.length} 项资料` : "本次会话未添加资料"}</Text>
-        <Text style={styles.aiCopy}>{selectedContexts.length > 0 ? "AI 仅可读取下方勾选资料，回答会逐项显示引用来源。" : "AI 不会读取任何档案内容。添加资料后，回答会显示引用来源。"}</Text>
+        <Text style={styles.aiTitle}>{selectedCount > 0 ? `已添加 ${selectedCount} 项资料` : "本次会话未添加资料"}</Text>
+        <Text style={styles.aiCopy}>{selectedCount > 0 ? "AI 仅可读取下方勾选资料，回答会逐项显示引用来源。" : "AI 不会读取任何档案内容。添加资料后，回答会显示引用来源。"}</Text>
         <View style={styles.inlineActions}>
           <GhostButton icon={Plus} label={showContexts ? "收起资料" : "添加资料"} onPress={() => setShowContexts((current) => !current)} />
           <GhostButton icon={History} label={showConversations ? "返回会话" : "会话列表"} onPress={() => setShowConversations((current) => !current)} />
@@ -2506,51 +4025,174 @@ function SupervisionScreen() {
       </View>
 
       {showContexts ? (
-        <View style={styles.consentList}>
-          {contextOptions.map((context) => (
-            <ConsentItem
-              key={context.id}
-              title={context.title}
-              meta={`${context.type} · 仅用于本次会话`}
-              selected={selectedContexts.some((item) => item.id === context.id)}
-              onPress={() => toggleContext(context)}
-            />
-          ))}
-        </View>
+        <>
+          {contextUnlock ? (
+            <View style={styles.inlineCreateCard}>
+              <Text style={styles.formPreviewTitle}>
+                {contextUnlock.passwordSet ? "验证档案访问密码" : "设置档案访问密码"}
+              </Text>
+              <Text style={styles.listMeta}>
+                {contextUnlock.profile.name} · {contextUnlock.profile.type}档案，仅授权本次添加操作
+              </Text>
+              <TextInput
+                value={contextPassword}
+                onChangeText={setContextPassword}
+                placeholder="至少 8 位"
+                placeholderTextColor={colors.subtle}
+                style={styles.archiveTextInput}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+              <View style={styles.inlineActions}>
+                <GhostButton
+                  icon={X}
+                  label="取消"
+                  onPress={() => {
+                    profileAccessService.leaveProfile();
+                    setContextUnlock(null);
+                    setContextPassword("");
+                  }}
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.inlineCreateConfirm,
+                    (contextPassword.length < 8 || contextUnlocking)
+                    && styles.inlineCreateConfirmDisabled,
+                  ]}
+                  disabled={contextPassword.length < 8 || contextUnlocking}
+                  onPress={() => {
+                    if (!conversation) return;
+                    setContextUnlocking(true);
+                    const pending = contextUnlock;
+                    const kind = archiveKindForProfile(pending.profile);
+                    void (async () => {
+                      try {
+                        if (!pending.passwordSet) {
+                          await profileAccessService.setPassword(kind, contextPassword);
+                        }
+                        await profileAccessService.verify(kind, contextPassword);
+                        await supervisionService.addContext(conversation.id, [{
+                          resourceType: "profile",
+                          resourceId: pending.profile.id,
+                        }]);
+                        await refreshConversation(conversation.id);
+                        setContextUnlock(null);
+                        setContextPassword("");
+                      } catch (error) {
+                        onNotice(
+                          "档案验证失败",
+                          error instanceof Error ? error.message : "请稍后重试。",
+                        );
+                      } finally {
+                        profileAccessService.leaveProfile();
+                        setContextUnlocking(false);
+                      }
+                    })();
+                  }}
+                >
+                  <Text style={styles.inlineCreateConfirmText}>
+                    {contextUnlocking ? "正在验证..." : "验证并添加"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+          <View style={styles.consentList}>
+            {contextOptions.map((context) => (
+              <ConsentItem
+                key={context.id}
+                title={context.title}
+                meta={`${context.type} · 仅用于本次会话`}
+                selected={conversation?.contextRefs.some((item) => item.resourceId === context.id) ?? false}
+                onPress={() => void toggleContext(context)}
+              />
+            ))}
+          </View>
+        </>
       ) : null}
 
       {showConversations ? (
         <View style={styles.cardStack}>
-          <TouchableOpacity style={styles.listCard} activeOpacity={0.78} onPress={() => setShowConversations(false)}>
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>当前会话 · 督导问题整理</Text>
-              <Text style={styles.listMeta}>{messages.length} 条消息 · {selectedContexts.length} 项资料</Text>
+          <View style={styles.inlineCreateCard}>
+            <Text style={styles.formPreviewTitle}>新建督导会话</Text>
+            <Text style={styles.listMeta}>每个会话的资料授权、消息和到期时间彼此独立。</Text>
+            <TextInput
+              value={newConversationTitle}
+              onChangeText={setNewConversationTitle}
+              placeholder="会话名称，例如：本周个案督导"
+              placeholderTextColor={colors.subtle}
+              style={styles.archiveTextInput}
+              maxLength={80}
+            />
+            <TouchableOpacity
+              style={[
+                styles.inlineCreateConfirm,
+                creatingConversation && styles.inlineCreateConfirmDisabled,
+              ]}
+              disabled={creatingConversation}
+              onPress={() => void createConversation()}
+            >
+              <Text style={styles.inlineCreateConfirmText}>
+                {creatingConversation ? "正在创建..." : "创建并进入会话"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {conversations.length === 0 ? (
+            <View style={styles.emptySearchCard}>
+              <History size={20} color={colors.subtle} />
+              <Text style={styles.emptySearchTitle}>暂无督导会话</Text>
+              <Text style={styles.emptySearchCopy}>填写上方名称即可开始一个新的独立会话。</Text>
             </View>
-            <Badge label="进行中" tone="green" />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.listCard} activeOpacity={0.78} onPress={() => {
-            setMessages([
-              { id: "old-user", align: "left", text: "怎么区分关系反应和技术选择？" },
-              { id: "old-ai", align: "right", text: "可以先标记咨询现场发生的事实，再分别写下你的情绪反应与技术意图。", citations: ["咨询记录：陈雨 第5次咨询记录"] },
-            ]);
-            setShowConversations(false);
-          }}>
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>陈雨咨询复盘</Text>
-              <Text style={styles.listMeta}>6月3日 · 已授权长期保存</Text>
+          ) : null}
+          {conversations.map((item) => (
+            <View key={item.id} style={styles.conversationCard}>
+              <TouchableOpacity style={styles.conversationSelect} activeOpacity={0.78} onPress={() => {
+                setConversation(item);
+                setPendingDeleteConversationId(null);
+                setShowConversations(false);
+              }}>
+                <View style={styles.listBody}>
+                  <Text style={styles.listTitle}>{item.title}</Text>
+                  <Text style={styles.listMeta}>{item.messages.length} 条消息 · {item.contextRefs.length} 项资料</Text>
+                </View>
+                {conversation?.id === item.id ? <Badge label="当前" tone="green" /> : <ChevronRight size={18} color={colors.subtle} />}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.conversationDelete,
+                  pendingDeleteConversationId === item.id && styles.sessionToolButtonDanger,
+                ]}
+                disabled={deletingConversationId === item.id}
+                onPress={() => {
+                  if (pendingDeleteConversationId !== item.id) {
+                    setPendingDeleteConversationId(item.id);
+                    return;
+                  }
+                  void deleteConversation(item.id);
+                }}
+              >
+                <Trash2 size={14} color={pendingDeleteConversationId === item.id ? colors.danger : colors.clayDark} />
+                <Text style={[
+                  styles.sessionToolText,
+                  pendingDeleteConversationId === item.id && styles.sessionToolTextDanger,
+                ]}>
+                  {deletingConversationId === item.id
+                    ? "正在删除..."
+                    : pendingDeleteConversationId === item.id ? "确认删除会话" : "删除"}
+                </Text>
+              </TouchableOpacity>
             </View>
-            <ChevronRight size={18} color={colors.subtle} />
-          </TouchableOpacity>
+          ))}
         </View>
       ) : (
         <>
-          {messages.map((message) => (
+          {(conversation?.messages ?? []).map((message) => (
             <View key={message.id} style={styles.chatMessageGroup}>
-              <ChatBubble align={message.align} text={message.text} />
-              {message.citations && message.citations.length > 0 ? (
+              <ChatBubble align={message.role === "user" ? "left" : "right"} text={message.content} />
+              {message.citations.length > 0 ? (
                 <View style={styles.citationPanel}>
                   <Text style={styles.citationTitle}>引用来源</Text>
-                  {message.citations.map((citation) => <Text key={citation} style={styles.citationText}>{citation}</Text>)}
+                  {message.citations.map((citation) => <Text key={`${citation.resource_type}-${citation.resource_id}`} style={styles.citationText}>{citation.label}</Text>)}
                 </View>
               ) : null}
             </View>
@@ -2558,15 +4200,7 @@ function SupervisionScreen() {
           {generating ? (
             <View style={styles.processingChat}>
               <RefreshCcw size={17} color={colors.clayDark} />
-              <Text style={styles.listMeta}>正在基于 {selectedContexts.length} 项已选资料生成回答</Text>
-              <TouchableOpacity style={styles.stopButton} activeOpacity={0.78} onPress={() => {
-                setGenerating(false);
-                setPendingQuestion("");
-                setMessages((current) => [...current, { id: `stopped-${current.length}`, align: "right", text: "生成已停止，本次未完成回答未保存。" }]);
-              }}>
-                <Square size={14} color={colors.danger} fill={colors.danger} />
-                <Text style={styles.stopButtonText}>停止</Text>
-              </TouchableOpacity>
+              <Text style={styles.listMeta}>正在基于 {selectedCount} 项已选资料生成回答</Text>
             </View>
           ) : null}
         </>
@@ -2580,13 +4214,20 @@ function SupervisionScreen() {
           placeholderTextColor={colors.subtle}
           style={styles.composerInput}
         />
-        <TouchableOpacity accessibilityLabel="发送督导问题" style={[styles.sendButton, (!input.trim() || generating) && styles.sendButtonDisabled]} activeOpacity={0.75} disabled={!input.trim() || generating} onPress={() => {
+        <TouchableOpacity accessibilityLabel="发送督导问题" style={[styles.sendButton, (!input.trim() || generating || !conversation) && styles.sendButtonDisabled]} activeOpacity={0.75} disabled={!input.trim() || generating || !conversation} onPress={() => {
           const question = input.trim();
-          setMessages((current) => [...current, { id: `user-${current.length}`, align: "left", text: question }]);
-          setPendingQuestion(question);
           setInput("");
           setGenerating(true);
           setShowConversations(false);
+          void supervisionService.sendMessage(conversation!.id, question)
+            .then(async (result) => {
+              if (result.riskPrompt) onNotice("危机风险提醒", result.riskPrompt);
+              await refreshConversation(conversation!.id);
+            })
+            .catch((error) => {
+              onNotice("督导回复失败", error instanceof Error ? error.message : "请稍后重试。");
+            })
+            .finally(() => setGenerating(false));
         }}>
           <Play size={17} color="#FFF9F3" fill="#FFF9F3" />
         </TouchableOpacity>
@@ -2610,44 +4251,130 @@ function ContentScreen({ onOpen }: { onOpen: (article: (typeof articles)[number]
 }
 
 function AccountScreen({
+  user,
   onOpenPrivacy,
   onOpenSecurity,
   onNotice,
+  onUpdateProfile,
+  onLogout,
 }: {
+  user: CurrentUser | null;
   onOpenPrivacy: () => void;
   onOpenSecurity: () => void;
   onNotice: (title: string, detail: string) => void;
+  onUpdateProfile: (displayName: string) => Promise<void>;
+  onLogout: () => Promise<void>;
 }) {
+  const displayName = user?.display_name || "咨询师";
+  const [privacySummary, setPrivacySummary] = useState<SensitiveResource[]>([]);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [displayNameDraft, setDisplayNameDraft] = useState(displayName);
+  const [savingProfile, setSavingProfile] = useState(false);
+  useEffect(() => {
+    setDisplayNameDraft(displayName);
+  }, [displayName]);
+  useEffect(() => {
+    void privacyService.expiring(14, 1, 3)
+      .then((response) => setPrivacySummary(response.items))
+      .catch(() => setPrivacySummary([]));
+  }, []);
   return (
     <View style={styles.stack}>
-      <TouchableOpacity style={styles.accountCard} activeOpacity={0.78} onPress={() => onNotice("个人资料", "可编辑展示身份、专业方向和账号资料；身份展示不影响功能权限。")}>
+      <TouchableOpacity style={styles.accountCard} activeOpacity={0.78} onPress={() => setEditingProfile((current) => !current)}>
         <View style={styles.avatarLarge}>
-          <Text style={styles.avatarLargeText}>林</Text>
+          <Text style={styles.avatarLargeText}>{displayName.slice(0, 1)}</Text>
         </View>
         <View style={styles.listBody}>
-          <Text style={styles.accountName}>林咨询师</Text>
-          <Text style={styles.listMeta}>心理咨询师 · 个人版</Text>
+          <Text style={styles.accountName}>{displayName}</Text>
+          <Text style={styles.listMeta}>{user?.email ?? "个人版"}</Text>
         </View>
-        <Settings size={20} color={colors.subtle} />
+        <Edit3 size={20} color={colors.subtle} />
       </TouchableOpacity>
+      {editingProfile ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>编辑个人资料</Text>
+          <Text style={styles.listMeta}>邮箱作为登录账号不可在此修改；展示名称保存到后端账号资料。</Text>
+          <TextInput
+            value={displayNameDraft}
+            onChangeText={setDisplayNameDraft}
+            placeholder="展示名称"
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+            maxLength={80}
+          />
+          <View style={styles.inlineActions}>
+            <GhostButton
+              icon={X}
+              label="取消"
+              onPress={() => {
+                setDisplayNameDraft(displayName);
+                setEditingProfile(false);
+              }}
+            />
+            <TouchableOpacity
+              style={[
+                styles.inlineCreateConfirm,
+                styles.profileSaveButton,
+                savingProfile && styles.inlineCreateConfirmDisabled,
+              ]}
+              disabled={savingProfile}
+              onPress={() => {
+                void (async () => {
+                  try {
+                    const normalized = normalizeDisplayName(displayNameDraft);
+                    setSavingProfile(true);
+                    await onUpdateProfile(normalized);
+                    setEditingProfile(false);
+                    onNotice("个人资料已保存", "展示名称已写入后端账号资料。");
+                  } catch (error) {
+                    onNotice("个人资料保存失败", error instanceof Error ? error.message : "请稍后重试。");
+                  } finally {
+                    setSavingProfile(false);
+                  }
+                })();
+              }}
+            >
+              <Save size={15} color="#FFF9F3" />
+              <Text style={styles.inlineCreateConfirmText}>
+                {savingProfile ? "正在保存..." : "保存资料"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
       <SectionHeader title="数据与隐私" action="查看" onAction={onOpenPrivacy} />
       <View style={styles.cardStack}>
-        {privacyResources.map((item) => (
-          <TouchableOpacity key={item.title} style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
-            <Clock3 size={18} color={item.preservable ? colors.sageDark : colors.danger} />
+        {privacySummary.map((item) => {
+          const remainingDays = Math.max(
+            0,
+            Math.ceil((new Date(item.expiresAt).getTime() - Date.now()) / 86_400_000),
+          );
+          return (
+          <TouchableOpacity key={item.id} style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
+            <Clock3 size={18} color={item.canLongTermPreserve ? colors.sageDark : colors.danger} />
             <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{item.title}</Text>
-              <Text style={styles.listMeta}>{item.type} · {item.expires}</Text>
+              <Text style={styles.listTitle}>{item.displayName}</Text>
+              <Text style={styles.listMeta}>{item.resourceType} · {remainingDays} 天后到期</Text>
             </View>
-            <Badge label={item.preservable ? "可授权" : "不可长期"} tone={item.preservable ? "green" : "warm"} />
+            <Badge label={item.canLongTermPreserve ? "可授权" : "不可长期"} tone={item.canLongTermPreserve ? "green" : "warm"} />
           </TouchableOpacity>
-        ))}
+        )})}
+        {privacySummary.length === 0 ? (
+          <TouchableOpacity style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
+            <ShieldCheck size={18} color={colors.sageDark} />
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>暂无近期到期资料</Text>
+              <Text style={styles.listMeta}>进入隐私中心查看长期保存与销毁记录</Text>
+            </View>
+          </TouchableOpacity>
+        ) : null}
       </View>
       <SectionHeader title="安全" action="设置" onAction={onOpenSecurity} />
       <View style={styles.settingsList}>
         <SettingsRow icon={LockKeyhole} title="档案访问密码" value="三类档案独立设置" onPress={onOpenSecurity} />
         <SettingsRow icon={CalendarDays} title="手机日历同步" value="隐私标题模式关闭" onPress={onOpenSecurity} />
         <SettingsRow icon={ShieldCheck} title="账号安全" value="邮箱登录" onPress={onOpenSecurity} />
+        <SettingsRow icon={LogOut} title="退出登录" value="清除本机安全会话" onPress={() => void onLogout()} />
       </View>
     </View>
   );
@@ -2676,18 +4403,34 @@ function ArticleDetailScreen({ article }: { article: (typeof articles)[number] }
   );
 }
 
-function StatisticsScreen() {
-  const rows = [
-    { title: "咨询", value: "7.5 小时", detail: "6 次 · 较上周 +1.0 小时" },
-    { title: "接受督导", value: "2.0 小时", detail: "2 次 · 已完成记录" },
-    { title: "提供督导", value: "1.5 小时", detail: "1 次 · 正式版待保存" },
-  ];
+function StatisticsScreen({ recordings: recordingRows }: { recordings: RecordingItem[] }) {
+  const rows = ([
+    { title: "咨询", kind: "来访者" as const },
+    { title: "接受督导", kind: "督导师" as const },
+    { title: "提供督导", kind: "受督者" as const },
+  ]).map((row) => {
+    const items = recordingRows.filter(
+      (recording) => recording.kindLabel === row.kind && recording.archive === "已归档",
+    );
+    const seconds = items.reduce(
+      (total, recording) => total + parseDuration(recording.duration),
+      0,
+    );
+    return {
+      title: row.title,
+      value: `${(seconds / 3600).toFixed(1)} 小时`,
+      detail: `${items.length} 条已归档录音`,
+      seconds,
+    };
+  });
+  const totalSeconds = rows.reduce((total, row) => total + row.seconds, 0);
+  const now = new Date();
   return (
     <View style={styles.stack}>
       <View style={styles.metricSummary}>
-        <Text style={styles.metricSummaryLabel}>2026年6月1日 - 6月7日</Text>
-        <Text style={styles.metricSummaryValue}>11.0h</Text>
-        <Text style={styles.metricSummaryCopy}>本周专业工作总时长</Text>
+        <Text style={styles.metricSummaryLabel}>{now.toLocaleDateString("zh-CN")}</Text>
+        <Text style={styles.metricSummaryValue}>{(totalSeconds / 3600).toFixed(1)}h</Text>
+        <Text style={styles.metricSummaryCopy}>当前已归档录音总时长</Text>
       </View>
       <View style={styles.cardStack}>
         {rows.map((row) => (
@@ -2708,41 +4451,127 @@ function StatisticsScreen() {
   );
 }
 
-function ScheduleScreen({ onStartRecording }: { onStartRecording: () => void }) {
-  const [selectedDay, setSelectedDay] = useState("周一 6/8");
+function ScheduleScreen({
+  onStartRecording,
+  onNotice,
+}: {
+  onStartRecording: () => void;
+  onNotice: (title: string, detail: string) => void;
+}) {
+  const calendarDriver = useMemo(() => createExpoCalendarDriver(), []);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [privacyTitles, setPrivacyTitles] = useState(true);
-  const days = ["周一 6/8", "周二 6/9", "周三 6/10", "周四 6/11", "周五 6/12"];
-  const scheduleRows = selectedDay === "周一 6/8"
-    ? [
-        { time: "10:00", title: privacyTitles ? "个人安排" : "陈雨 · 第7次咨询", kind: "咨询 · 50 分钟" },
-        { time: "15:30", title: privacyTitles ? "专业安排" : "李澄 · 第4次受督", kind: "受督 · 60 分钟" },
-      ]
-    : [{ time: "14:00", title: privacyTitles ? "专业安排" : "周宁 · 第13次督导", kind: "督导 · 60 分钟" }];
+  const [systemSync, setSystemSync] = useState(false);
+  const days = useMemo(() => Array.from({ length: 5 }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() + index);
+    const key = [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getDate()).padStart(2, "0"),
+    ].join("-");
+    return {
+      key,
+      label: `${["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()]} ${date.getMonth() + 1}/${date.getDate()}`,
+    };
+  }), []);
+  const [selectedDay, setSelectedDay] = useState(days[0].key);
+
+  const load = async () => {
+    try {
+      const [settings, eventPage] = await Promise.all([
+        calendarService.settings(),
+        calendarService.listEvents(),
+      ]);
+      setPrivacyTitles(settings.privacyTitleModeEnabled);
+      setSystemSync(settings.systemCalendarEnabled);
+      setEvents(eventPage.items);
+    } catch (error) {
+      onNotice("日程加载失败", error instanceof Error ? error.message : "请稍后重试。");
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const scheduleRows = events.filter((event) => {
+    const date = new Date(event.startAt);
+    const key = [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getDate()).padStart(2, "0"),
+    ].join("-");
+    return key === selectedDay && event.status === "pending";
+  });
+
   return (
     <View style={styles.stack}>
       <View style={styles.segmentedScroll}>
         {days.map((day) => (
-          <TouchableOpacity key={day} style={[styles.dayButton, selectedDay === day && styles.dayButtonActive]} onPress={() => setSelectedDay(day)}>
-            <Text style={[styles.dayButtonText, selectedDay === day && styles.dayButtonTextActive]}>{day}</Text>
+          <TouchableOpacity key={day.key} style={[styles.dayButton, selectedDay === day.key && styles.dayButtonActive]} onPress={() => setSelectedDay(day.key)}>
+            <Text style={[styles.dayButtonText, selectedDay === day.key && styles.dayButtonTextActive]}>{day.label}</Text>
           </TouchableOpacity>
         ))}
       </View>
       <ToggleRow
+        title="同步到手机日历"
+        detail="仅在明确开启后写入系统日历，并保存系统事件 ID"
+        enabled={systemSync}
+        onPress={() => {
+          void (async () => {
+            try {
+              const next = !systemSync;
+              if (next) {
+                await calendarDriver.ensureWritableCalendar();
+                for (const event of events.filter((item) => item.status === "pending")) {
+                  const systemEventId = await syncCalendarEvent(calendarDriver, {
+                    title: event.title,
+                    privacyTitle: event.privacyTitle,
+                    startAt: event.startAt,
+                    endAt: event.endAt,
+                  }, {
+                    privacyTitleMode: privacyTitles,
+                    existingSystemEventId: event.systemCalendarEventId,
+                  });
+                  await calendarService.updateEvent(event.id, {
+                    syncToSystemCalendar: true,
+                    systemCalendarEventId: systemEventId,
+                  });
+                }
+              }
+              await calendarService.updateSettings({ systemCalendarEnabled: next });
+              setSystemSync(next);
+              await load();
+            } catch (error) {
+              onNotice("系统日历同步失败", error instanceof Error ? error.message : "请检查系统权限。");
+            }
+          })();
+        }}
+      />
+      <ToggleRow
         title="隐私标题模式"
         detail="同步到手机日历和锁屏时隐藏姓名与档案信息"
         enabled={privacyTitles}
-        onPress={() => setPrivacyTitles((current) => !current)}
+        onPress={() => {
+          void calendarService.updateSettings({
+            privacyTitleModeEnabled: !privacyTitles,
+          }).then((settings) => {
+            setPrivacyTitles(settings.privacyTitleModeEnabled);
+          }).catch((error) => {
+            onNotice("设置更新失败", error instanceof Error ? error.message : "请稍后重试。");
+          });
+        }}
       />
-      <SectionHeader title={selectedDay} action={`${scheduleRows.length} 项`} />
+      <SectionHeader title={days.find((item) => item.key === selectedDay)?.label ?? selectedDay} action={`${scheduleRows.length} 项`} />
       <View style={styles.cardStack}>
         {scheduleRows.map((item) => (
-          <View key={`${item.time}-${item.title}`} style={styles.listCard}>
-            <View style={styles.timePill}><Text style={styles.timePillText}>{item.time}</Text></View>
+          <View key={item.id} style={styles.listCard}>
+            <View style={styles.timePill}><Text style={styles.timePillText}>{new Date(item.startAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</Text></View>
             <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{item.title}</Text>
-              <Text style={styles.listMeta}>{item.kind}</Text>
+              <Text style={styles.listTitle}>{privacyTitles ? item.displayTitle : item.title}</Text>
+              <Text style={styles.listMeta}>{item.category} · {item.sourceType === "profile_next_session" ? "档案自动同步" : "手动日程"}</Text>
             </View>
-            {item.time === "10:00" ? (
+            {item.category === "counseling" ? (
               <TouchableOpacity style={styles.smallActionButton} onPress={onStartRecording}>
                 <Mic size={15} color={colors.clayDark} />
                 <Text style={styles.smallActionText}>录音</Text>
@@ -2750,17 +4579,54 @@ function ScheduleScreen({ onStartRecording }: { onStartRecording: () => void }) 
             ) : null}
           </View>
         ))}
+        {scheduleRows.length === 0 ? (
+          <View style={styles.emptySearchCard}>
+            <CalendarDays size={20} color={colors.subtle} />
+            <Text style={styles.emptySearchTitle}>当天暂无安排</Text>
+            <Text style={styles.emptySearchCopy}>在档案中设置下次时间后，后端会自动维护日程。</Text>
+          </View>
+        ) : null}
       </View>
     </View>
   );
 }
 
-function SecuritySettingsScreen({ onNotice }: { onNotice: (title: string, detail: string) => void }) {
-  const [calendarSync, setCalendarSync] = useState(true);
-  const [privacyTitle, setPrivacyTitle] = useState(false);
-  const [loginAlerts, setLoginAlerts] = useState(true);
-  const [passwords, setPasswords] = useState({ client: "已设置", supervisor: "未设置", supervisee: "未设置" });
-  const [confirmDelete, setConfirmDelete] = useState(false);
+function SecuritySettingsScreen({
+  onNotice,
+  onDeleteAccount,
+}: {
+  onNotice: (title: string, detail: string) => void;
+  onDeleteAccount: (password: string) => Promise<void>;
+}) {
+  const [calendarSync, setCalendarSync] = useState(false);
+  const [privacyTitle, setPrivacyTitle] = useState(true);
+  const [passwords, setPasswords] = useState<Record<ArchiveKind, boolean>>({
+    client: false,
+    supervisor: false,
+    supervisee: false,
+  });
+  const [editingPassword, setEditingPassword] = useState<ArchiveKind | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [accountPassword, setAccountPassword] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    void Promise.all([
+      profileAccessService.statuses(),
+      calendarService.settings(),
+    ]).then(([statuses, settings]) => {
+      setPasswords({
+        client: statuses.find((item) => item.profile_type === "client")?.is_set ?? false,
+        supervisor: statuses.find((item) => item.profile_type === "supervisor")?.is_set ?? false,
+        supervisee: statuses.find((item) => item.profile_type === "supervisee")?.is_set ?? false,
+      });
+      setCalendarSync(settings.systemCalendarEnabled);
+      setPrivacyTitle(settings.privacyTitleModeEnabled);
+    }).catch((error) => {
+      onNotice("安全设置加载失败", error instanceof Error ? error.message : "请稍后重试。");
+    });
+  }, []);
 
   return (
     <View style={styles.stack}>
@@ -2771,35 +4637,100 @@ function SecuritySettingsScreen({ onNotice }: { onNotice: (title: string, detail
           ["supervisor", "督导师档案"],
           ["supervisee", "受督者档案"],
         ] as const).map(([key, label]) => (
-          <SettingsRow key={key} icon={LockKeyhole} title={label} value={passwords[key]} onPress={() => {
-            setPasswords((current) => ({ ...current, [key]: current[key] === "已设置" ? "已更新" : "已设置" }));
-            onNotice("访问密码已更新", `${label}会在每次进入详情时单独验证。`);
-          }} />
+          <SettingsRow
+            key={key}
+            icon={LockKeyhole}
+            title={label}
+            value={passwords[key] ? "已设置" : "未设置"}
+            onPress={() => {
+              setEditingPassword(key);
+              setNewPassword("");
+            }}
+          />
         ))}
       </View>
+      {editingPassword ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>设置新的档案访问密码</Text>
+          <TextInput
+            value={newPassword}
+            onChangeText={setNewPassword}
+            placeholder="至少 8 位"
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+            secureTextEntry
+          />
+          <TouchableOpacity
+            style={[styles.inlineCreateConfirm, newPassword.length < 8 && styles.inlineCreateConfirmDisabled]}
+            disabled={newPassword.length < 8}
+            onPress={() => {
+              const profileType = editingPassword;
+              void profileAccessService.setPassword(profileType, newPassword)
+                .then(() => {
+                  setPasswords((current) => ({ ...current, [profileType]: true }));
+                  setEditingPassword(null);
+                  setNewPassword("");
+                  onNotice("访问密码已更新", "旧的档案访问授权已撤销，下次进入需要重新验证。");
+                })
+                .catch((error) => onNotice("密码更新失败", error instanceof Error ? error.message : "请稍后重试。"));
+            }}
+          >
+            <Text style={styles.inlineCreateConfirmText}>保存访问密码</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <SectionHeader title="日历与登录" />
       <View style={styles.settingsList}>
-        <ToggleRow title="手机日历同步" detail="把 App 日程同步到系统日历" enabled={calendarSync} onPress={() => setCalendarSync((current) => !current)} />
-        <ToggleRow title="隐私标题模式" detail="系统日历与锁屏仅显示“个人安排”" enabled={privacyTitle} onPress={() => setPrivacyTitle((current) => !current)} />
-        <ToggleRow title="新设备登录提醒" detail="新设备登录时发送邮箱提醒" enabled={loginAlerts} onPress={() => setLoginAlerts((current) => !current)} />
+        <ToggleRow title="手机日历同步" detail="把 App 日程同步到系统日历" enabled={calendarSync} onPress={() => {
+          const next = !calendarSync;
+          void calendarService.updateSettings({ systemCalendarEnabled: next })
+            .then(() => setCalendarSync(next))
+            .catch((error) => onNotice("设置保存失败", error instanceof Error ? error.message : "请稍后重试。"));
+        }} />
+        <ToggleRow title="隐私标题模式" detail="系统日历与锁屏仅显示“个人安排”" enabled={privacyTitle} onPress={() => {
+          const next = !privacyTitle;
+          void calendarService.updateSettings({ privacyTitleModeEnabled: next })
+            .then(() => setPrivacyTitle(next))
+            .catch((error) => onNotice("设置保存失败", error instanceof Error ? error.message : "请稍后重试。"));
+        }} />
+        <SettingsRow icon={ShieldCheck} title="登录会话" value="自动刷新并安全存储" onPress={() => onNotice("登录会话", "访问令牌过期后会通过一次性刷新令牌自动续期；退出登录会清除本机令牌。")} />
       </View>
 
       <SectionHeader title="账号与资料" />
       <View style={styles.dangerCard}>
-        <Text style={styles.dangerTitle}>删除全部云端资料</Text>
-        <Text style={styles.dangerCopy}>将立即删除档案、记录、附件和会话，且不可恢复。原始录音也会立即销毁。</Text>
-        {confirmDelete ? <Text style={styles.warningText}>再次点击确认删除。原始录音和已过期授权资料无法恢复。</Text> : null}
-        <TouchableOpacity style={styles.dangerButton} activeOpacity={0.78} onPress={() => {
-          if (!confirmDelete) {
-            setConfirmDelete(true);
-            return;
-          }
-          setConfirmDelete(false);
-          onNotice("演示环境未执行删除", "真实环境会要求再次验证账号并显示不可恢复清单。");
-        }}>
+        <Text style={styles.dangerTitle}>永久注销账号</Text>
+        <Text style={styles.dangerCopy}>将删除档案、记录、报告、附件和云端对象，且不可恢复。请输入账号密码和确认词“注销账号”。</Text>
+        <TextInput
+          value={accountPassword}
+          onChangeText={setAccountPassword}
+          placeholder="账号登录密码"
+          placeholderTextColor={colors.subtle}
+          style={styles.archiveTextInput}
+          secureTextEntry
+        />
+        <TextInput
+          value={deleteConfirmation}
+          onChangeText={setDeleteConfirmation}
+          placeholder="输入：注销账号"
+          placeholderTextColor={colors.subtle}
+          style={styles.archiveTextInput}
+        />
+        <TouchableOpacity
+          style={styles.dangerButton}
+          activeOpacity={0.78}
+          disabled={deleting || accountPassword.length < 8 || deleteConfirmation !== "注销账号"}
+          onPress={() => {
+            setDeleting(true);
+            void onDeleteAccount(accountPassword)
+              .catch((error) => {
+                onNotice("账号注销失败", error instanceof Error ? error.message : "请核对密码后重试。");
+                setDeleting(false);
+              });
+          }}
+        >
           <Trash2 size={16} color={colors.danger} />
-          <Text style={styles.dangerButtonText}>{confirmDelete ? "确认永久删除" : "删除全部云端资料"}</Text>
+          <Text style={styles.dangerButtonText}>{deleting ? "正在永久删除..." : "永久注销账号"}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -3186,6 +5117,81 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.paper,
     alignItems: "center",
+  },
+  authLoading: {
+    width: "100%",
+    maxWidth: 430,
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 14,
+  },
+  authLoadingText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  authShell: {
+    width: "100%",
+    maxWidth: 430,
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 36,
+    gap: 22,
+  },
+  authBrand: {
+    gap: 8,
+  },
+  authBrandIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
+  authTitle: {
+    color: colors.ink,
+    fontSize: 30,
+    lineHeight: 36,
+    fontWeight: "900",
+  },
+  authCopy: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  authCard: {
+    borderRadius: radius.sm,
+    padding: 18,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 12,
+    ...shadow.soft,
+  },
+  authError: {
+    color: colors.danger,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
+  },
+  authSwitch: {
+    color: colors.clayDark,
+    fontSize: 14,
+    fontWeight: "800",
+    textAlign: "center",
+    paddingVertical: 4,
+  },
+  authFootnote: {
+    color: colors.subtle,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
   },
   phoneShell: {
     width: "100%",
@@ -3772,6 +5778,62 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     overflow: "hidden",
   },
+  audioPlayerCard: {
+    minHeight: 82,
+    borderRadius: radius.md,
+    padding: 13,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    ...shadow.soft,
+  },
+  audioPlayButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.clayDark,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  audioPlayButtonDisabled: {
+    backgroundColor: colors.subtle,
+    opacity: 0.55,
+  },
+  audioPlayerBody: {
+    flex: 1,
+    gap: 7,
+  },
+  audioPlayerTitle: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  audioProgressTrack: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.line,
+    overflow: "hidden",
+  },
+  audioProgressFill: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.clayDark,
+  },
+  audioPlayerMeta: {
+    color: colors.muted,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "700",
+  },
+  audioUnavailableRow: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   processingRow: {
     minHeight: 68,
     padding: 12,
@@ -4037,6 +6099,12 @@ const styles = StyleSheet.create({
   inlineActions: {
     flexDirection: "row",
     gap: 10,
+  },
+  profileSaveButton: {
+    marginTop: 0,
+    flex: 1,
+    flexDirection: "row",
+    gap: 7,
   },
   legalGrid: {
     flexDirection: "row",
@@ -5057,6 +7125,62 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
+  },
+  privacyResourceCard: {
+    borderRadius: radius.sm,
+    padding: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 10,
+  },
+  privacyResourceMain: {
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  privacyResourceFooter: {
+    paddingTop: 9,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  privacyDeleteConfirm: {
+    borderRadius: radius.sm,
+    padding: 11,
+    backgroundColor: "#FFF3F1",
+    borderWidth: 1,
+    borderColor: "#E8C1BC",
+    gap: 9,
+  },
+  conversationCard: {
+    borderRadius: radius.sm,
+    padding: 11,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 9,
+  },
+  conversationSelect: {
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  conversationDelete: {
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "flex-end",
+    gap: 5,
   },
   settingsList: {
     borderRadius: radius.sm,

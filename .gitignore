@@ -11,6 +11,8 @@ node_modules/
 dist/
 dist-web/
 build/
+apps/mobile/android/
+apps/mobile/ios/
 
 .env
 .env.*

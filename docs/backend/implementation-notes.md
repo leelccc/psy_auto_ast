@@ -265,6 +265,14 @@ SSE 事件可以来自 Redis pub/sub、数据库轮询或内存队列。MVP 推�
 
 ## 5. AI Provider Adapter
 
+### 5.0 Current recording provider
+
+- Local development: read private MinIO audio bytes in FastAPI and send Base64 to `qwen3-asr-flash`.
+- Production: generate a short-lived MinIO GET URL and submit it to asynchronous `fun-asr`; MinIO must be reachable from Alibaba Cloud.
+- Both paths normalize into speaker labels, timestamped segments, a main summary, and chapter overview.
+- `qwen-plus` generates the recording summary from transcript text only.
+- Credentials and provider selection are server-side environment variables and are never returned to the mobile client.
+
 后端不应把供应商写死在业务服务中。
 
 推荐接口：
@@ -441,6 +449,14 @@ if recording is None:
 - PDF 解析成功/失败状态。
 - 对象存储删除失败进入重试。
 - AI 任务取消后状态正确。
+
+### 10.4 录音 AI 已实现约束
+
+- 首次处理：后端读取私有 MinIO 音频或生成短期下载 URL，完成 ASR 后再生成纪要。
+- 重新生成纪要：只读取 PostgreSQL 中当前有效的转写分段，保留人工校对内容，不读取原始音频，也不再次调用 ASR。
+- 录音处理失败：同时更新 `recordings.ai_status/processing_error` 和对应 `ai_jobs`。
+- 纪要重新生成失败：记录独立的 `recording_summary_regeneration` 任务失败，保留现有转写和旧纪要。
+- 原始音频未上传、已过期或已销毁时，后端拒绝 ASR；前端同步隐藏重试入口。
 
 ## 11. 首发不做
 

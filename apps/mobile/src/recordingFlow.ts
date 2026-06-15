@@ -9,8 +9,46 @@ export function getRecordingDestination({
   archive: string;
 }): RecordingDestination {
   if (archive === "待归档") return "archive";
-  if (status === "生成中" || status === "上传中") return "processing";
+  if (["生成中", "上传中", "待处理", "处理失败"].includes(status)) return "processing";
   return "detail";
+}
+
+type RecordingJobState = {
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+};
+
+export async function waitForRecordingJob<T extends RecordingJobState>(
+  getJob: (jobId: string) => Promise<T>,
+  jobId: string,
+  options: {
+    delay?: () => Promise<void>;
+    maxAttempts?: number;
+  } = {},
+): Promise<T> {
+  const delay = options.delay ?? (() => new Promise((resolve) => setTimeout(resolve, 1000)));
+  const maxAttempts = options.maxAttempts ?? 120;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const job = await getJob(jobId);
+    if (["completed", "failed", "cancelled"].includes(job.status)) return job;
+    if (attempt < maxAttempts - 1) await delay();
+  }
+  throw new Error("录音处理等待超时，请稍后刷新。");
+}
+
+export function recordingAudioCanProcess(ttl: string): boolean {
+  return ttl.startsWith("剩余 ");
+}
+
+export function recordingDetailRequiresProfileUnlock({
+  destination,
+  profileName,
+  kindLabel,
+}: {
+  destination: RecordingDestination;
+  profileName: string | null;
+  kindLabel: string | null;
+}): boolean {
+  return destination === "detail" && Boolean(profileName && kindLabel);
 }
 
 export function toArchiveRecording<T extends { title: string; duration: string }>(recording: T): ArchiveRecording {

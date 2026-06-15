@@ -5,6 +5,7 @@ export type ProfileTypeLabel = "来访者" | "督导师" | "受督者";
 
 export type ProfileListItem = {
   id: string;
+  displayCode?: string;
   name: string;
   type: ProfileTypeLabel;
   count: string;

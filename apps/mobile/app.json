@@ -3,11 +3,57 @@
     "name": "咨询师助手",
     "slug": "psy-auto-ast-mobile",
     "version": "0.1.0",
+    "scheme": "psyautoast",
+    "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "assetBundlePatterns": ["**/*"],
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FAF6F0"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "web": {
       "bundler": "metro"
-    }
+    },
+    "ios": {
+      "bundleIdentifier": "com.psyautoast.counselor",
+      "buildNumber": "1",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.psyautoast.counselor",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FAF6F0"
+      }
+    },
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "咨询师助手需要使用麦克风录制咨询或督导音频。"
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "咨询师助手需要访问系统日历，以同步你明确开启的专业日程。",
+          "remindersPermission": false
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "允许咨询师助手使用面容 ID 保护登录凭证。",
+          "configureAndroidBackup": true
+        }
+      ],
+      "expo-document-picker",
+      "expo-file-system"
+    ]
   }
 }

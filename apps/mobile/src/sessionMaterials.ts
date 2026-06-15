@@ -16,7 +16,6 @@ const materialMimeTypes: Record<string, string> = {
   PDF: "application/pdf",
   图片: "image/jpeg",
   音频: "audio/mp4",
-  文字备注: "text/plain",
 };
 
 export const materialCategoryCopy: Record<MaterialCategory, { title: string; uploadLabel: string; empty: string }> = {
@@ -33,12 +32,12 @@ export const materialCategoryCopy: Record<MaterialCategory, { title: string; upl
   homework: {
     title: "咨询作业",
     uploadLabel: "添加作业",
-    empty: "本次尚未添加作业，可上传 PDF、图片或添加文字备注。",
+    empty: "本次尚未添加作业，可上传 PDF 或图片。",
   },
   other: {
     title: "其他资料",
     uploadLabel: "添加资料",
-    empty: "本次尚无其他资料，可添加 PDF、图片或文字备注。",
+    empty: "本次尚无其他资料，可上传 PDF 或图片。",
   },
 };
 
@@ -62,7 +61,7 @@ export function addSessionMaterial(
       mimeType: materialMimeTypes[input.fileType] ?? "application/octet-stream",
       sizeBytes: null,
       uploadStatus: "pending",
-      sourceKind: "prototype",
+      sourceKind: "local",
     },
   };
   return [material, ...materials];
@@ -99,7 +98,7 @@ export function removeMaterialsForSession(materials: SessionMaterial[], sessionI
 
 export function getMaterialUpdateMessage(category: MaterialCategory) {
   if (category === "recording") {
-    return "录音上传接口已预留；接入 MinIO 后需先完成上传与归档，再进入转写和纪要。";
+    return "录音已上传并归档，转写和纪要将在后端处理完成后可用。";
   }
-  return "文件上传接口已预留。接入 MinIO 后材料会参与记录生成；已有内容可确认后重新生成草稿。";
+  return "文件已上传并绑定本次记录；已有内容可确认后用最新材料重新生成草稿。";
 }

@@ -2,11 +2,11 @@
 
 ## Goal
 
-Build a minimal backend core first, then a polished mobile frontend prototype that matches the approved warm, soft, professional counselor-assistant direction.
+Deliver a usable counselor-assistant MVP with a real Expo mobile client, FastAPI contracts, PostgreSQL persistence, private MinIO files, tests, and native build verification.
 
 ## Current Phase
 
-Frontend MinIO integration boundaries are complete and verified. The next backend pass should implement the reserved file-service contract with real MinIO presigned upload, completion, download, replacement, deletion, and lifecycle behavior.
+MVP implementation has returned to browser-based functional refinement. Durable state is backend-owned, file bytes use private MinIO, and the mobile app uses typed real APIs and native adapters. iOS simulator build verification passed; Android packaging is deferred while browser workflows and edge cases continue to be refined.
 
 ## Phases
 
@@ -41,10 +41,23 @@ Frontend MinIO integration boundaries are complete and verified. The next backen
 - [x] Phase 28: Add session-scoped file preview, replacement, rename, and deletion flows.
 - [x] Phase 29: Add local downloads for generated records, reports, recording notes, and previewable files.
 - [x] Phase 30a: Reserve typed frontend file references and MinIO file-service interfaces without connecting a backend.
-- [ ] Phase 30b: Implement backend MinIO storage and use original uploaded bytes for preview and download.
-- [ ] Phase 31: Add native Expo file download/share behavior for iOS and Android.
-- [ ] Phase 32: Continue the page-level closed-loop audit against real persistence and remove any remaining simulated actions.
-- [ ] Phase 33: Regression-test the complete mobile workflows, update handoff records, and commit.
+- [x] Phase 30b: Implement backend MinIO storage and use original uploaded bytes for preview and download.
+- [x] Phase 31: Add native Expo file download/share behavior for iOS and Android.
+- [x] Phase 32: Complete the page-level closed-loop audit against real persistence and remove durable simulated actions.
+- [x] Phase 33: Regression-test the complete mobile workflows and update handoff records.
+- [ ] Phase 34: Complete final local Android APK verification. iOS simulator build is verified; Android is deferred after a Google Maven TLS download failure.
+- [ ] Phase 35: Continue browser-based page, interface, permission, lifecycle, and edge-case audits until every MVP workflow is complete and usable.
+
+### Phase 35 Progress
+
+- [x] Close the account profile editing loop with backend persistence and reload verification.
+- [x] Add confirmed backend destruction from the privacy center for expiring and long-term resources.
+- [x] Complete supervision conversation create/select/delete behavior, including the final-conversation empty state.
+- [x] Reject whitespace-only account and supervision text at the backend boundary.
+- [x] Replace deterministic recording transcription/summary generation with configurable Bailian Base64 and MinIO URL providers.
+- [x] Verify real local-audio Base64 transcription and real asynchronous `fun-asr` URL transcription.
+- [x] Complete recording processing status, retry, audio-lifecycle boundaries, and transcript-preserving summary regeneration.
+- [ ] Continue the browser audit across recording, archive, profile materials, generated reports, calendar, and security edge states.
 
 ## Working Files
 
@@ -54,6 +67,7 @@ Frontend MinIO integration boundaries are complete and verified. The next backen
 - `docs/backend/database-schema.md`: planned database schema specification.
 - `docs/backend/api-spec.md`: planned backend API specification.
 - `docs/backend/implementation-notes.md`: planned backend notes for jobs, retention, security, exports, and integrations.
+- `docs/development/change-log-guidelines.md`: mandatory format for recording change points, implementation methods, validation, and known limitations.
 - `backend/`: minimal FastAPI backend core.
 - `apps/mobile/`: planned mobile frontend.
 
@@ -62,8 +76,8 @@ Frontend MinIO integration boundaries are complete and verified. The next backen
 - The project already has a Git repository; all substantial documentation changes should be committed.
 - Keep specs implementation-oriented, but avoid pretending code exists before the backend scaffold is created.
 - Treat `docs/prd/2026-06-05-counselor-assistant-app-prd.md` and `docs/prd/decision-log.md` as the source of product truth.
-- User prefers mobile frontend presentation quality, so backend should stay minimal and unblock UI/API shape rather than becoming a full production implementation now.
-- Backend MVP uses in-memory repositories for speed, with API contracts aligned to the schema/API docs so it can later migrate to SQLAlchemy/PostgreSQL.
+- The frontend owns device and presentation behavior; the backend owns durable data, permissions, lifecycle rules, generated content, and storage orchestration.
+- Backend MVP uses SQLAlchemy/PostgreSQL for durable business state and private MinIO for original and generated file bytes.
 - Mobile frontend detail polish should keep the warm, soft, professional workbench style, but prioritize task clarity over decorative density.
 - Data/privacy authorization UI must show active user choice: no default checked long-term save items, and original recordings remain non-preservable.
 - Long-term-save authorization should behave as an explicit decision flow: hidden bottom navigation, selectable items, disabled confirmation until selection, and visible selection count.
@@ -85,17 +99,23 @@ Frontend MinIO integration boundaries are complete and verified. The next backen
 - Consultation cards are editable summaries: occurrence time, summary text, and up to four unique tags can change without rewriting the underlying formal record.
 - Deleting a consultation requires confirmation and removes its owned recording/scale/homework/other material rows. Files open in a preview before replacement or deletion.
 - Generated consultation/supervision records, case reports, and recording notes must support local PDF download. Previewable PDF and attachment files must retain a direct download action.
-- The Web prototype currently generates preview-file PDF copies from visible metadata because uploaded source files are not persisted yet. Phase 30 must replace this with original-file retrieval from local file objects or backend storage.
-- Browser Blob downloads are not the final native-mobile implementation. iOS and Android should use Expo-compatible filesystem and share/download behavior.
+- Uploaded source files download as original MinIO bytes through short-lived backend-authorized URLs.
+- Web uses browser downloads; iOS and Android use Expo FileSystem and the native share/open sheet.
+- Local private MinIO recording processing uses backend-read Base64 with `qwen3-asr-flash`; production switches to short-lived public-reachable MinIO URLs with asynchronous `fun-asr`.
+- Recording summaries are generated from recognized text by `qwen-plus`; the frontend never receives or stores Bailian credentials.
+- Summary regeneration uses the current PostgreSQL transcript and does not read MinIO audio or invoke ASR again.
+- Every completed feature or bugfix must update the project records with change points, implementation method, interface/data impact, boundary handling, test evidence, and known limitations.
 
 ## Resume Checklist
 
 1. Read `progress.md`, `task_plan.md`, and `docs/prd/session-memory.md`.
-2. Start from the latest MinIO frontend-interface commit.
-3. Implement the contract in `apps/mobile/src/fileService.ts` using authenticated FastAPI endpoints and short-lived presigned MinIO URLs.
-4. Replace prototype file references with backend-returned `fileId`, MIME, size, and uploaded state after successful completion.
-5. Keep generated-document PDF downloads separate from original uploaded-file downloads.
-6. Verify changes in the in-app browser at `http://127.0.0.1:8083/`, then run typecheck, tests, and Expo Web export.
+2. Confirm PostgreSQL and MinIO are healthy, then start FastAPI and Expo Web only for the active browser test session.
+3. Continue the browser audit for recording upload/recording, archive, profile materials, report generation/export, calendar, and security settings.
+4. Use disposable backend records when testing destructive privacy and lifecycle operations; do not mutate the durable seed examples unnecessarily.
+5. Extend backend whitespace and invalid-state boundary tests when another route stores user-entered text after trimming.
+6. Re-run frontend tests, backend tests, typecheck, Web export, and browser console checks after each closed-loop batch.
+7. Keep Android packaging deferred until browser MVP refinement is complete or the user explicitly resumes native build verification.
+8. Before ending each implementation batch, update `progress.md` using `docs/development/change-log-guidelines.md`; update `task_plan.md`, session memory, and backend notes when the decision has long-term impact.
 
 ## Errors Encountered
 

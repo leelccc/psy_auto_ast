@@ -199,3 +199,128 @@
 - Browser-verified the legal-file preview at a 390x844 viewport: it shows `等待文件服务接入`, returns explicit MinIO-pending feedback when pressed, and logs no runtime errors.
 - Frontend verification passed: `36` tests, TypeScript typecheck, and Expo Web production export.
 - Backend MinIO implementation remains pending and should implement the contract in `apps/mobile/src/fileService.ts`.
+
+## 2026-06-09 PostgreSQL + MinIO Integration Progress
+
+### Completed
+
+- Added Docker Compose services for PostgreSQL 16, private MinIO, and automatic private-bucket initialization.
+- Started and health-checked PostgreSQL on host port `55432` and MinIO on `59000`/`59001`.
+- Added FastAPI environment settings, SQLAlchemy session management, Alembic configuration, core models, initial migration, and idempotent demo seed data.
+- Moved profile, consultation-session, file metadata, and attachment relationships into PostgreSQL.
+- Implemented database-backed profile list/create/detail and session list/create/update/delete APIs.
+- Kept session sequence assignment in the backend and added authenticated user-isolation checks.
+- Implemented a replaceable storage adapter plus the real MinIO adapter.
+- Implemented presigned upload creation, upload-completion size validation, short-lived original-file download URLs, deletion, and attachment list/create/replace/delete APIs.
+- Verified real MinIO byte integrity: uploaded a known PDF byte sequence through a presigned PUT URL and downloaded the exact same bytes through a presigned GET URL.
+- Added backend CORS support for Expo Web on `localhost:8081`.
+- Added typed frontend API clients for profiles, sessions, files, and attachments. Frontend types do not expose MinIO credentials or object storage keys.
+- Connected the profile list, profile creation, profile session loading, session create/update/delete, attachment loading/deletion, and original-file download URL flow to FastAPI.
+- Added loading, error, and retry states to the profile list.
+- Verification passed: `14` backend tests, `41` frontend tests, and TypeScript typecheck.
+
+### In Progress
+
+- Historical note: the items below were completed by the later 2026-06-13 MVP integration pass.
+- Browser end-to-end verification is running with FastAPI at `http://127.0.0.1:8000` and Expo Web at `http://localhost:8081`.
+- Frontend file upload UI still needs native/browser file selection and direct PUT upload before it can create or replace attachments from the page.
+- Profile legal/ethical file upload and replacement still use temporary UI-only state and must be switched to the attachment API.
+
+### Next
+
+- Finish browser verification for profile list, session mutations, attachment list, and exact original-file download.
+- Connect real file selection, direct MinIO upload, completion, attachment creation, and replacement.
+- Remove remaining migrated business seed data and temporary file metadata behavior from `App.tsx`.
+- Run Expo Web production export, update the handoff, and commit the integration.
+
+## 2026-06-13 MVP Functional Refinement
+
+- Restored PostgreSQL and private MinIO; both services are healthy and remain the only background services kept running for browser development.
+- Completed the latest backend regression before the final health-check enhancement: `41 passed`, including authentication, profile grants, concurrent session numbering, real MinIO byte integrity, lifecycle cascades, full user journey, reports, privacy, calendar, and supervision.
+- Completed mobile TypeScript validation and `56` frontend behavior tests.
+- Added real component health checks for API, PostgreSQL, and MinIO, with a structured `503` response when object storage is unavailable.
+- Fixed privacy destruction so deleting a report clears draft/formal content and selected sources, and deleting a supervision conversation removes messages and context references instead of only hiding an index row.
+- Made direct supervision-conversation deletion use the same destructive cleanup path.
+- Required a matching short-lived profile grant before profile, session, or report data can be added to AI supervision context.
+- Added an in-page mobile password setup/verification flow before adding protected profile material to supervision context; the temporary grant is cleared immediately after the operation.
+- iOS simulator build completed successfully with Xcode: `BUILD SUCCEEDED`; generated app bundle is `apps/mobile/ios/build/DerivedData/Build/Products/Debug-iphonesimulator/app.app`.
+- Android compilation reached dependency processing but stopped because Gradle could not complete a TLS handshake while downloading `intellij-core-31.11.0.jar` from Google Maven. The same URL is reachable with system `curl`, so this is an environment/download issue rather than an application compile error.
+- Per user direction, stopped Xcode, Gradle, compiler, and dependency-download processes to reduce machine load. Android packaging is deferred.
+- Current priority is browser-based functional refinement and complete workflow verification. PostgreSQL and MinIO stay running; FastAPI and Expo Web should be started only while actively testing.
+
+### Browser Closed-Loop Pass
+
+- Connected account profile editing to `PATCH /api/v1/me`; the email remains read-only and the display name is persisted by the backend.
+- Added explicit permanent deletion controls for both expiring and long-term sensitive resources. The UI requires a second confirmation and calls the backend destruction endpoint instead of removing a frontend row locally.
+- Added supervision conversation creation, selection, and confirmed deletion. Deleting the active conversation selects the next backend conversation; deleting the final conversation leaves an explicit empty state.
+- Removed the frontend behavior that silently created a default supervision conversation whenever the backend list was empty.
+- Added backend whitespace validation for account display names, supervision conversation titles, and supervision message bodies so blank durable records cannot be stored.
+- Browser-verified the account update across a full page reload, created/deleted a disposable supervision conversation, and created a second disposable conversation that was permanently destroyed through the privacy center.
+- Browser request logs showed successful `PATCH /me`, supervision create/delete, privacy delete, and refreshed list requests. No runtime errors were logged; only known React Native Web deprecation warnings remain.
+- Fresh verification: `61` frontend tests passed, `44` backend tests passed, TypeScript typecheck passed, Python compileall passed, Web production export passed, and `git diff --check` passed.
+- Stopped the Expo Web and FastAPI hot-reload processes after verification to reduce CPU usage. PostgreSQL and MinIO remain available at low idle load for the next browser development pass.
+
+## 2026-06-15 Bailian Recording Transcription
+
+- Added a recording AI provider contract and injected it into the existing recording-processing API; tests continue to use the deterministic provider while local development can use Bailian.
+- Added Bailian Base64 mode for private local MinIO: the backend reads the original audio bytes, calls `qwen3-asr-flash`, then sends only the recognized text to `qwen-plus` for a structured main summary and chapter overview.
+- Added Bailian URL mode for production: the backend generates a short-lived private MinIO download URL, submits it to asynchronous `fun-asr`, polls the task, downloads the transcription result, and preserves sentence timestamps and speaker IDs.
+- Added explicit Base64 limits for the synchronous local model: 10MB and 5 minutes. URL mode is reserved for longer production recordings.
+- Persisted provider failures into both `ai_jobs` and `recordings`, with a retryable `recording_ai_service_failed` response instead of leaving recordings stuck in processing.
+- Stored the supplied API key only in ignored `backend/.env`; `.env.example` contains placeholders and documents the Base64/MinIO URL switch.
+- Real model verification used a locally synthesized Chinese M4A and returned the expected Chinese transcript, a concise recording note, and three chapter sections.
+- Full end-to-end verification uploaded that M4A through the API to real MinIO, bound it to a PostgreSQL recording, processed it through Bailian, and read the stored transcript, summary, chapters, and completed AI job back through the API.
+- Real `fun-asr` URL verification also succeeded against Alibaba Cloud's public sample audio, including asynchronous submission, polling, result download, timestamps, and `qwen-plus` summary generation.
+- Fresh regression: `50` backend tests passed, `61` frontend tests passed, TypeScript typecheck passed, Python compileall passed, and `git diff --check` passed.
+
+## 2026-06-15 Recording AI Workflow Completion
+
+- Split summary regeneration from speech recognition. `POST /recordings/{id}/summary/regenerate` now uses the current persisted transcript and calls only the summary model, preserving speaker labels, segment text, and manual transcript edits.
+- Added a dedicated `recording_summary_regeneration` AI job with persisted success/failure state. Summary-model input and service failures return explicit API errors without deleting the previous transcript.
+- Connected the mobile processing page to real recording and AI job state. Archived recordings in pending, processing, or failed states now open the processing page instead of incorrectly attempting to load missing detail data.
+- Added processing-page states for pending, running, failed, and completed jobs, plus refresh, retry, and open-result actions.
+- Retry availability now follows backend audio lifecycle state. Missing, expired, or destroyed original audio is shown as unavailable and cannot trigger a pointless ASR retry.
+- Archive persistence and AI processing are handled separately so an AI provider failure no longer makes a successfully archived recording appear unarchived.
+- Browser-verified at a 390x844 viewport: real backend recording list, profile access gate for completed archived recordings, failed-processing recovery UI, and the unavailable-audio boundary state.
+- Re-ran real Bailian summary regeneration against the dedicated end-to-end test recording: the job completed, a non-empty summary and three chapters were stored, and the transcript hash was unchanged.
+- Fresh regression: `52` backend tests passed, `64` frontend tests passed, TypeScript typecheck passed, Python compileall passed, and `git diff --check` passed.
+- FastAPI and Expo Web were stopped after verification. PostgreSQL and MinIO remain healthy for browser development.
+
+## 2026-06-15 Browser Recording Compatibility Fix
+
+- Fixed Expo Web recording startup by replacing direct construction of `AudioModule.AudioRecorder` with Expo's lifecycle-managed `useAudioRecorder`.
+- Preserved the same recorder driver contract for iOS and Android while using `AudioRecorderWeb` through the official hook on Web.
+- Correctly marks browser recordings as `audio/webm`; native recordings remain `audio/mp4`.
+- Captures recording duration before Web `MediaRecorder.stop()` resets its status.
+- Removed the unsupported Expo FileSystem dependency from browser recording saves. Web `blob:` audio is now converted directly to a `File` and uploaded to MinIO through the existing presigned PUT flow.
+- Frontend regression now passes `66` tests plus TypeScript typecheck.
+
+## 2026-06-15 Original Recording Playback
+
+- Added original-recording playback immediately after a recording is saved, on the archive confirmation page.
+- Added playback to the unlocked recording-summary detail page so users can compare audio with transcript and summary content.
+- Playback requests a five-minute MinIO download URL from the authenticated backend; object keys and durable URLs are never stored in frontend state.
+- Web uses the browser's native audio controls for reliable play, pause, seeking, volume, and autoplay-policy compliance.
+- iOS and Android use Expo Audio with a shared controller for play, pause, and replay-from-start behavior.
+- Playback is unavailable after the original recording is missing, expired, or destroyed. Archived audio is only loaded after the existing profile access grant is present.
+- Browser verification uploaded a disposable three-second WAV to real MinIO and confirmed the native audio element reached `readyState=4` with the correct duration and presigned URL. The test recording and object were then destroyed.
+- Frontend regression now passes `68` tests plus TypeScript typecheck and `git diff --check`.
+
+## 2026-06-15 Change Documentation Requirement
+
+### 改动目标
+
+- 将“后续改动必须记录改动点和实现方法”固化为项目协作规则，确保跨会话继续开发时能够准确恢复上下文。
+
+### 改动点与实现方法
+
+- 新增 `docs/development/change-log-guidelines.md`，定义统一记录字段、记录位置、记录时机和 Markdown 模板。
+- 更新 `docs/prd/session-memory.md`，加入长期协作约定和当前 MVP 完成状态。
+- 更新 `task_plan.md`，把变更记录规范加入工作文件、长期决策和恢复清单。
+- 后续每个开发批次必须同步记录目标、前后端责任、接口/字段影响、边界处理、测试证据和已知限制。
+
+### 当前完成情况
+
+- 录音上传、归档、百炼转写、纪要生成、失败重试、人工转写保留、浏览器录音兼容和原始录音播放均已实现。
+- 最近一次验证：前端 `68` 项测试通过，TypeScript 类型检查通过，真实 MinIO 音频可被浏览器原生播放器完整加载。
+- PostgreSQL 和 MinIO 当前健康运行；FastAPI 和 Expo Web 临时开发进程当前未监听 `8000/8081`。

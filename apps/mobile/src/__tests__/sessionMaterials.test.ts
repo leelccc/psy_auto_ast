@@ -30,7 +30,7 @@ test("adding a session attachment creates visible state and marks audio non-pres
     mimeType: "audio/mp4",
     sizeBytes: null,
     uploadStatus: "pending",
-    sourceKind: "prototype",
+    sourceKind: "local",
   });
   assert.equal(recording[1].file.mimeType, "application/pdf");
   assert.equal(recording[1].preservable, true);
