@@ -4,6 +4,7 @@ export type AudioPlaybackPlayer = {
   playing: boolean;
   currentTime: number;
   duration: number;
+  isLoaded?: boolean;
   play(): void;
   pause(): void;
   replace(url: string): void;
@@ -46,11 +47,30 @@ export async function toggleAudioPlayback({
   }
   // 每次播放前都刷新 source URL，避免 presigned URL 过期导致无声
   const url = await loadSource();
-  if (Platform.OS !== "web") player.replace(url);
-  await preparePlayback();
-  if (Platform.OS === "web") {
-    // web 端 replace 不生效，需要外部重新设置 <audio>.src 并 load
+  if (Platform.OS !== "web") {
+    player.replace(url);
+    // 等待音频加载完成（isLoaded 变为 true），最多等 8 秒
+    const loaded = await waitForPlayerLoaded(player, 8000);
+    if (!loaded) {
+      throw new Error("音频加载超时，请检查网络后重试。");
+    }
   }
+  await preparePlayback();
   player.play();
   return { sourceLoaded: true };
+}
+
+/** 轮询等待 player.isLoaded 变为 true，超时返回 false */
+async function waitForPlayerLoaded(
+  player: AudioPlaybackPlayer,
+  timeoutMs: number,
+): Promise<boolean> {
+  // web 端或部分平台没有 isLoaded 字段，直接返回 true 跳过等待
+  if (player.isLoaded === undefined) return true;
+  const start = Date.now();
+  while (!player.isLoaded) {
+    if (Date.now() - start > timeoutMs) return false;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return true;
 }
