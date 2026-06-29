@@ -88,7 +88,7 @@ import {
   toRecordedLocalFile,
   type RecordedLocalAudio,
 } from "./src/native/audioRecording";
-import { configureAudioPlaybackMode, toggleAudioPlayback } from "./src/native/audioPlayback";
+import { configureAudioPlaybackMode, safelyPauseAudioPlayer, toggleAudioPlayback } from "./src/native/audioPlayback";
 import {
   createExpoCalendarDriver,
   syncCalendarEvent,
@@ -122,7 +122,6 @@ import {
   applySessionResourceStatuses,
   formatSessionTime,
   removeSession,
-  sortSessionsDescending,
   type SessionHistoryItem,
 } from "./src/sessionHistory";
 import {
@@ -172,10 +171,23 @@ type QuickView =
   | "securitySettings";
 type SecuritySection = "profileAccess" | "calendar" | "account";
 type Notice = { title: string; detail: string };
+type PendingReportGeneration = {
+  mode: "create" | "regenerate";
+  sessionId: string;
+  returnView: QuickView;
+  reportType: string;
+  reportId?: string;
+  recordType: string;
+  sources: ReportSource[];
+};
 type ArchiveResult = ReturnType<typeof buildArchiveResult> & {
   profileStatus?: string;
   profileFrequency?: string;
   profileNext?: string;
+  countDetail?: string;
+  sessionCount?: number;
+  initialSessionCount?: number;
+  latestSequence?: number;
 };
 type ProfileCreateInput = {
   kind: ArchiveKind;
@@ -230,6 +242,13 @@ function sectionsFromReport(report: Report, formal: boolean): EditableRecordSect
     title: block.title ?? `第 ${index + 1} 部分`,
     content: block.content ?? "",
   }));
+}
+
+function emptyGeneratedRecordSections(): EditableRecordSection[] {
+  return [{
+    title: "记录草稿",
+    content: "暂无可编辑内容。请返回后确认本次资料已归档并重新生成。",
+  }];
 }
 
 const apiClient = new ApiClient(configuredApiBaseUrl());
@@ -292,6 +311,36 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof Home }> = [
 
 function getRecordType(kindLabel: string) {
   return kindLabel === "来访者" ? "咨询记录" : kindLabel === "督导师" ? "督导反馈" : "督导记录";
+}
+
+function getReportType(kindLabel: string) {
+  return kindLabel === "来访者"
+    ? "counseling_note"
+    : kindLabel === "督导师"
+      ? "supervision_feedback"
+      : "supervision_note";
+}
+
+function defaultReportSources(sources: ReportSource[], excludeReportId?: string) {
+  return sources.filter((source) => (
+    source.defaultSelected
+    && source.analysisStatus === "available"
+    && !(source.resourceType === "report" && source.resourceId === excludeReportId)
+  ));
+}
+
+function reportSourceGroups(sources: ReportSource[]) {
+  const labels = new Set<string>();
+  sources.forEach((source) => {
+    if (source.resourceType === "session") labels.add("本次摘要");
+    else if (source.resourceType === "transcript" || source.resourceType === "recording_summary") labels.add("录音");
+    else if (source.resourceType === "profile") labels.add("基础档案");
+    else if (source.resourceType === "report") labels.add("既往记录/报告");
+    else if (source.label.includes("量表") || source.label.includes("scale")) labels.add("量表");
+    else if (source.label.includes("作业") || source.label.includes("homework")) labels.add("作业");
+    else labels.add("其他资料");
+  });
+  return Array.from(labels);
 }
 
 function getRecordEditorSections(kindLabel: string): EditableRecordSection[] {
@@ -443,6 +492,9 @@ export default function App() {
   const [profilesLoading, setProfilesLoading] = useState(true);
   const [profilesError, setProfilesError] = useState<string | null>(null);
   const [recordEditorReturn, setRecordEditorReturn] = useState<QuickView>("profileDetail");
+  const [pendingReportGeneration, setPendingReportGeneration] = useState<PendingReportGeneration | null>(null);
+  const [reportGenerationBusy, setReportGenerationBusy] = useState(false);
+  const [recordingDetailReturn, setRecordingDetailReturn] = useState<QuickView>("recordingRecords");
   const [privacyReturn, setPrivacyReturn] = useState<{ quickView: QuickView; tab: TabKey }>({
     quickView: "overview",
     tab: "account",
@@ -455,6 +507,7 @@ export default function App() {
   const [activeProfileId, setActiveProfileId] = useState("profile-chen-yu");
   const [pendingProfile, setPendingProfile] = useState<ProfileListItem | null>(null);
   const [pendingRecordingAfterUnlock, setPendingRecordingAfterUnlock] = useState<RecordingItem | null>(null);
+  const [pendingRecordingReturn, setPendingRecordingReturn] = useState<QuickView>("recordingRecords");
   const [profilePasswordSet, setProfilePasswordSet] = useState(false);
   const [profileAccessGrantMinutes, setProfileAccessGrantMinutes] = useState(60);
   const [unlockedProfileId, setUnlockedProfileId] = useState<string | null>(null);
@@ -600,11 +653,16 @@ export default function App() {
       profileStatus: profile.status,
       profileFrequency: "未设置",
       profileNext: profile.next,
+      countDetail: profile.countDetail,
+      sessionCount: profile.sessionCount,
+      initialSessionCount: profile.initialSessionCount,
+      latestSequence: profile.latestSequence,
     });
     void loadProfileData(profile.id);
   };
-  const openRecording = async (recording: RecordingItem) => {
+  const openRecording = async (recording: RecordingItem, returnView: QuickView = "recordingRecords") => {
     const destination = getRecordingDestination(recording);
+    setRecordingDetailReturn(returnView);
     setActiveRecording(recording);
     setArchiveRecordingId(recording.id ?? null);
     setArchiveAudioFileId(recording.audioFileId ?? null);
@@ -647,6 +705,7 @@ export default function App() {
         const statuses = await profileAccessService.statuses();
         setPendingProfile(storedProfile);
         setPendingRecordingAfterUnlock(recording);
+        setPendingRecordingReturn(returnView);
         setProfilePasswordSet(statuses.items.find((item) => item.profile_type === kind)?.is_set ?? false);
         setProfileAccessGrantMinutes(statuses.grantMinutes);
         setQuickView("profileUnlock");
@@ -706,63 +765,93 @@ export default function App() {
     showNotice("需要重新验证", "档案访问授权已失效，请重新输入访问密码后继续。");
     return true;
   };
-  const prepareRecordEditor = (kindLabel: string, returnView: QuickView) => {
-    setActiveRecordReportId(null);
-    setActiveRecordLabel(activeProfile.recordLabel);
+  const openReportEditor = (report: Report, sessionId: string, returnView: QuickView, forceDraft = false) => {
+    const showFormal = Boolean(
+      !forceDraft
+      && report.formalContent
+      && sessionHistory.find((session) => session.id === sessionId)?.record === "正式版",
+    );
+    const sections = sectionsFromReport(report, showFormal);
+    setActiveRecordReportId(report.id);
     setRecordEditorReturn(returnView);
-    setRecordEditorSections(getRecordEditorSections(kindLabel));
-    setRecordFormal(false);
-    setRecordDirty(true);
+    setRecordEditorSections(sections.length ? sections : emptyGeneratedRecordSections());
+    setRecordFormal(showFormal);
+    setRecordDirty(false);
     setQuickView("recordEditor");
   };
   const openSessionRecord = async (sessionId: string, returnView: QuickView) => {
-    const reportType = activeProfile.kindLabel === "来访者"
-      ? "counseling_note"
-      : activeProfile.kindLabel === "督导师"
-        ? "supervision_feedback"
-        : "supervision_note";
+    const reportType = getReportType(activeProfile.kindLabel);
     try {
       setActiveSessionId(sessionId);
       const session = sessionHistory.find((item) => item.id === sessionId);
-      const recordNoun = activeProfile.kindLabel === "来访者"
-        ? "咨询"
-        : activeProfile.kindLabel === "督导师"
-          ? "受督"
-          : "督导";
-      setActiveRecordLabel(session ? `第 ${session.sequence} 次${recordNoun}` : activeProfile.recordLabel);
+      const recordType = getRecordType(activeProfile.kindLabel);
+      setActiveRecordLabel(session ? `第 ${session.sequence} 次${recordType}` : activeProfile.recordLabel);
       setRecordEditorReturn(returnView);
-      let report = (await reportService.list({ sessionId, reportType }))[0];
+      const report = (await reportService.list({ sessionId, reportType }))[0];
       if (!report) {
         const sources = await reportService.generationSources({
           reportType,
           profileId: activeProfileId,
           sessionId,
         });
-        const generated = await reportService.generate({
-          reportType,
-          profileId: activeProfileId,
+        const selected = defaultReportSources(sources);
+        if (selected.length === 0) {
+          showNotice("暂无可用资料", "请先上传或生成录音、量表、作业等资料后再生成记录草稿。");
+          return;
+        }
+        setPendingReportGeneration({
+          mode: "create",
           sessionId,
-          selectedSources: sources
-            .filter((source) => source.defaultSelected && source.analysisStatus === "available")
-            .map((source) => ({
-              resourceType: source.resourceType,
-              resourceId: source.resourceId,
-            })),
+          returnView,
+          reportType,
+          recordType,
+          sources: selected,
         });
-        report = await reportService.get(generated.reportId);
+        return;
       }
-      const showFormal = Boolean(
-        report.formalContent
-        && sessionHistory.find((session) => session.id === sessionId)?.record === "正式版",
-      );
-      const sections = sectionsFromReport(report, showFormal);
-      setActiveRecordReportId(report.id);
-      setRecordEditorSections(sections.length ? sections : getRecordEditorSections(activeProfile.kindLabel));
-      setRecordFormal(showFormal);
-      setRecordDirty(false);
-      setQuickView("recordEditor");
+      openReportEditor(report, sessionId, returnView);
     } catch (error) {
       showNotice("记录加载失败", errorMessage(error));
+    }
+  };
+  const confirmReportGeneration = async () => {
+    if (!pendingReportGeneration || reportGenerationBusy) return;
+    setReportGenerationBusy(true);
+    try {
+      const selectedSources = pendingReportGeneration.sources.map((source) => ({
+        resourceType: source.resourceType,
+        resourceId: source.resourceId,
+      }));
+      const reportId = pendingReportGeneration.mode === "create"
+        ? (await reportService.generate({
+          reportType: pendingReportGeneration.reportType,
+          profileId: activeProfileId,
+          sessionId: pendingReportGeneration.sessionId,
+          selectedSources,
+        })).reportId
+        : (await reportService.regenerate(pendingReportGeneration.reportId!, {
+          selectedSources,
+          confirmOverwriteDraft: true,
+        })).draft_report_id;
+      const report = await reportService.get(reportId);
+      openReportEditor(
+        report,
+        pendingReportGeneration.sessionId,
+        pendingReportGeneration.returnView,
+        pendingReportGeneration.mode === "regenerate",
+      );
+      setSessionHistory((current) => current.map((session) => (
+        session.id === pendingReportGeneration.sessionId ? { ...session, record: "草稿" } : session
+      )));
+      setPendingReportGeneration(null);
+      showNotice(
+        pendingReportGeneration.mode === "create" ? "草稿已生成" : "草稿已重新生成",
+        `已基于所列资料生成${pendingReportGeneration.recordType}草稿。`,
+      );
+    } catch (error) {
+      showNotice("生成失败", errorMessage(error));
+    } finally {
+      setReportGenerationBusy(false);
     }
   };
   const openPrivacy = (returnView: QuickView) => {
@@ -793,7 +882,7 @@ export default function App() {
     if (category === "recording") {
       const sessionRecording = findRecordingForSession(recordingItems, sessionId);
       if (sessionRecording) {
-        await openRecording(sessionRecording);
+        await openRecording(sessionRecording, returnView);
         return;
       }
     }
@@ -871,7 +960,13 @@ export default function App() {
       return;
     }
     if (quickView === "archiveComplete" || quickView === "recordingDetail" || quickView === "recordingProcessing") {
-      if (quickView === "recordingDetail") profileAccessService.leaveProfile();
+      if (quickView === "recordingDetail") {
+        if (recordingDetailReturn !== "profileDetail" && recordingDetailReturn !== "sessionMaterials") {
+          profileAccessService.leaveProfile();
+        }
+        setQuickView(recordingDetailReturn);
+        return;
+      }
       setQuickView("recordingRecords");
       return;
     }
@@ -889,7 +984,7 @@ export default function App() {
       setPendingProfile(null);
       setPendingRecordingAfterUnlock(null);
       if (returnToRecordings) {
-        setQuickView("recordingRecords");
+        setQuickView(pendingRecordingReturn);
       } else {
         setTab("profiles");
         setQuickView("overview");
@@ -1231,6 +1326,7 @@ export default function App() {
                   selectProfile(pendingProfile);
                   if (pendingRecordingAfterUnlock) {
                     await loadRecordingDetail(pendingRecordingAfterUnlock);
+                    setRecordingDetailReturn(pendingRecordingReturn);
                     setPendingRecordingAfterUnlock(null);
                     setPendingProfile(null);
                     setQuickView("recordingDetail");
@@ -1362,7 +1458,7 @@ export default function App() {
                 if (activeRecording.sessionId) {
                   void openSessionRecord(activeRecording.sessionId, "recordingDetail");
                 } else {
-                  prepareRecordEditor(activeProfile.kindLabel, "recordingDetail");
+                  showNotice("请先归档录音", "录音归档到某次记录后，才能基于本次资料生成记录草稿。");
                 }
               }}
               onOpenChapters={() => setQuickView("chapterEditor")}
@@ -1604,6 +1700,29 @@ export default function App() {
               const report = await reportService.copyFormalToDraft(activeRecordReportId);
               setRecordEditorSections(sectionsFromReport(report, false));
             }}
+            onRegenerateDraft={async () => {
+              if (!activeRecordReportId || !activeSessionId) return;
+              const reportType = getReportType(activeProfile.kindLabel);
+              const sources = await reportService.generationSources({
+                reportType,
+                profileId: activeProfileId,
+                sessionId: activeSessionId,
+              });
+              const selected = defaultReportSources(sources, activeRecordReportId);
+              if (selected.length === 0) {
+                showNotice("暂无可用资料", "请先上传或生成录音、量表、作业等资料后再重新生成。");
+                return;
+              }
+              setPendingReportGeneration({
+                mode: "regenerate",
+                sessionId: activeSessionId,
+                returnView: "recordEditor",
+                reportType,
+                reportId: activeRecordReportId,
+                recordType: getRecordType(activeProfile.kindLabel),
+                sources: selected,
+              });
+            }}
             onDownload={async () => {
               if (!activeRecordReportId) return;
               const exported = await reportService.export(
@@ -1765,6 +1884,16 @@ export default function App() {
             }}
           />
         ) : null}
+        {pendingReportGeneration ? (
+          <ReportGenerationConfirm
+            pending={pendingReportGeneration}
+            busy={reportGenerationBusy}
+            onCancel={() => {
+              if (!reportGenerationBusy) setPendingReportGeneration(null);
+            }}
+            onConfirm={() => void confirmReportGeneration()}
+          />
+        ) : null}
         {notice ? <ActionNotice notice={notice} onClose={() => setNotice(null)} /> : null}
       </View>
     </SafeAreaView>
@@ -1787,7 +1916,7 @@ function AuthScreen({
   const { width } = useWindowDimensions();
   const authShellWidth = Math.max(280, Math.min(width - 48, 430));
   const canSubmit = email.trim().includes("@")
-    && password.length >= 8
+    && password.length >= 6
     && (mode === "login" || displayName.trim().length > 0);
 
   const submit = async () => {
@@ -2335,7 +2464,7 @@ function RecordingAudioPlayer({
       });
     return () => {
       active = false;
-      player.pause();
+      safelyPauseAudioPlayer(player);
     };
   }, [canPlay, fileId, player]);
 
@@ -2573,6 +2702,7 @@ function ArchiveScreen({
     name: string;
     code: string;
     completedCount: number;
+    countDetail?: string;
     meta: string;
     next: string;
   };
@@ -2590,8 +2720,9 @@ function ArchiveScreen({
     id: item.id,
     name: item.name,
     code: displayProfileCode(item),
-    completedCount: Number(item.count.match(/\d+/)?.[0] ?? 0),
-    meta: `${item.status} · ${item.count}`,
+    completedCount: item.latestSequence ?? Number(item.count.match(/\d+/)?.[0] ?? 0),
+    countDetail: item.countDetail,
+    meta: `${item.status} · ${item.count}${item.countDetail ? ` · ${item.countDetail}` : ""}`,
     next: nextSessionLabel(item.next),
   }));
   const archiveCandidates = filterArchiveCandidates<ArchiveCandidateRow>(
@@ -2907,7 +3038,9 @@ function ProfilesScreen({
             </View>
             <View style={styles.listBody}>
               <Text style={styles.listTitle}>{item.name} · {displayProfileCode(item)}</Text>
-              <Text style={styles.listMeta}>{item.count} · {nextSessionLabel(item.next)}</Text>
+              <Text style={styles.listMeta}>
+                {item.count}{item.countDetail ? ` · ${item.countDetail}` : ""} · {nextSessionLabel(item.next)}
+              </Text>
               <View style={styles.badgeRow}>
                 <Badge label={item.status} tone="green" />
                 <Badge label={`风险 ${item.risk}`} tone={item.risk === "轻度" ? "warm" : "blue"} />
@@ -3272,6 +3405,17 @@ function ProfileDetailScreen({
   const hasRecords = profile.recordLabel !== "尚无记录";
   const nextStatLabel = profile.profileNext?.startsWith("已过期") ? "安排" : "下次";
   const sessionNoun = profile.kindLabel === "来访者" ? "咨询" : profile.kindLabel === "督导师" ? "受督" : "督导";
+  const sessionBySequence = new Map(sessions.map((session) => [session.sequence, session]));
+  const latestSequence = Math.max(
+    profile.latestSequence ?? 0,
+    ...sessions.map((session) => session.sequence),
+  );
+  const timelineEntries = latestSequence > 0
+    ? Array.from({ length: latestSequence }, (_, index) => latestSequence - index).map((sequence) => ({
+        sequence,
+        session: sessionBySequence.get(sequence),
+      }))
+    : [];
   const legalFiles = profile.kindLabel === "来访者"
     ? [
         { title: "知情同意书", category: "consent" },
@@ -3300,6 +3444,7 @@ function ProfileDetailScreen({
           <View style={styles.listBody}>
             <Text style={styles.detailName}>{profile.profileName}</Text>
             <Text style={styles.listMeta}>{profile.kindLabel}档案 · {profile.recordLabel}</Text>
+            {profile.countDetail ? <Text style={styles.listMeta}>{profile.countDetail}</Text> : null}
           </View>
           <Badge label="已解锁" tone="green" />
         </View>
@@ -3408,22 +3553,29 @@ function ProfileDetailScreen({
         </View>
       ) : null}
 
-      {sessions.length > 0 ? sortSessionsDescending(sessions).map((session) => (
-        <SessionCard
-          key={session.id}
-          session={session}
-          sessionNoun={sessionNoun}
-          onChange={(patch) => onUpdateSession(session.id, {
-            occurredAt: patch.occurredAt,
-            summary: patch.summary,
-            tags: patch.tags,
-          })}
-          onDelete={() => onDeleteSession(session.id)}
-          onOpenRecord={() => onOpenRecord(session.id)}
-          onOpenMaterial={(category) => onOpenMaterial(category, session.id)}
-          onNotice={onNotice}
-        />
-      )) : (
+      {timelineEntries.length > 0 ? timelineEntries.map((entry) => entry.session ? (
+          <SessionCard
+            key={entry.session.id}
+            session={entry.session}
+            sessionNoun={sessionNoun}
+            recordType={getRecordType(profile.kindLabel)}
+            onChange={(patch) => onUpdateSession(entry.session!.id, {
+              occurredAt: patch.occurredAt,
+              summary: patch.summary,
+              tags: patch.tags,
+            })}
+            onDelete={() => onDeleteSession(entry.session!.id)}
+            onOpenRecord={() => onOpenRecord(entry.session!.id)}
+            onOpenMaterial={(category) => onOpenMaterial(category, entry.session!.id)}
+            onNotice={onNotice}
+          />
+        ) : (
+          <MissingSessionCard
+            key={`missing-${entry.sequence}`}
+            sequence={entry.sequence}
+            sessionNoun={sessionNoun}
+          />
+        )) : (
         <View style={styles.emptyProfileState}>
           <View style={styles.emptyProfileIcon}>
             <ClipboardList size={22} color={colors.clayDark} />
@@ -3476,6 +3628,7 @@ function RecordingDetailScreen({
   onOpenPrivacy: () => void;
 }) {
   const context = describeRecordingContext(recording.title);
+  const recordButtonLabel = recording.sessionId ? "进入记录草稿" : "归档后生成记录";
   const [confirmRegeneration, setConfirmRegeneration] = useState(false);
   const [exportReady, setExportReady] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
@@ -3523,7 +3676,7 @@ function RecordingDetailScreen({
               setConfirmRegeneration(true);
             }).finally(() => setRegenerating(false));
           }} />
-          <PrimaryButton icon={Edit3} label={context.actionLabel} onPress={onOpenRecord} disabled={regenerating} />
+          <PrimaryButton icon={FileText} label={recordButtonLabel} onPress={onOpenRecord} disabled={regenerating} />
         </View>
       </View>
 
@@ -3962,6 +4115,7 @@ function RecordEditorScreen({
   onDirtyChange,
   onSaveFormal,
   onCopyFormalToDraft,
+  onRegenerateDraft,
   onDownload,
   onOpenPrivacy,
   onNotice,
@@ -3976,12 +4130,13 @@ function RecordEditorScreen({
   onDirtyChange: (dirty: boolean) => void;
   onSaveFormal: () => Promise<void>;
   onCopyFormalToDraft: () => Promise<void>;
+  onRegenerateDraft: () => Promise<void>;
   onDownload: () => Promise<void>;
   onOpenPrivacy: () => void;
   onNotice: (title: string, detail: string) => void;
 }) {
   const recordType = getRecordType(profile.kindLabel);
-  const [pendingAction, setPendingAction] = useState<"copy" | "save" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"copy" | "save" | "regenerate" | null>(null);
   return (
     <View style={styles.stack}>
       <View style={styles.editorHeader}>
@@ -3999,6 +4154,15 @@ function RecordEditorScreen({
       <View style={styles.editorToolbar}>
         <GhostButton icon={History} label="草稿" onPress={() => onNotice("草稿状态", formal ? "当前正在查看正式版，需先复制为草稿才能继续编辑。" : "当前草稿可继续编辑，保存后会成为正式版。")} />
         <GhostButton icon={FileText} label="正式版" onPress={() => onNotice("正式版状态", formal ? "当前正式版已保存，不可直接编辑。" : "当前还没有正式版，先确认草稿内容并保存。")} />
+        <GhostButton icon={RefreshCcw} label={pendingAction === "regenerate" ? "正在准备..." : "重新生成草稿"} onPress={() => {
+          if (pendingAction) return;
+          setPendingAction("regenerate");
+          void onRegenerateDraft().then(() => {
+            onFormalChange(false);
+            onDirtyChange(false);
+          }).catch((error) => onNotice("重新生成失败", error instanceof Error ? error.message : "请稍后重试。"))
+            .finally(() => setPendingAction(null));
+        }} />
       </View>
 
       <View style={styles.editorStatusGrid}>
@@ -5732,6 +5896,52 @@ function QuickAction({ icon: Icon, label, detail, onPress }: { icon: typeof Mic;
   );
 }
 
+function ReportGenerationConfirm({
+  pending,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  pending: PendingReportGeneration;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const groups = reportSourceGroups(pending.sources);
+  const title = pending.mode === "create"
+    ? `生成${pending.recordType}草稿`
+    : `重新生成${pending.recordType}草稿`;
+  return (
+    <View style={styles.confirmOverlay}>
+      <View style={styles.confirmCard}>
+        <View style={styles.confirmHeader}>
+          <FileText size={20} color={colors.clayDark} />
+          <Text style={styles.confirmTitle}>{title}</Text>
+        </View>
+        <Text style={styles.confirmCopy}>
+          将根据以下资料生成草稿{pending.mode === "regenerate" ? "，并覆盖当前草稿；正式版不会被覆盖。" : "。"}
+        </Text>
+        <Text style={styles.confirmMeta}>资料类型：{groups.join("、")}</Text>
+        <ScrollView style={styles.confirmSourceScroll} contentContainerStyle={styles.confirmSourceList}>
+          {pending.sources.map((source) => (
+            <Text key={`${source.resourceType}:${source.resourceId}`} style={styles.confirmSourceItem}>
+              {source.label}
+            </Text>
+          ))}
+        </ScrollView>
+        <View style={styles.confirmActions}>
+          <TouchableOpacity style={styles.confirmCancelButton} activeOpacity={0.75} onPress={onCancel} disabled={busy}>
+            <Text style={styles.confirmCancelText}>取消</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.confirmPrimaryButton, busy && styles.confirmPrimaryButtonDisabled]} activeOpacity={0.75} onPress={onConfirm} disabled={busy}>
+            <Text style={styles.confirmPrimaryText}>{busy ? "正在生成..." : "确认生成"}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function ActionNotice({ notice, onClose }: { notice: Notice; onClose: () => void }) {
   return (
     <View style={styles.noticeToast}>
@@ -5804,9 +6014,37 @@ function LegalFile({ title, meta, icon: Icon, onPress }: { title: string; meta: 
   );
 }
 
+function MissingSessionCard({
+  sequence,
+  sessionNoun,
+}: {
+  sequence: number;
+  sessionNoun: string;
+}) {
+  return (
+    <View style={[styles.sessionCard, styles.missingSessionCard]}>
+      <View style={styles.sessionTop}>
+        <View style={styles.listBody}>
+          <View style={styles.sessionTitleRow}>
+            <Text style={[styles.sessionIndex, styles.missingSessionIndex]}>第 {sequence} 次</Text>
+            <Text style={styles.sessionTime}>记录已删除/未保留</Text>
+          </View>
+          <Text style={styles.sessionSummary}>
+            这次{sessionNoun}的编号被保留，用于维持完整历程顺序；原始内容、附件和记录不在当前档案中展示。
+          </Text>
+        </View>
+      </View>
+      <View style={styles.sessionFooter}>
+        <Text style={styles.sessionRule}>占位说明不会参与记录生成、报告生成或资料授权</Text>
+      </View>
+    </View>
+  );
+}
+
 function SessionCard({
   session,
   sessionNoun,
+  recordType,
   onChange,
   onDelete,
   onOpenRecord,
@@ -5815,6 +6053,7 @@ function SessionCard({
 }: {
   session: SessionHistoryItem;
   sessionNoun: string;
+  recordType: string;
   onChange: (patch: Partial<Omit<SessionHistoryItem, "id">>) => Promise<void>;
   onDelete: () => Promise<void>;
   onOpenRecord: () => void;
@@ -5828,11 +6067,12 @@ function SessionCard({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingSession, setDeletingSession] = useState(false);
-  const recordActionLabel = session.record === "未生成" || session.record === "待生成"
-    ? `生成${sessionNoun}记录`
+  const recordPending = session.record === "未生成" || session.record === "待生成";
+  const recordActionLabel = recordPending
+    ? `生成${recordType}草稿`
     : session.record === "正式版"
-      ? `查看${sessionNoun}记录`
-      : `查看/编辑${sessionNoun}记录`;
+      ? `查看${recordType}`
+      : `查看/编辑${recordType}`;
   const saveEdit = async () => {
     if (savingEdit) return;
     const occurredAt = normalizeSessionDate(timeDraft);
@@ -5968,7 +6208,7 @@ function SessionCard({
       <View style={styles.sessionFooter}>
         <Text style={styles.sessionRule}>记录可存草稿/正式版；敏感资料需主动授权长期保存</Text>
         <TouchableOpacity style={styles.sessionGenerateButton} activeOpacity={0.78} onPress={onOpenRecord}>
-          {session.record === "未生成" || session.record === "待生成" ? <Sparkles size={16} color={colors.clayDark} /> : <Eye size={16} color={colors.clayDark} />}
+          {recordPending ? <FileText size={16} color={colors.clayDark} /> : <Eye size={16} color={colors.clayDark} />}
           <Text style={styles.sessionGenerateText}>{recordActionLabel}</Text>
         </TouchableOpacity>
       </View>
@@ -7182,6 +7422,12 @@ const styles = StyleSheet.create({
     gap: 13,
     ...shadow.soft,
   },
+  missingSessionCard: {
+    backgroundColor: colors.surfaceSoft,
+    borderColor: "#E8D9CC",
+    shadowOpacity: 0,
+    opacity: 0.92,
+  },
   sessionTop: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -7202,6 +7448,10 @@ const styles = StyleSheet.create({
     color: colors.sageDark,
     fontSize: 11,
     fontWeight: "900",
+  },
+  missingSessionIndex: {
+    backgroundColor: "#EFE6DE",
+    color: colors.muted,
   },
   sessionTime: {
     color: colors.ink,
@@ -7759,6 +8009,97 @@ const styles = StyleSheet.create({
   },
   enabledWideText: {
     color: "#FFF9F3",
+  },
+  confirmOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    backgroundColor: "rgba(55,49,45,0.28)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 18,
+  },
+  confirmCard: {
+    width: "100%",
+    maxWidth: 390,
+    borderRadius: radius.lg,
+    padding: 16,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 12,
+    ...shadow.soft,
+  },
+  confirmHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  confirmTitle: {
+    color: colors.ink,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: "900",
+  },
+  confirmCopy: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: "800",
+  },
+  confirmMeta: {
+    color: colors.clayDark,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "900",
+  },
+  confirmSourceScroll: {
+    maxHeight: 180,
+  },
+  confirmSourceList: {
+    gap: 8,
+  },
+  confirmSourceItem: {
+    borderRadius: radius.sm,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: colors.surfaceSoft,
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "800",
+  },
+  confirmActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  confirmCancelButton: {
+    flex: 1,
+    height: 44,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmCancelText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  confirmPrimaryButton: {
+    flex: 1,
+    height: 44,
+    borderRadius: radius.sm,
+    backgroundColor: colors.clayDark,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  confirmPrimaryButtonDisabled: {
+    opacity: 0.68,
+  },
+  confirmPrimaryText: {
+    color: "#FFF9F3",
+    fontSize: 14,
+    fontWeight: "900",
   },
   noticeToast: {
     position: "absolute",
