@@ -1,5 +1,3 @@
-import { Platform } from "react-native";
-
 export type AudioPlaybackPlayer = {
   playing: boolean;
   currentTime: number;
@@ -35,11 +33,13 @@ export async function toggleAudioPlayback({
   player,
   loadSource,
   preparePlayback = async () => {},
+  platformOS = "native",
 }: {
   sourceLoaded: boolean;
   player: AudioPlaybackPlayer;
   loadSource: () => Promise<string>;
   preparePlayback?: () => Promise<void>;
+  platformOS?: string;
 }): Promise<{ sourceLoaded: boolean }> {
   if (player.playing) {
     player.pause();
@@ -47,7 +47,7 @@ export async function toggleAudioPlayback({
   }
   // 每次播放前都刷新 source URL，避免 presigned URL 过期导致无声
   const url = await loadSource();
-  if (Platform.OS !== "web") {
+  if (platformOS !== "web") {
     player.replace(url);
     // 等待音频加载完成（isLoaded 变为 true），最多等 8 秒
     const loaded = await waitForPlayerLoaded(player, 8000);
@@ -58,6 +58,22 @@ export async function toggleAudioPlayback({
   await preparePlayback();
   player.play();
   return { sourceLoaded: true };
+}
+
+export function safelyPauseAudioPlayer(player: Pick<AudioPlaybackPlayer, "pause">): void {
+  try {
+    player.pause();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      message.includes("NativeSharedObjectNotFoundException")
+      || message.includes("native shared object")
+      || message.includes("Calling the 'pause' function has failed")
+    ) {
+      return;
+    }
+    throw error;
+  }
 }
 
 /** 轮询等待 player.isLoaded 变为 true，超时返回 false */

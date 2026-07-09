@@ -1,5 +1,6 @@
 .DS_Store
 .idea/
+.dev/
 
 venv/
 .venv/
@@ -17,3 +18,8 @@ apps/mobile/ios/
 .env
 .env.*
 !.env.example
+
+# Local tooling caches / generated data
+.playwright-cli/
+.pytest_cache/
+.workbuddy/

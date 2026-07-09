@@ -6,7 +6,7 @@ Deliver a usable counselor-assistant MVP with a real Expo mobile client, FastAPI
 
 ## Current Phase
 
-MVP implementation has returned to browser-based functional refinement. Durable state is backend-owned, file bytes use private MinIO, and the mobile app uses typed real APIs and native adapters. iOS simulator build verification passed; Android packaging is deferred while browser workflows and edge cases continue to be refined.
+MVP implementation has returned to mobile-first functional refinement. Durable state is backend-owned, file bytes use private MinIO, and the mobile app uses typed real APIs and native adapters. iOS simulator build verification passed; local Android emulator build/install verification also passed on AVD `psy_api35`.
 
 ## Phases
 
@@ -45,7 +45,7 @@ MVP implementation has returned to browser-based functional refinement. Durable 
 - [x] Phase 31: Add native Expo file download/share behavior for iOS and Android.
 - [x] Phase 32: Complete the page-level closed-loop audit against real persistence and remove durable simulated actions.
 - [x] Phase 33: Regression-test the complete mobile workflows and update handoff records.
-- [ ] Phase 34: Complete final local Android APK verification. iOS simulator build is verified; Android is deferred after a Google Maven TLS download failure.
+- [x] Phase 34: Complete final local Android APK verification. iOS simulator build is verified; Android emulator build/install is verified on AVD `psy_api35`.
 - [ ] Phase 35: Continue browser-based page, interface, permission, lifecycle, and edge-case audits until every MVP workflow is complete and usable.
 
 ### Phase 35 Progress
@@ -57,7 +57,10 @@ MVP implementation has returned to browser-based functional refinement. Durable 
 - [x] Replace deterministic recording transcription/summary generation with configurable Bailian Base64 and MinIO URL providers.
 - [x] Verify real local-audio Base64 transcription and real asynchronous `fun-asr` URL transcription.
 - [x] Complete recording processing status, retry, audio-lifecycle boundaries, and transcript-preserving summary regeneration.
-- [ ] Continue the browser audit across recording, archive, profile materials, generated reports, calendar, and security edge states.
+- [x] Complete a browser interaction audit pass for recording permission failure, archive completion focus, profile search/time labels, profile material status, record-editor session context, grant-expiry recovery, privacy center focus, schedule, security, and information pages.
+- [x] Complete a second browser audit pass for case-report source filtering, draft overwrite confirmation, Web original-file downloads, and legal-file preview warnings.
+- [x] Complete Android SDK/AVD setup and install the native Android app on `psy_api35`.
+- [ ] Continue the mobile audit across recording, archive, profile materials, generated reports, calendar, and security edge states.
 
 ## Working Files
 
@@ -101,6 +104,8 @@ MVP implementation has returned to browser-based functional refinement. Durable 
 - Generated consultation/supervision records, case reports, and recording notes must support local PDF download. Previewable PDF and attachment files must retain a direct download action.
 - Uploaded source files download as original MinIO bytes through short-lived backend-authorized URLs.
 - Web uses browser downloads; iOS and Android use Expo FileSystem and the native share/open sheet.
+- Local Android testing uses AVD `psy_api35`; Android emulator talks to the host backend through `http://10.0.2.2:8000/api/v1`.
+- Android native builds should use Android Studio JBR Java 21 via `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"`. The system Java 25 is not suitable for this Gradle/React Native build.
 - Local private MinIO recording processing uses backend-read Base64 with `qwen3-asr-flash`; production switches to short-lived public-reachable MinIO URLs with asynchronous `fun-asr`.
 - Recording summaries are generated from recognized text by `qwen-plus`; the frontend never receives or stores Bailian credentials.
 - Summary regeneration uses the current PostgreSQL transcript and does not read MinIO audio or invoke ASR again.
@@ -110,11 +115,11 @@ MVP implementation has returned to browser-based functional refinement. Durable 
 
 1. Read `progress.md`, `task_plan.md`, and `docs/prd/session-memory.md`.
 2. Confirm PostgreSQL and MinIO are healthy, then start FastAPI and Expo Web only for the active browser test session.
-3. Continue the browser audit for recording upload/recording, archive, profile materials, report generation/export, calendar, and security settings.
+3. Continue the mobile audit for recording upload/recording, archive, profile materials, report generation/export, calendar, and security settings.
 4. Use disposable backend records when testing destructive privacy and lifecycle operations; do not mutate the durable seed examples unnecessarily.
 5. Extend backend whitespace and invalid-state boundary tests when another route stores user-entered text after trimming.
 6. Re-run frontend tests, backend tests, typecheck, Web export, and browser console checks after each closed-loop batch.
-7. Keep Android packaging deferred until browser MVP refinement is complete or the user explicitly resumes native build verification.
+7. For Android testing, start `psy_api35`, run the backend on `127.0.0.1:8000`, then run `npm run android` with Android Studio JBR Java 21.
 8. Before ending each implementation batch, update `progress.md` using `docs/development/change-log-guidelines.md`; update `task_plan.md`, session memory, and backend notes when the decision has long-term impact.
 
 ## Errors Encountered

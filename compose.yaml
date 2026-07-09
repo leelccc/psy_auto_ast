@@ -1,0 +1,65 @@
+name: psy-auto-ast
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-psy_auto_ast}
+      POSTGRES_USER: ${POSTGRES_USER:-psy_auto_ast}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-psy_auto_ast_dev}
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-psy_auto_ast} -d ${POSTGRES_DB:-psy_auto_ast}
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-psy_auto_ast}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-psy_auto_ast_minio_dev}
+    ports:
+      - "${MINIO_API_PORT:-59000}:9000"
+      - "${MINIO_CONSOLE_PORT:-59001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:9000/minio/health/live
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-psy_auto_ast}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-psy_auto_ast_minio_dev}
+      MINIO_BUCKET: ${MINIO_BUCKET:-psy-auto-ast}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$MINIO_BUCKET"
+        mc anonymous set none "local/$$MINIO_BUCKET"
+    restart: "no"
+
+volumes:
+  postgres_data:
+  minio_data:

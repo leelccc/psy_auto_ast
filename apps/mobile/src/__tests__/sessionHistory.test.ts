@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   addSessionTag,
+  applySessionResourceStatuses,
   removeSession,
   sortSessionsDescending,
   updateSession,
@@ -60,4 +61,19 @@ test("session tags are unique and limited to four", () => {
 
 test("deleting a session removes only the confirmed record", () => {
   assert.deepEqual(removeSession(sessions, "session-6").map((item) => item.id), ["session-5"]);
+});
+
+test("session cards reflect backend recordings and attachments", () => {
+  const [updated] = applySessionResourceStatuses([sessions[0]], [
+    { sessionId: "session-5", category: "scale" },
+    { sessionId: "session-5", category: "homework" },
+    { sessionId: "session-5", category: "other" },
+  ], [
+    { sessionId: "session-5", ttl: "剩余 10 天" },
+  ]);
+
+  assert.equal(updated.recording, "剩余 10 天");
+  assert.equal(updated.scale, "已上传 1");
+  assert.equal(updated.homework, "已添加 1");
+  assert.equal(updated.other, "1 项");
 });

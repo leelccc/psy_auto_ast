@@ -12,6 +12,9 @@ from app.api.dependencies import current_user_id
 from app.api.errors import ApiError, error_response
 from app.api.routes.attachments import create_attachments_router
 from app.api.routes.account import create_account_router
+from app.api.routes.admin_console import router as admin_console_router
+from app.api.routes.admin_config import router as admin_config_router
+from app.api.routes.admin_users import router as admin_users_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.calendar import router as calendar_router
 from app.api.routes.files import create_files_router
@@ -26,9 +29,16 @@ from app.db.session import get_db
 from app.models import Profile as DatabaseProfile
 from app.models import SessionRecord
 from app.services.calendar import sync_profile_next_session_event
-from app.services.ai import RecordingAIProvider, create_recording_ai_provider
+from app.services.ai import RecordingAIProvider
+from app.services.profile_codes import (
+    assign_missing_profile_codes,
+    ensure_profile_code_available,
+    normalize_profile_code,
+    resolve_profile_code,
+)
 from app.services.resource_cleanup import cleanup_profile_resources, cleanup_session_resources
 from app.services.security import require_profile_access_grant
+from app.services.session_ordering import next_session_sequence, resequence_profile_sessions
 from app.services.storage import MinioStorage, Storage
 
 
@@ -44,7 +54,7 @@ def iso(value: datetime) -> str:
 class CreateProfileRequest(BaseModel):
     type: str
     name: str = Field(min_length=1, max_length=80)
-    code: str | None = None
+    code: str | None = Field(default=None, max_length=12)
     status: str | None = None
     crisis_level: str | None = None
     initial_session_count: int = Field(default=0, ge=0)
@@ -55,7 +65,7 @@ class CreateProfileRequest(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
-    code: str | None = None
+    code: str | None = Field(default=None, max_length=12)
     status: str | None = None
     crisis_level: str | None = None
     initial_session_count: int | None = Field(default=None, ge=0)
@@ -100,6 +110,8 @@ def create_app(
         allow_origins=[
             "http://localhost:8081",
             "http://127.0.0.1:8081",
+            "http://localhost:19006",
+            "http://127.0.0.1:19006",
         ],
         allow_credentials=True,
         allow_methods=["*"],
@@ -107,13 +119,15 @@ def create_app(
     )
     app.add_exception_handler(ApiError, error_response)
     storage = storage or MinioStorage()
-    recording_ai_provider = recording_ai_provider or create_recording_ai_provider(settings)
     recording_audio_input_mode = (
         recording_audio_input_mode or settings.recording_audio_input_mode
     )
     if recording_audio_input_mode not in {"base64", "minio_url"}:
         raise ValueError("录音 AI 输入模式必须是 base64 或 minio_url。")
     app.include_router(auth_router)
+    app.include_router(admin_console_router)
+    app.include_router(admin_config_router)
+    app.include_router(admin_users_router)
     app.include_router(security_router)
     app.include_router(calendar_router)
     app.include_router(jobs_router)
@@ -190,7 +204,13 @@ def create_app(
             status=payload.status,
             crisis_level=payload.crisis_level,
             initial_session_count=payload.initial_session_count,
-            code=payload.code,
+            code=resolve_profile_code(
+                database,
+                user_id=user_id,
+                profile_type=payload.type,
+                requested_code=payload.code,
+                now=now,
+            ),
             next_session_at=payload.next_session_at,
             metadata_json=payload.metadata,
             notes=payload.notes,
@@ -232,6 +252,8 @@ def create_app(
             .offset((page - 1) * page_size)
             .limit(page_size)
         ).all()
+        if assign_missing_profile_codes(database, user_id=user_id, profiles=list(items), now=utc_now()):
+            database.commit()
         return {
             "items": [
                 serialize_profile(
@@ -270,6 +292,11 @@ def create_app(
     ) -> dict[str, Any]:
         profile = get_profile(profile_id, user_id, database)
         require_profile_access(profile, user_id, database, x_profile_access_grant)
+        sessions_resequenced = resequence_profile_sessions(database, profile=profile, user_id=user_id)
+        if assign_missing_profile_codes(database, user_id=user_id, profiles=[profile], now=utc_now()):
+            sessions_resequenced = True
+        if sessions_resequenced:
+            database.commit()
         latest_sequence = database.scalar(
             select(func.max(SessionRecord.sequence_no)).where(
                 SessionRecord.profile_id == profile.id,
@@ -311,8 +338,20 @@ def create_app(
         }
         for request_field, model_field in field_map.items():
             if request_field in payload.model_fields_set:
-                setattr(profile, model_field, getattr(payload, request_field))
+                value = getattr(payload, request_field)
+                if request_field == "code" and value is not None:
+                    value = normalize_profile_code(value)
+                    if value is not None:
+                        ensure_profile_code_available(
+                            database,
+                            user_id=user_id,
+                            code=value,
+                            exclude_profile_id=profile.id,
+                        )
+                setattr(profile, model_field, value)
         profile.updated_at = utc_now()
+        if "initial_session_count" in payload.model_fields_set:
+            resequence_profile_sessions(database, profile=profile, user_id=user_id)
         sync_profile_next_session_event(database, profile)
         database.commit()
         latest_sequence = database.scalar(
@@ -362,6 +401,8 @@ def create_app(
     ) -> dict[str, Any]:
         profile = get_profile(profile_id, user_id, database)
         require_profile_access(profile, user_id, database, x_profile_access_grant)
+        if resequence_profile_sessions(database, profile=profile, user_id=user_id):
+            database.commit()
         items = database.scalars(
             select(SessionRecord)
             .where(
@@ -402,13 +443,6 @@ def create_app(
                 "session_type_profile_mismatch",
                 "记录类型与档案身份不匹配。",
             )
-        current_max = database.scalar(
-            select(func.max(SessionRecord.sequence_no)).where(
-                SessionRecord.profile_id == profile.id,
-                SessionRecord.user_id == user_id,
-            )
-        )
-        sequence_no = max(current_max or 0, profile.initial_session_count) + 1
         now = utc_now()
         started_at = payload.started_at or payload.occurred_at or now
         if payload.ended_at is not None and payload.ended_at < started_at:
@@ -418,7 +452,7 @@ def create_app(
             user_id=user_id,
             profile_id=profile.id,
             session_type=payload.session_type,
-            sequence_no=sequence_no,
+            sequence_no=next_session_sequence(database, profile=profile, user_id=user_id),
             occurred_at=started_at,
             ended_at=payload.ended_at,
             mode=payload.mode,
@@ -429,7 +463,10 @@ def create_app(
             updated_at=now,
         )
         database.add(session)
+        database.flush()
+        resequence_profile_sessions(database, profile=profile, user_id=user_id)
         database.commit()
+        database.refresh(session)
         return serialize_session(session)
 
     @app.patch("/api/v1/sessions/{session_id}")
@@ -464,6 +501,7 @@ def create_app(
         if payload.tags is not None:
             session.tags = list(dict.fromkeys(payload.tags))[:4]
         session.updated_at = utc_now()
+        resequence_profile_sessions(database, profile=profile, user_id=user_id)
         database.commit()
         return serialize_session(session)
 
@@ -488,6 +526,8 @@ def create_app(
         profile = get_profile(session.profile_id, user_id, database)
         require_profile_access(profile, user_id, database, x_profile_access_grant)
         deleted_counts = cleanup_session_resources(database, storage, session=session)
+        database.flush()
+        resequence_profile_sessions(database, profile=profile, user_id=user_id)
         database.commit()
         return {
             "deleted": True,

@@ -324,3 +324,178 @@
 - 录音上传、归档、百炼转写、纪要生成、失败重试、人工转写保留、浏览器录音兼容和原始录音播放均已实现。
 - 最近一次验证：前端 `68` 项测试通过，TypeScript 类型检查通过，真实 MinIO 音频可被浏览器原生播放器完整加载。
 - PostgreSQL 和 MinIO 当前健康运行；FastAPI 和 Expo Web 临时开发进程当前未监听 `8000/8081`。
+
+## 2026-06-19 Browser Interaction Audit Fixes
+
+### 改动目标
+
+- 对 MVP 做一轮真实浏览器交互审计，优先修复使用上不符合逻辑的页面状态、导航聚焦、档案资源状态和记录编辑上下文问题。
+
+### 改动点与实现方法
+
+- 前端：
+  - 修复录音权限失败后仍显示“正在录音 / 暂停中”且可保存的错误状态。新增 `failed` 录音状态，失败时显示“未开始”、禁用保存，并提供重试入口。
+  - 将录音页标题从“正在录音”改为中性“录音”，避免准备中、失败、暂停状态被错误命名。
+  - 归档完成、档案详情、隐私中心加入聚焦流程，隐藏底部导航，降低误触离开关键/敏感流程的风险。
+  - 档案列表和归档选择统一使用 `nextSessionLabel`，过期下次安排显示为“已过期 ...”，不再写成“下次 ...”。
+  - 档案搜索补充 `displayCode` 匹配，`A08` 这类展示编号现在能被搜索到。
+  - 档案详情头部不再对“陈雨”硬编码状态/下次时间，改用选中档案的真实展示字段。
+  - 新增 `applySessionResourceStatuses`，将后端 session、session 附件和已归档录音合并成卡片状态，使“录音 / 量表 / 作业 / 其他”反映真实后端资料。
+  - 上传/替换/删除 session 资料后刷新档案资料状态；上传 session 录音并归档处理后刷新录音列表和档案卡片。
+  - 档案敏感子资源授权失效时，自动回到档案访问验证页，而不是只停留在材料页显示错误提示。
+  - 记录编辑页新增当前 session 级 `activeRecordLabel`。从第 6 次记录进入时标题和 PDF 文件名显示第 6 次，不再错误使用档案最新第 7 次。
+- 后端 / 数据库 / MinIO：
+  - 本批次未改后端、数据库结构或 MinIO 存储契约。
+
+### 接口与数据影响
+
+- 未新增或修改后端接口。
+- 前端 `ProfileListItem.displayCode` 参与搜索。
+- 前端 session 卡片状态现在由 session 基础数据、附件列表和录音列表共同派生。
+- 访问 grant 失效的前端处理更严格：清除本地 grant 并要求重新验证。
+
+### 边界处理
+
+- 麦克风权限拒绝：录音不再进入可保存状态；用户可重试或返回。
+- 过期日程：过去的下次安排标记为“已过期”。
+- 热更新或授权过期导致 grant 丢失：敏感资料加载回到档案验证页。
+- 归档完成、档案详情、隐私中心等关键流程隐藏底栏，避免误触。
+
+### 测试验证
+
+- 自动化测试：
+  - 前端 `npm test`：`72 passed`。
+  - 前端 `npm run typecheck`：通过。
+  - 后端 `pytest -q`：`52 passed`。
+  - `python -m compileall app`：通过。
+  - `git diff --check`：通过。
+  - `npx expo export --platform web --output-dir dist`：通过。
+- 浏览器验证：
+  - 首页入口、录音权限失败态、录音记录、归档到已有档案、归档完成页、档案访问验证、档案详情资源卡、档案编号搜索、咨询记录编辑、智能督导资料权限、隐私中心、安全设置、日程和资讯详情均在 `390x844` 移动视口验证。
+
+### 已知限制 / 后续
+
+- 本轮未继续 Android APK 验证，仍沿用此前“Google Maven TLS 下载失败，Android 打包暂缓”的状态。
+- 当前开发数据库中有历史审计产生的测试档案和录音资源，列表数量不代表干净种子库状态。
+- FastAPI、Expo Web、PostgreSQL 和 MinIO 在本轮测试后仍保持运行，便于继续下一轮浏览器审计。
+
+## 2026-06-19 Browser Interaction Audit Fixes, Round 2
+
+### 改动目标
+
+- 继续用真实浏览器审计档案、报告和文件预览闭环，修复个案报告资料选择、草稿覆盖确认、Web 下载和法律文件删除提示中的不合理交互。
+
+### 改动点与实现方法
+
+- 前端：
+  - 个案报告资料选择页现在在已有草稿时先停留在当前页提示风险，按钮切换为“确认覆盖并重新生成草稿”，第二次点击才携带 `confirmOverwriteDraft` 覆盖草稿。
+  - 用户调整勾选资料时会撤回覆盖确认态，避免资料变化后仍沿用旧确认。
+  - Web 原始文件下载改为先获取短期 MinIO URL、拉取 Blob、再用 Blob URL 触发浏览器下载；失败时只打开新标签，不再导航当前 SPA。
+  - 文件下载成功提示按 Web / 原生端区分文案，不再在 Web 端提示“应用目录/系统分享面板”。
+  - 文件预览删除确认文案按文件来源区分：法律及伦理文件提示从当前档案移除，session 材料提示从本次咨询材料移除。
+- 后端：
+  - 个案报告生成资料源排除既有 `case_report` 报告，避免报告把旧报告作为输入资料自我引用。
+  - 个案报告生成、重新生成继续复用后端已有 `confirm_overwrite_draft` 保护。
+
+### 接口与数据影响
+
+- 未新增后端接口。
+- `/reports/generation-sources` 和报告生成源校验在 `report_type=case_report` 时排除既有个案报告资源。
+- 前端 `downloadAndShareFile` 增加可注入下载依赖，便于测试 Web Blob 下载行为；现有调用保持兼容。
+
+### 边界处理
+
+- 已有个案报告草稿：首次生成只提示确认，不覆盖；确认后覆盖草稿但不影响正式版。
+- 个案报告资料源：不再出现“陈雨 个案报告”这类自引用来源。
+- Web 跨域预签名下载：浏览器忽略 `<a download>` 时不会把应用页面导航到 MinIO 空白响应。
+- 法律文件删除：确认提示不再误写为“本次咨询材料”。
+
+### 测试验证
+
+- 自动化测试：
+  - 后端 `pytest -q`：`53 passed`。
+  - 前端 `npm test`：`73 passed`。
+  - 前端 `npm run typecheck`：通过。
+  - 后端 `python -m compileall app`：通过。
+  - 前端 `npx expo export --platform web --output-dir dist`：通过。
+  - `git diff --check`：通过。
+- 浏览器验证：
+  - 在 `390x844` 移动视口验证登录、档案库、陈雨档案解锁、个案报告资料选择、已有草稿覆盖确认、覆盖后进入个案报告编辑器。
+  - 验证法律文件预览下载后仍停留在 `http://localhost:8081/` 应用页，并显示 Web 下载提示。
+  - 验证法律文件删除第一段确认提示为“当前档案的法律及伦理文件”，未执行二次确认删除。
+
+### 已知限制 / 后续
+
+- 本轮未执行破坏性隐私中心删除和账号注销，只验证非破坏性确认态。
+- 当前开发数据库仍包含审计过程产生的测试记录和已覆盖的个案报告草稿。
+
+## 2026-07-03 Android Local Verification And Mobile Fixes
+
+### 改动目标
+
+- 完成用户要求的移动端优先测试准备，打通本机 Android 模拟器、后端、Metro 和原生 App 启动链路。
+- 修复前期审计中确认的录音统计口径和账号注销交互问题，并把启动/停止命令写入 README。
+
+### 改动点
+
+- 前端：
+  - 首页和累计统计页改为读取后端录音时长统计接口，不再只按当前录音列表计算。
+  - 上传音频时尽量通过本地音频 metadata 读取时长；读不到时仍允许上传并提示“暂未读取到时长”。
+  - 账号注销入口改为“入口行 -> 展开确认表单”，保留密码和确认词双重确认，不再进入账号安全页就直接暴露永久删除表单。
+  - README 新增 Android SDK PATH、后端、模拟器、`npm run android`、停止 App/Metro/模拟器的命令。
+- 后端：
+  - 新增 `recording_duration_entries` 独立统计表，绑定音频时写入，归档后更新到对应档案身份。
+  - 新增 `/api/v1/recording-duration-statistics`，按用户返回总秒数和按档案类型分组的录音时长。
+  - 账号删除级联清理录音时长统计。
+- 数据库 / MinIO：
+  - Alembic 新增录音时长统计表并从既有 recordings 回填已知时长。
+  - 原始录音仍按生命周期销毁；统计表只保存时长、来源和归档类型，不依赖音频文件长期存在。
+- 本机环境：
+  - 补齐 Android command-line tools、Android Emulator、Android 35 Google APIs ARM64 系统镜像、NDK `27.1.12297006`。
+  - 创建并启动 Android AVD `psy_api35`。
+  - 配置 `~/.zshrc` 中的 `ANDROID_HOME` 和 Android SDK PATH。
+
+### 实现方法
+
+- 录音统计以最小持久化流水实现：按 `recording_id` 唯一 upsert，避免原始录音销毁后丢失总时长。
+- Android SDK 的 `sdkmanager` 拉 manifest 多次卡住后，改用官方直链下载系统镜像和 NDK zip，解压到 SDK 标准目录。
+- Android 构建使用 Android Studio 自带 JBR Java 21，避开本机 Java 25 与 Gradle/React Native 插件不兼容的问题。
+
+### 接口与数据影响
+
+- 新增后端响应：
+  - `GET /api/v1/recording-duration-statistics`
+  - 返回 `total_seconds` 和 `items[{ profile_type, count, duration_seconds }]`。
+- 新增数据库表：
+  - `recording_duration_entries`
+  - 记录 `user_id`、`recording_id`、`source_type`、`profile_type`、`duration_seconds`、`recorded_at`。
+- 移动端新增 `RecordingDurationStatistics` 类型和 `recordingService.durationStatistics()`。
+
+### 边界处理
+
+- 上传音频时长读取失败：上传流程不中断，后端不写统计，前端提示稍后仍可处理。
+- 未归档录音：统计页单独显示“未归档录音”，不混入咨询/受督/督导分类。
+- 原始音频销毁：统计表保留时长，不依赖 MinIO 对象。
+- 注销账号：默认只显示折叠入口；展开后才显示不可恢复说明、密码、确认词、取消和确认按钮。
+- Android 环境：`JAVA_HOME` 必须指向 Android Studio JBR；当前默认系统 Java 25 不适合构建该项目。
+
+### 测试验证
+
+- 自动化测试：
+  - `cd apps/mobile && npm run typecheck`：通过。
+  - `cd apps/mobile && npm test`：`94 passed`。
+  - `cd backend && ../venv/bin/pytest tests/test_recording_ai_api.py tests/test_auth_account_api.py -q`：`13 passed`。
+  - `cd backend && ../venv/bin/pytest tests/test_lifecycle_cascade.py tests/test_core_api.py -q`：`8 passed`。
+- 浏览器验证：
+  - 在 `390x844` 移动视口验证首页累计统计、统计详情页、账号安全注销入口折叠/展开状态和中文资源类型展示。
+- Android 真实服务验证：
+  - `psy_api35` 模拟器启动完成，`adb devices` 显示 `emulator-5554 device`。
+  - `npm run android` 成功构建、安装并打开 `com.psyautoast.counselor`。
+  - App 进程存在，包名安装成功。
+  - 模拟器可连通宿主机后端 `10.0.2.2:8000`，后端返回 HTTP 响应。
+
+### 已知限制 / 后续
+
+- 上传音频时长读取依赖系统可解析 metadata；不可解析格式会上传成功但不计入时长，后续可按需要加服务端音频 metadata 识别。
+- Android Studio / SDK Manager 的远端 manifest 拉取不稳定；本机已通过官方直链补齐当前所需镜像和 NDK。
+- 当前后端、Android 模拟器、Metro 和 Android App 在测试后保持运行，方便继续人工测试。

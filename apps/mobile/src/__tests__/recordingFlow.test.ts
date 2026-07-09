@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   describeRecordingContext,
+  findRecordingForSession,
   getRecordingDestination,
   recordingDetailRequiresProfileUnlock,
   recordingAudioCanProcess,
@@ -51,6 +52,16 @@ test("recording processing requires an available original audio file", () => {
   assert.equal(recordingAudioCanProcess("未上传原始录音"), false);
   assert.equal(recordingAudioCanProcess("原始录音已销毁"), false);
   assert.equal(recordingAudioCanProcess("等待销毁"), false);
+});
+
+test("recording tile resolves to the session recording before attachments", () => {
+  const recordings = [
+    { id: "recording-4", sessionId: "session-4", status: "可查看", archive: "已归档" },
+    { id: "recording-5", sessionId: "session-5", status: "可查看", archive: "已归档" },
+  ];
+
+  assert.equal(findRecordingForSession(recordings, "session-5")?.id, "recording-5");
+  assert.equal(findRecordingForSession(recordings, "missing"), null);
 });
 
 test("archived recording content requires the matching profile page unlock", () => {

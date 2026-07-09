@@ -39,6 +39,13 @@ export function recordingAudioCanProcess(ttl: string): boolean {
   return ttl.startsWith("剩余 ");
 }
 
+export function findRecordingForSession<T extends { sessionId?: string | null }>(
+  recordings: T[],
+  sessionId: string,
+): T | null {
+  return recordings.find((recording) => recording.sessionId === sessionId) ?? null;
+}
+
 export function recordingDetailRequiresProfileUnlock({
   destination,
   profileName,

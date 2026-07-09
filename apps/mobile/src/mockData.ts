@@ -40,7 +40,7 @@ export const recordings = [
     ttl: "长期保存",
     profileName: "王澜",
     kindLabel: "督导师" as const,
-    recordLabel: "第 2 次受督",
+    recordLabel: "第 2 次督导反馈",
   },
 ];
 

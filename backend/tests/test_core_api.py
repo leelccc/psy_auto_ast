@@ -68,7 +68,7 @@ def test_profile_detail_requires_reusable_short_lived_profile_access_grant() -> 
     password_response = api.put(
         "/api/v1/profile-access-passwords/client",
         headers=auth_headers(),
-        json={"new_password": "client-pass"},
+        json={"new_password": "123456"},
     )
     assert password_response.status_code == 200
 
@@ -93,7 +93,7 @@ def test_profile_detail_requires_reusable_short_lived_profile_access_grant() -> 
     verify_response = api.post(
         "/api/v1/profile-access-passwords/client/verify",
         headers=auth_headers(),
-        json={"password": "client-pass"},
+        json={"password": "123456"},
     )
     assert verify_response.status_code == 200
     grant = verify_response.json()["profile_access_grant"]

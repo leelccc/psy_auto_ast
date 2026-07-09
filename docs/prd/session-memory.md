@@ -7,6 +7,8 @@
 
 后续每个功能批次和缺陷修复完成后，必须记录改动点和实现方法，不能只记录结果。
 
+新增代码、注释、日志输出、错误提示、测试描述和项目记录，在没有框架/API/第三方协议等特殊约束时，应尽可能使用中文；代码标识符按语言和生态习惯处理，必要英文命名可以保留。
+
 固定记录内容包括：
 
 - 改动目标与用户流程。
@@ -283,4 +285,12 @@ PDF 如果能提取文本，可参与 AI 分析。
 - 保存后的原始录音可在归档确认页和已解锁的纪要详情页播放。
 - Web 使用原生音频控件；移动端使用 Expo Audio。
 - 最近一次前端回归为 `68` 项测试通过，TypeScript 类型检查通过。
-- iOS/Android 最终打包验证仍按用户要求暂缓，当前主要使用浏览器调试。
+- 当时 iOS/Android 最终打包验证仍按用户要求暂缓，主要使用浏览器调试。
+
+## 2026-07-03 当前完成状态
+
+- 本机 Android 调试链路已打通：Android SDK、Emulator、Android 35 ARM64 系统镜像、NDK `27.1.12297006` 和 AVD `psy_api35` 已配置完成。
+- Android 模拟器通过 `10.0.2.2:8000` 访问本机 FastAPI 后端。
+- `npm run android` 已成功构建、安装并打开包名 `com.psyautoast.counselor`。
+- Android 构建需使用 Android Studio 自带 JBR Java 21：`/Applications/Android Studio.app/Contents/jbr/Contents/Home`。不要使用当前系统 Java 25。
+- README 已记录 Android、后端、Metro、模拟器的启动和停止命令。

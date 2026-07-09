@@ -1,4 +1,8 @@
 import { StatusBar } from "expo-status-bar";
+import NativeDateTimePicker, {
+  DateTimePickerAndroid,
+  type DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import {
   RecordingPresets,
   useAudioPlayer,
@@ -53,6 +57,8 @@ import {
   View,
   useWindowDimensions,
   ScrollView,
+  StatusBar as NativeStatusBar,
+  LogBox,
 } from "react-native";
 
 import { buildArchiveResult, describeArchiveTarget, filterArchiveCandidates, type ArchiveKind } from "./src/archiveFlow";
@@ -71,7 +77,7 @@ import { createAttachmentService, type ProfileAttachment } from "./src/api/attac
 import { createBackendFileService } from "./src/api/fileService";
 import { createProfileAccessService } from "./src/api/profileAccessService";
 import { createProfileService } from "./src/api/profileService";
-import { createRecordingService, type Recording } from "./src/api/recordingService";
+import { createRecordingService, type Recording, type RecordingDurationStatistics } from "./src/api/recordingService";
 import { createJobService, type AIJob } from "./src/api/jobService";
 import { createReportService, type Report, type ReportSource } from "./src/api/reportService";
 import { createPrivacyService, type SensitiveResource } from "./src/api/privacyService";
@@ -88,6 +94,7 @@ import {
   toRecordedLocalFile,
   type RecordedLocalAudio,
 } from "./src/native/audioRecording";
+import { getLocalAudioDurationSeconds } from "./src/native/audioMetadata";
 import { configureAudioPlaybackMode, safelyPauseAudioPlayer, toggleAudioPlayback } from "./src/native/audioPlayback";
 import {
   createExpoCalendarDriver,
@@ -109,10 +116,10 @@ import {
   type StoredFileReference,
 } from "./src/fileService";
 import { decideRecordingRegeneration, updateAtIndex } from "./src/recordingEditorFlow";
+import { dateFromDateTimeInput, formatDateTimeInput, normalizeSessionDate } from "./src/dateTimeInput";
 import {
   getMaterialUpdateMessage,
   materialCategoryCopy,
-  removeMaterialsForSession,
   removeSessionMaterial,
   type MaterialCategory,
   type SessionMaterial,
@@ -121,7 +128,6 @@ import {
   addSessionTag,
   applySessionResourceStatuses,
   formatSessionTime,
-  removeSession,
   type SessionHistoryItem,
 } from "./src/sessionHistory";
 import {
@@ -130,6 +136,7 @@ import {
   chatBubbleAlignForRole,
   recordSectionCountLabel,
 } from "./src/uiInteractionCopy";
+import { privacyResourceTypeLabel } from "./src/privacyFlow";
 import {
   createConversationAndSelect,
   deleteConversationAndSelect,
@@ -144,6 +151,8 @@ import {
   type TabKey,
 } from "./src/mockData";
 import { colors, radius, shadow } from "./src/theme";
+
+LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 type QuickView =
   | "overview"
@@ -184,6 +193,7 @@ type ArchiveResult = ReturnType<typeof buildArchiveResult> & {
   profileStatus?: string;
   profileFrequency?: string;
   profileNext?: string;
+  profileNextSessionAt?: string | null;
   countDetail?: string;
   sessionCount?: number;
   initialSessionCount?: number;
@@ -197,6 +207,7 @@ type ProfileCreateInput = {
   crisisLevel?: string;
   initialSessionCount: number;
   next: string;
+  frequency: string;
   metadata: Record<string, string>;
   notes: string;
 };
@@ -370,13 +381,6 @@ function getCaseReportSections(): EditableRecordSection[] {
   ];
 }
 
-function normalizeSessionDate(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (trimmed.includes("T")) return trimmed;
-  return `${trimmed.replace(" ", "T")}:00+08:00`;
-}
-
 function toDateKey(date: Date): string {
   return [
     date.getFullYear(),
@@ -395,6 +399,17 @@ function parseDuration(value: string): number {
   const parts = value.split(":").map(Number);
   if (parts.some(Number.isNaN)) return 0;
   return parts.reduce((total, part) => total * 60 + part, 0);
+}
+
+function recordingDurationStat(
+  stats: RecordingDurationStatistics | null,
+  profileType: ArchiveKind | null,
+): { count: number; seconds: number } {
+  const item = stats?.items.find((entry) => entry.profileType === profileType);
+  return {
+    count: item?.count ?? 0,
+    seconds: item?.durationSeconds ?? 0,
+  };
 }
 
 function recordingTtl(recording: Recording): string {
@@ -467,6 +482,24 @@ function isCompleteAccessPin(value: string): boolean {
   return /^\d{6}$/.test(value);
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
+function optimisticUser(email: string, displayName = "咨询师"): CurrentUser {
+  const now = new Date().toISOString();
+  return {
+    id: "pending",
+    email,
+    display_name: displayName,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
 export default function App() {
   const [authStatus, setAuthStatus] = useState<"loading" | "guest" | "authenticated">("loading");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -533,6 +566,7 @@ export default function App() {
   const [recordingChapters, setRecordingChapters] = useState<EditableChapter[]>(summaryChapters);
   const [recordingTurns, setRecordingTurns] = useState<EditableTranscriptTurn[]>(transcriptTurns);
   const [recordingHasEdits, setRecordingHasEdits] = useState(false);
+  const [recordingDurationStats, setRecordingDurationStats] = useState<RecordingDurationStatistics | null>(null);
   const [activeArticle, setActiveArticle] = useState(articles[0]);
   const { width } = useWindowDimensions();
   const isCompact = width < 430;
@@ -552,8 +586,12 @@ export default function App() {
   const loadRecordings = async () => {
     setRecordingsLoading(true);
     try {
-      const response = await recordingService.list({ pageSize: 100 });
+      const [response, stats] = await Promise.all([
+        recordingService.list({ pageSize: 100 }),
+        recordingService.durationStatistics(),
+      ]);
       setRecordingItems(response.items.map(mapRecordingItem));
+      setRecordingDurationStats(stats);
     } catch (error) {
       showNotice("录音列表加载失败", errorMessage(error));
     } finally {
@@ -561,9 +599,13 @@ export default function App() {
     }
   };
   const refreshRecording = async (recordingId: string): Promise<RecordingItem | null> => {
-    const response = await recordingService.list({ pageSize: 100 });
+    const [response, stats] = await Promise.all([
+      recordingService.list({ pageSize: 100 }),
+      recordingService.durationStatistics(),
+    ]);
     const items = response.items.map(mapRecordingItem);
     setRecordingItems(items);
+    setRecordingDurationStats(stats);
     const refreshed = items.find((item) => item.id === recordingId) ?? null;
     if (refreshed) setActiveRecording(refreshed);
     return refreshed;
@@ -634,6 +676,35 @@ export default function App() {
       )).flat();
       setSessionHistory(applySessionResourceStatuses(sessions, materials, recordingsForStatus));
       setSessionMaterials(materials);
+      setProfileItems((current) => current.map((item) => {
+        if (item.id !== profileId) return item;
+        const latestSequence = Math.max(item.initialSessionCount ?? 0, ...sessions.map((session) => session.sequence));
+        const sessionCount = sessions.length;
+        return {
+          ...item,
+          count: latestSequence > 0 ? `第${latestSequence}次` : "尚无记录",
+          countDetail: item.initialSessionCount && item.initialSessionCount > 0
+            ? `系统内 ${sessionCount} 条 · 既往 ${item.initialSessionCount} 次`
+            : sessionCount > 0 ? `系统内 ${sessionCount} 条` : undefined,
+          sessionCount,
+          latestSequence,
+        };
+      }));
+      setActiveProfile((current) => {
+        if (!current) return current;
+        const latestSequence = Math.max(current.initialSessionCount ?? 0, ...sessions.map((session) => session.sequence));
+        const sessionCount = sessions.length;
+        const recordNoun = current.kindLabel === "来访者" ? "咨询" : current.kindLabel === "督导师" ? "受督" : "督导";
+        return {
+          ...current,
+          recordLabel: latestSequence > 0 ? `第 ${latestSequence} 次${recordNoun}` : "尚无记录",
+          countDetail: current.initialSessionCount && current.initialSessionCount > 0
+            ? `系统内 ${sessionCount} 条 · 既往 ${current.initialSessionCount} 次`
+            : sessionCount > 0 ? `系统内 ${sessionCount} 条` : undefined,
+          sessionCount,
+          latestSequence,
+        };
+      });
     } catch (error) {
       setSessionHistory([]);
       setSessionMaterials([]);
@@ -651,8 +722,9 @@ export default function App() {
       kindLabel: profile.type,
       recordLabel: profile.count === "尚无记录" ? profile.count : `${profile.count}${recordNoun}`,
       profileStatus: profile.status,
-      profileFrequency: "未设置",
+      profileFrequency: profile.frequency ?? "未设置",
       profileNext: profile.next,
+      profileNextSessionAt: profile.nextSessionAt,
       countDetail: profile.countDetail,
       sessionCount: profile.sessionCount,
       initialSessionCount: profile.initialSessionCount,
@@ -675,8 +747,9 @@ export default function App() {
         kindLabel: recording.kindLabel,
         recordLabel: recording.recordLabel,
         profileStatus: storedProfile?.status,
-        profileFrequency: "未设置",
+        profileFrequency: storedProfile?.frequency ?? "未设置",
         profileNext: storedProfile?.next,
+        profileNextSessionAt: storedProfile?.nextSessionAt,
       });
     }
     if (destination === "archive") {
@@ -1031,14 +1104,16 @@ export default function App() {
       }
     });
     void (async () => {
-      const session = await authSessionStore.load();
+      const session = await withTimeout(authSessionStore.load(), 5000, null);
       if (!session) {
         setAuthStatus("guest");
         return;
       }
       apiClient.setTokens(session.accessToken, session.refreshToken);
       try {
-        setCurrentUser(await authService.me());
+        const user = await withTimeout(authService.me(), 8000, null);
+        if (!user) throw new Error("Session restore timed out");
+        setCurrentUser(user);
         setAuthStatus("authenticated");
       } catch {
         apiClient.setTokens("demo-token", null);
@@ -1136,15 +1211,15 @@ export default function App() {
       <AuthScreen
         onLogin={async (email, password) => {
           await authService.login(email, password);
-          const user = await authService.me();
-          setCurrentUser(user);
+          setCurrentUser(optimisticUser(email));
           setAuthStatus("authenticated");
+          void authService.me().then(setCurrentUser).catch(() => undefined);
         }}
         onRegister={async (email, password, displayName) => {
           await authService.register({ email, password, displayName });
-          const user = await authService.me();
-          setCurrentUser(user);
+          setCurrentUser(optimisticUser(email, displayName));
           setAuthStatus("authenticated");
+          void authService.me().then(setCurrentUser).catch(() => undefined);
         }}
       />
     );
@@ -1160,6 +1235,7 @@ export default function App() {
             <HomeScreen
               profiles={profileItems}
               recordings={recordingItems}
+              durationStats={recordingDurationStats}
               events={dashboardEvents}
               onOpen={setQuickView}
               onOpenProfiles={() => setTab("profiles")}
@@ -1215,9 +1291,15 @@ export default function App() {
                     uploaded.picked.name.replace(/\.[^.]+$/, ""),
                     "uploaded_audio",
                   );
-                  await recordingService.bindAudio(recording.id, uploaded.stored.fileId, null);
+                  const durationSeconds = await getLocalAudioDurationSeconds(uploaded.picked).catch(() => null);
+                  await recordingService.bindAudio(recording.id, uploaded.stored.fileId, durationSeconds);
                   await loadRecordings();
-                  showNotice("录音已上传", "录音已进入待归档列表，选择档案后开始生成转写和纪要。");
+                  showNotice(
+                    "录音已上传",
+                    durationSeconds
+                      ? "录音已记录时长并进入待归档列表，选择档案后开始生成转写和纪要。"
+                      : "录音已进入待归档列表；暂未读取到时长，选择档案后仍可继续处理。",
+                  );
                 } catch (error) {
                   showNotice("录音上传失败", errorMessage(error));
                 }
@@ -1345,6 +1427,17 @@ export default function App() {
               profile={activeProfile}
               sessions={sessionHistory}
               legalAttachments={legalAttachments}
+              onUpdateNextSession={async (nextSessionAt) => {
+                try {
+                  const updated = await profileService.update(activeProfileId, { nextSessionAt });
+                  setProfileItems((current) => current.map((item) => item.id === updated.id ? updated : item));
+                  selectProfile(updated);
+                  showNotice("下次时间已更新", "档案卡片和日程已同步。");
+                } catch (error) {
+                  showNotice("下次时间保存失败", errorMessage(error));
+                  throw error;
+                }
+              }}
               onCreateSession={async (input) => {
                 try {
                   const created = await sessionService.create(activeProfileId, input);
@@ -1367,8 +1460,7 @@ export default function App() {
               onDeleteSession={async (sessionId) => {
                 try {
                   await sessionService.delete(sessionId);
-                  setSessionHistory((current) => removeSession(current, sessionId));
-                  setSessionMaterials((current) => removeMaterialsForSession(current, sessionId));
+                  await loadProfileData(activeProfileId);
                   showNotice("记录已删除", "后端记录及其关联关系已更新。");
                 } catch (error) {
                   showNotice("记录删除失败", errorMessage(error));
@@ -1390,7 +1482,7 @@ export default function App() {
                     attachment,
                     ...current.filter((item) => item.category !== category),
                   ]);
-                  showNotice(existing ? "法律文件已替换" : "法律文件已上传", `${title}已保存到 MinIO 并绑定当前档案。`);
+                  showNotice(existing ? "法律文件已替换" : "法律文件已上传", `${title}已安全上传并绑定当前档案。`);
                 } catch (error) {
                   showNotice("法律文件上传失败", errorMessage(error));
                   throw error;
@@ -1436,7 +1528,7 @@ export default function App() {
                     crisisLevel: input.crisisLevel,
                     initialSessionCount: input.initialSessionCount,
                     nextSessionAt: normalizeSessionDate(input.next) || undefined,
-                    metadata: input.metadata,
+                    metadata: { ...input.metadata, frequency: input.frequency },
                     notes: input.notes,
                   });
                   setProfileItems((current) => [profile, ...current]);
@@ -1508,6 +1600,12 @@ export default function App() {
           {quickView === "transcriptEditor" ? (
             <TranscriptEditorScreen
               turns={recordingTurns}
+              onRenameSpeaker={(speakerKey, speaker) => {
+                setRecordingTurns((current) => current.map((turn) => (
+                  turn.speakerKey === speakerKey ? { ...turn, speaker } : turn
+                )));
+                setRecordingHasEdits(true);
+              }}
               onChange={(index, turn) => {
                 setRecordingTurns((current) => updateAtIndex(current, index, turn));
                 setRecordingHasEdits(true);
@@ -1567,7 +1665,7 @@ export default function App() {
                     await recordingService.bindAudio(
                       recording.id,
                       uploaded.stored.fileId,
-                      null,
+                      await getLocalAudioDurationSeconds(uploaded.picked).catch(() => null),
                     );
                     await recordingService.archive(recording.id, {
                       profileType: archiveKindForLabel(activeProfile.kindLabel),
@@ -1626,7 +1724,7 @@ export default function App() {
                       source: "material",
                       file: replacement.file,
                     });
-                    showNotice("文件已替换", "旧文件已从 MinIO 销毁，新文件已绑定到当前资料。");
+                    showNotice("文件已替换", "旧文件已销毁，新文件已绑定到当前资料。");
                   } catch (error) {
                     showNotice("文件替换失败", errorMessage(error));
                     throw error;
@@ -1810,7 +1908,7 @@ export default function App() {
             />
           ) : null}
           {quickView === "articleDetail" ? <ArticleDetailScreen article={activeArticle} /> : null}
-          {quickView === "statistics" ? <StatisticsScreen recordings={recordingItems} /> : null}
+          {quickView === "statistics" ? <StatisticsScreen durationStats={recordingDurationStats} /> : null}
           {quickView === "schedule" ? <ScheduleScreen onStartRecording={() => setQuickView("recording")} onNotice={showNotice} /> : null}
           {quickView === "securitySettings" ? (
             <SecuritySettingsScreen
@@ -1976,7 +2074,7 @@ function AuthScreen({
           <TextInput
             value={password}
             onChangeText={setPassword}
-            placeholder="密码（至少 8 位）"
+            placeholder={mode === "login" ? "密码" : "密码（至少 8 位）"}
             placeholderTextColor={colors.subtle}
             style={styles.profileFormInput}
             secureTextEntry
@@ -2006,7 +2104,7 @@ function AuthScreen({
             </Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.authFootnote}>开发演示账号：demo@example.com / Demo1234!</Text>
+        <Text style={styles.authFootnote}>开发演示账号：user@163.com / 123456</Text>
       </View>
     </SafeAreaView>
   );
@@ -2035,6 +2133,7 @@ function Header({ title, quickView, onBack, onOpenSchedule }: { title: string; q
 function HomeScreen({
   profiles,
   recordings: recordingRows,
+  durationStats,
   events,
   onOpen,
   onOpenProfiles,
@@ -2043,6 +2142,7 @@ function HomeScreen({
 }: {
   profiles: ProfileListItem[];
   recordings: RecordingItem[];
+  durationStats: RecordingDurationStatistics | null;
   events: CalendarEvent[];
   onOpen: (view: QuickView) => void;
   onOpenProfiles: () => void;
@@ -2065,14 +2165,12 @@ function HomeScreen({
     (recording) => recording.archive === "待归档" || recording.status !== "可查看",
   );
   const metricCards = ([
-    { label: "咨询小时", kind: "来访者" as const },
-    { label: "受督小时", kind: "督导师" as const },
-    { label: "督导小时", kind: "受督者" as const },
+    { label: "咨询小时", kind: "client" as const },
+    { label: "受督小时", kind: "supervisor" as const },
+    { label: "督导小时", kind: "supervisee" as const },
   ]).map((metric) => {
-    const seconds = recordingRows
-      .filter((recording) => recording.kindLabel === metric.kind && recording.archive === "已归档")
-      .reduce((total, recording) => total + parseDuration(recording.duration), 0);
-    return { label: metric.label, value: `${(seconds / 3600).toFixed(1)}h` };
+    const stat = recordingDurationStat(durationStats, metric.kind);
+    return { label: metric.label, value: `${(stat.seconds / 3600).toFixed(1)}h` };
   });
   return (
     <View style={styles.stack}>
@@ -2356,7 +2454,7 @@ function RecordingRecordsScreen({
       {showUpload ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formPreviewTitle}>上传已有录音</Text>
-          <Text style={styles.formHelp}>从系统文件选择器选取音频。文件会直传 MinIO，完成后进入待归档状态，不会自动读取任何档案。</Text>
+          <Text style={styles.formHelp}>从系统文件选择器选取音频。文件会安全上传到云端，完成后进入待归档状态，不会自动读取任何档案。</Text>
           <TouchableOpacity
             style={[styles.inlineCreateConfirm, uploading && styles.inlineCreateConfirmDisabled]}
             activeOpacity={0.78}
@@ -3144,6 +3242,8 @@ function ProfileCreateScreen({
   const [gender, setGender] = useState("unknown");
   const [initialCount, setInitialCount] = useState("0");
   const [scheduledAt, setScheduledAt] = useState("");
+  const [frequency, setFrequency] = useState("未设置");
+  const [customFrequency, setCustomFrequency] = useState("");
   const [complaint, setComplaint] = useState("");
   const [crisisLevel, setCrisisLevel] = useState("none");
   const [profileStatus, setProfileStatus] = useState("active");
@@ -3154,25 +3254,32 @@ function ProfileCreateScreen({
       name: "姓名",
       code: "来访者编号",
       count: "咨询次数",
-      time: "咨询时间",
-      timePlaceholder: "例如：2026-06-08 18:00",
+      time: "下次咨询时间",
+      timePlaceholder: "例如：2026-07-14 09:30",
       notePlaceholder: "补充来访背景、转介来源等",
     },
     supervisor: {
       name: "督导师",
       count: "督导次数",
-      time: "督导时间",
-      timePlaceholder: "例如：2026-06-08 18:00",
+      time: "下次督导时间",
+      timePlaceholder: "例如：2026-07-14 09:30",
       notePlaceholder: "补充督导取向、合作约定等",
     },
     supervisee: {
       name: "受督者",
       count: "受督次数",
-      time: "受督时间",
-      timePlaceholder: "例如：2026-06-08 18:00",
+      time: "下次受督时间",
+      timePlaceholder: "例如：2026-07-14 09:30",
       notePlaceholder: "补充受督者背景、关注方向等",
     },
   }[kind];
+  const frequencyOptions = [
+    { value: "未设置", label: "未设置" },
+    { value: "每周", label: "每周" },
+    { value: "双周", label: "双周" },
+    { value: "每月", label: "每月" },
+    { value: "自定义", label: "自定义" },
+  ];
   const genderOptions = [
     { value: "unknown", label: "未填写" },
     { value: "female", label: "女" },
@@ -3201,12 +3308,15 @@ function ProfileCreateScreen({
     setGender("unknown");
     setInitialCount("0");
     setScheduledAt("");
+    setFrequency("未设置");
+    setCustomFrequency("");
     setComplaint("");
     setCrisisLevel("none");
     setProfileStatus("active");
     setSupervisionMode("online");
     setNotes("");
   };
+  const frequencyValue = frequency === "自定义" ? customFrequency.trim() : frequency;
   const submit = () => {
     if (!name.trim()) {
       onNotice(`请填写${fieldCopy.name}`, `${fieldCopy.name}是创建档案的必要信息。`);
@@ -3225,6 +3335,7 @@ function ProfileCreateScreen({
       crisisLevel: kind === "client" ? crisisLevel : undefined,
       initialSessionCount: parsedCount,
       next: scheduledAt.trim(),
+      frequency: frequencyValue || "未设置",
       metadata: kind === "client"
         ? {
             gender,
@@ -3280,13 +3391,22 @@ function ProfileCreateScreen({
           style={styles.profileFormInput}
           keyboardType="number-pad"
         />
+        <Text style={styles.formFieldLabel}>频率</Text>
+        <ChoiceGroup options={frequencyOptions} value={frequency} onChange={setFrequency} />
+        {frequency === "自定义" ? (
+          <TextInput
+            value={customFrequency}
+            onChangeText={setCustomFrequency}
+            placeholder="例如：每 10 天、按需"
+            placeholderTextColor={colors.subtle}
+            style={styles.profileFormInput}
+          />
+        ) : null}
         <Text style={styles.formFieldLabel}>{fieldCopy.time}</Text>
-        <TextInput
+        <DateTimePickerField
           value={scheduledAt}
-          onChangeText={setScheduledAt}
+          onChange={setScheduledAt}
           placeholder={fieldCopy.timePlaceholder}
-          placeholderTextColor={colors.subtle}
-          style={styles.profileFormInput}
         />
         {kind === "client" ? (
           <>
@@ -3367,6 +3487,7 @@ function ProfileDetailScreen({
   profile,
   sessions,
   legalAttachments,
+  onUpdateNextSession,
   onCreateSession,
   onUpdateSession,
   onDeleteSession,
@@ -3380,6 +3501,7 @@ function ProfileDetailScreen({
   profile: ArchiveResult;
   sessions: SessionHistoryItem[];
   legalAttachments: ProfileAttachment[];
+  onUpdateNextSession: (nextSessionAt: string | null) => Promise<void>;
   onCreateSession: (input: { sessionType: string; occurredAt: string; summary: string }) => Promise<void>;
   onUpdateSession: (
     sessionId: string,
@@ -3398,7 +3520,12 @@ function ProfileDetailScreen({
   onNotice: (title: string, detail: string) => void;
 }) {
   const [showCreateSession, setShowCreateSession] = useState(false);
-  const [newSessionTime, setNewSessionTime] = useState("2026-06-08 18:00");
+  const [newSessionTime, setNewSessionTime] = useState(() => formatDateTimeInput(new Date()));
+  const [editingNextSession, setEditingNextSession] = useState(false);
+  const [nextSessionDraft, setNextSessionDraft] = useState(() => (
+    profile.profileNextSessionAt ? formatDateTimeInput(profile.profileNextSessionAt) : formatDateTimeInput(new Date())
+  ));
+  const [savingNextSession, setSavingNextSession] = useState(false);
   const [newSessionSummary, setNewSessionSummary] = useState("");
   const [creatingSession, setCreatingSession] = useState(false);
   const [uploadingLegalCategory, setUploadingLegalCategory] = useState<string | null>(null);
@@ -3451,9 +3578,43 @@ function ProfileDetailScreen({
         <View style={styles.detailStats}>
           <MiniStat label="状态" value={profile.profileStatus ?? (hasRecords ? "处理中" : "新建")} />
           <MiniStat label="频率" value={profile.profileFrequency ?? "未设置"} />
-          <MiniStat label={nextStatLabel} value={profile.profileNext ?? "未设置"} />
+          <MiniStat label={nextStatLabel} value={profile.profileNext ?? "未设置"} onPress={() => setEditingNextSession((current) => !current)} />
         </View>
       </View>
+
+      {editingNextSession ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>设置下次{sessionNoun}时间</Text>
+          <DateTimePickerField value={nextSessionDraft} onChange={setNextSessionDraft} defaultOpen />
+          <View style={styles.inlineActions}>
+            <GhostButton icon={X} label="清空下次" onPress={async () => {
+              if (savingNextSession) return;
+              setSavingNextSession(true);
+              try {
+                await onUpdateNextSession(null);
+                setEditingNextSession(false);
+              } finally {
+                setSavingNextSession(false);
+              }
+            }} />
+            <PrimaryButton icon={Save} label={savingNextSession ? "保存中..." : "保存下次"} onPress={async () => {
+              if (savingNextSession) return;
+              const normalized = normalizeSessionDate(nextSessionDraft);
+              if (!normalized || Number.isNaN(Date.parse(normalized))) {
+                onNotice("日期时间格式不正确", "请重新选择下次时间。");
+                return;
+              }
+              setSavingNextSession(true);
+              try {
+                await onUpdateNextSession(normalized);
+                setEditingNextSession(false);
+              } finally {
+                setSavingNextSession(false);
+              }
+            }} disabled={savingNextSession} />
+          </View>
+        </View>
+      ) : null}
 
       <SectionHeader title="法律及伦理文件" />
       <View style={styles.legalGrid}>
@@ -3503,12 +3664,10 @@ function ProfileDetailScreen({
       {showCreateSession ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formPreviewTitle}>新增{sessionNoun}记录</Text>
-          <TextInput
+          <DateTimePickerField
             value={newSessionTime}
-            onChangeText={setNewSessionTime}
-            placeholder="日期时间，例如 2026-06-08 18:00"
-            placeholderTextColor={colors.subtle}
-            style={styles.archiveTextInput}
+            onChange={setNewSessionTime}
+            defaultOpen
           />
           <TextInput
             value={newSessionSummary}
@@ -3528,7 +3687,7 @@ function ProfileDetailScreen({
             onPress={async () => {
             const occurredAt = normalizeSessionDate(newSessionTime);
             if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) {
-              onNotice("日期时间格式不正确", "请按 2026-06-08 18:00 的格式填写。");
+              onNotice("日期时间格式不正确", "请重新选择记录时间。");
               return;
             }
             setCreatingSession(true);
@@ -3627,7 +3786,7 @@ function RecordingDetailScreen({
   onNotice: (title: string, detail: string) => void;
   onOpenPrivacy: () => void;
 }) {
-  const context = describeRecordingContext(recording.title);
+  const speakers = uniqueTranscriptSpeakers(turns);
   const recordButtonLabel = recording.sessionId ? "进入记录草稿" : "归档后生成记录";
   const [confirmRegeneration, setConfirmRegeneration] = useState(false);
   const [exportReady, setExportReady] = useState(false);
@@ -3694,8 +3853,9 @@ function RecordingDetailScreen({
           <Badge label="3 处待确认" tone="warm" />
         </View>
         <View style={styles.speakerRow}>
-          <Text style={styles.speakerChip}>{context.roles[0]}：{context.roles[0] === "咨询师" ? "林咨询师" : recording.profileName ?? "待确认"}</Text>
-          <Text style={styles.speakerChip}>{context.roles[1]}：{context.roles[1] === "咨询师" ? "林咨询师" : recording.profileName ?? "待确认"}</Text>
+          {speakers.map((speaker) => (
+            <Text key={speaker.key} style={styles.speakerChip}>{speaker.label}</Text>
+          ))}
         </View>
         <Text style={styles.transcriptToolCopy}>可编辑发言人名称、逐段校对文本。修改后会同步影响纪要和本次记录草稿。</Text>
       </View>
@@ -3778,19 +3938,35 @@ function ChapterEditorScreen({
 
 function TranscriptEditorScreen({
   turns,
+  onRenameSpeaker,
   onChange,
   onSave,
 }: {
   turns: EditableTranscriptTurn[];
+  onRenameSpeaker: (speakerKey: string, speaker: string) => void;
   onChange: (index: number, turn: EditableTranscriptTurn) => void;
   onSave: () => Promise<void>;
 }) {
   const [saving, setSaving] = useState(false);
+  const speakers = uniqueTranscriptSpeakers(turns);
   return (
     <View style={styles.stack}>
       <View style={styles.privacyPanel}>
-        <Text style={styles.privacyTitle}>逐段校对发言人与文本</Text>
-        <Text style={styles.privacyCopy}>保存后会标记为人工修改。重新生成纪要前必须确认是否覆盖这些修改。</Text>
+        <Text style={styles.privacyTitle}>校对发言人与文本</Text>
+        <Text style={styles.privacyCopy}>修改某个发言人名称后，保存时会同步到该发言人的全部片段。</Text>
+      </View>
+      <View style={styles.editSection}>
+        <Text style={styles.editSectionTitle}>发言人</Text>
+        {speakers.map((speaker) => (
+          <View key={speaker.key} style={styles.twoColumnInputs}>
+            <Text style={styles.speakerKeyLabel}>{speaker.key.replace("speaker_", "发言人 ")}</Text>
+            <TextInput
+              value={speaker.label}
+              onChangeText={(label) => onRenameSpeaker(speaker.key, label)}
+              style={[styles.profileFormInput, styles.flexInput]}
+            />
+          </View>
+        ))}
       </View>
       {turns.map((turn, index) => (
         <View key={`${turn.time}-${index}`} style={styles.editSection}>
@@ -3800,11 +3976,7 @@ function TranscriptEditorScreen({
               onChangeText={(time) => onChange(index, { ...turn, time })}
               style={[styles.profileFormInput, styles.compactInput]}
             />
-            <TextInput
-              value={turn.speaker}
-              onChangeText={(speaker) => onChange(index, { ...turn, speaker })}
-              style={[styles.profileFormInput, styles.flexInput]}
-            />
+            <Text style={styles.transcriptSpeakerLabel}>{turn.speaker}</Text>
           </View>
           <TextInput
             value={turn.text}
@@ -3823,6 +3995,14 @@ function TranscriptEditorScreen({
       }} wide disabled={saving} />
     </View>
   );
+}
+
+function uniqueTranscriptSpeakers(turns: EditableTranscriptTurn[]) {
+  const speakers = new Map<string, string>();
+  turns.forEach((turn) => {
+    if (turn.speakerKey) speakers.set(turn.speakerKey, turn.speaker);
+  });
+  return [...speakers].map(([key, label]) => ({ key, label }));
 }
 
 function SessionMaterialsScreen({
@@ -4513,7 +4693,7 @@ function PrivacyCenterScreen({
               <View style={styles.listBody}>
                 <Text style={styles.listTitle}>{item.displayName}</Text>
                 <Text style={styles.listMeta}>
-                  {item.resourceType} · {new Date(item.expiresAt).toLocaleString("zh-CN")} 到期
+                  {privacyResourceTypeLabel(item.resourceType)} · {new Date(item.expiresAt).toLocaleString("zh-CN")} 到期
                 </Text>
               </View>
             </View>
@@ -4793,6 +4973,8 @@ function SupervisionScreen({
     }
   };
   const selectedCount = conversation?.contextRefs.length ?? 0;
+  const composerBlockedByProfileAccess = Boolean(contextUnlock);
+  const composerDisabled = !input.trim() || generating || !conversation || composerBlockedByProfileAccess;
 
   return (
     <View style={styles.stack}>
@@ -5004,12 +5186,12 @@ function SupervisionScreen({
         <TextInput
           value={input}
           onChangeText={setInput}
-          editable={!generating}
-          placeholder="输入想讨论的主题"
+          editable={!generating && !composerBlockedByProfileAccess}
+          placeholder={composerBlockedByProfileAccess ? "请先验证档案密码" : "输入想讨论的主题"}
           placeholderTextColor={colors.subtle}
           style={styles.composerInput}
         />
-        <TouchableOpacity accessibilityLabel="发送督导问题" style={[styles.sendButton, (!input.trim() || generating || !conversation) && styles.sendButtonDisabled]} activeOpacity={0.75} disabled={!input.trim() || generating || !conversation} onPress={() => {
+        <TouchableOpacity accessibilityLabel="发送督导问题" style={[styles.sendButton, composerDisabled && styles.sendButtonDisabled]} activeOpacity={0.75} disabled={composerDisabled} onPress={() => {
           const question = input.trim();
           setInput("");
           setGenerating(true);
@@ -5162,7 +5344,7 @@ function AccountScreen({
             <Clock3 size={18} color={item.canLongTermPreserve ? colors.sageDark : colors.danger} />
             <View style={styles.listBody}>
               <Text style={styles.listTitle}>{item.displayName}</Text>
-              <Text style={styles.listMeta}>{item.resourceType} · {remainingDays} 天后到期</Text>
+              <Text style={styles.listMeta}>{privacyResourceTypeLabel(item.resourceType)} · {remainingDays} 天后到期</Text>
             </View>
             <Badge label={item.canLongTermPreserve ? "可授权" : "不可长期"} tone={item.canLongTermPreserve ? "green" : "warm"} />
           </TouchableOpacity>
@@ -5216,34 +5398,29 @@ function ArticleDetailScreen({ article }: { article: (typeof articles)[number] }
   );
 }
 
-function StatisticsScreen({ recordings: recordingRows }: { recordings: RecordingItem[] }) {
+function StatisticsScreen({ durationStats }: { durationStats: RecordingDurationStatistics | null }) {
   const rows = ([
-    { title: "咨询", kind: "来访者" as const },
-    { title: "接受督导", kind: "督导师" as const },
-    { title: "提供督导", kind: "受督者" as const },
+    { title: "咨询", kind: "client" as const },
+    { title: "接受督导", kind: "supervisor" as const },
+    { title: "提供督导", kind: "supervisee" as const },
   ]).map((row) => {
-    const items = recordingRows.filter(
-      (recording) => recording.kindLabel === row.kind && recording.archive === "已归档",
-    );
-    const seconds = items.reduce(
-      (total, recording) => total + parseDuration(recording.duration),
-      0,
-    );
+    const stat = recordingDurationStat(durationStats, row.kind);
     return {
       title: row.title,
-      value: `${(seconds / 3600).toFixed(1)} 小时`,
-      detail: `${items.length} 条已归档录音`,
-      seconds,
+      value: `${(stat.seconds / 3600).toFixed(1)} 小时`,
+      detail: `${stat.count} 条已记录录音`,
+      seconds: stat.seconds,
     };
   });
-  const totalSeconds = rows.reduce((total, row) => total + row.seconds, 0);
+  const uncategorized = recordingDurationStat(durationStats, null);
+  const totalSeconds = durationStats?.totalSeconds ?? rows.reduce((total, row) => total + row.seconds, 0);
   const now = new Date();
   return (
     <View style={styles.stack}>
       <View style={styles.metricSummary}>
         <Text style={styles.metricSummaryLabel}>{now.toLocaleDateString("zh-CN")}</Text>
         <Text style={styles.metricSummaryValue}>{(totalSeconds / 3600).toFixed(1)}h</Text>
-        <Text style={styles.metricSummaryCopy}>当前已归档录音总时长</Text>
+        <Text style={styles.metricSummaryCopy}>已记录录音总时长，包含上传音频</Text>
       </View>
       <View style={styles.cardStack}>
         {rows.map((row) => (
@@ -5255,10 +5432,19 @@ function StatisticsScreen({ recordings: recordingRows }: { recordings: Recording
             <Text style={styles.statValue}>{row.value}</Text>
           </View>
         ))}
+        {uncategorized.count > 0 ? (
+          <View style={styles.listCard}>
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>未归档录音</Text>
+              <Text style={styles.listMeta}>{uncategorized.count} 条已记录录音</Text>
+            </View>
+            <Text style={styles.statValue}>{(uncategorized.seconds / 3600).toFixed(1)} 小时</Text>
+          </View>
+        ) : null}
       </View>
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>统计口径</Text>
-        <Text style={styles.privacyCopy}>按已完成并归档的录音时长统计；未归档录音和已取消日程不计入。</Text>
+        <Text style={styles.privacyCopy}>按录音绑定音频时写入的时长统计，含上传音频；原始音频到期销毁后，时长统计仍保留。归档后计入对应身份。</Text>
       </View>
     </View>
   );
@@ -5271,6 +5457,12 @@ function ScheduleScreen({
   onStartRecording: () => void;
   onNotice: (title: string, detail: string) => void;
 }) {
+  const categoryLabels: Record<string, string> = {
+    counseling: "咨询",
+    supervision_received: "接受督导",
+    supervision_provided: "提供督导",
+    personal: "个人安排",
+  };
   const calendarDriver = useMemo(() => createExpoCalendarDriver(), []);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [privacyTitles, setPrivacyTitles] = useState(true);
@@ -5474,7 +5666,7 @@ function ScheduleScreen({
             <View style={styles.timePill}><Text style={styles.timePillText}>{new Date(item.startAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</Text></View>
             <View style={styles.listBody}>
               <Text style={styles.listTitle}>{privacyTitles ? item.displayTitle : item.title}</Text>
-              <Text style={styles.listMeta}>{item.category} · {item.sourceType === "profile_next_session" ? "档案自动同步" : "手动日程"}</Text>
+              <Text style={styles.listMeta}>{categoryLabels[item.category] ?? item.category} · {item.sourceType === "profile_next_session" ? "档案自动同步" : "手动日程"}</Text>
             </View>
             {item.category === "counseling" ? (
               <TouchableOpacity style={styles.smallActionButton} onPress={onStartRecording}>
@@ -5523,6 +5715,7 @@ function SecuritySettingsScreen({
   const [savingAccessPassword, setSavingAccessPassword] = useState(false);
   const [accountPassword, setAccountPassword] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [dangerOpen, setDangerOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
@@ -5739,45 +5932,79 @@ function SecuritySettingsScreen({
             <SettingsRow icon={ShieldCheck} title="登录会话" value="自动刷新并安全存储" onPress={() => onNotice("登录会话", "访问令牌过期后会通过一次性刷新令牌自动续期；退出登录会清除本机令牌。")} />
           </View>
           <SectionHeader title="账号与资料" />
-          <View style={styles.dangerCard}>
-            <Text style={styles.dangerTitle}>永久注销账号</Text>
-            <Text style={styles.dangerCopy}>将删除档案、记录、报告、附件和云端对象，且不可恢复。请输入账号密码和确认词“注销账号”。</Text>
-            <TextInput
-              value={accountPassword}
-              onChangeText={setAccountPassword}
-              placeholder="账号登录密码"
-              placeholderTextColor={colors.subtle}
-              style={styles.archiveTextInput}
-              secureTextEntry
-            />
-            <TextInput
-              value={deleteConfirmation}
-              onChangeText={setDeleteConfirmation}
-              placeholder="输入：注销账号"
-              placeholderTextColor={colors.subtle}
-              style={styles.archiveTextInput}
-            />
-            <TouchableOpacity
-              style={[
-                styles.dangerButton,
-                (deleting || accountPassword.length < 8 || deleteConfirmation !== "注销账号")
-                  && styles.dangerButtonDisabled,
-              ]}
-              activeOpacity={0.78}
-              disabled={deleting || accountPassword.length < 8 || deleteConfirmation !== "注销账号"}
+          <View style={styles.settingsList}>
+            <SettingsRow
+              icon={Trash2}
+              title="永久注销账号"
+              value={dangerOpen ? "正在确认" : "展开后操作"}
               onPress={() => {
-                setDeleting(true);
-                void onDeleteAccount(accountPassword)
-                  .catch((error) => {
-                    onNotice("账号注销失败", error instanceof Error ? error.message : "请核对密码后重试。");
-                    setDeleting(false);
-                  });
+                setDangerOpen((current) => {
+                  const next = !current;
+                  if (!next) {
+                    setAccountPassword("");
+                    setDeleteConfirmation("");
+                  }
+                  return next;
+                });
               }}
-            >
-              <Trash2 size={16} color={colors.danger} />
-              <Text style={styles.dangerButtonText}>{deleting ? "正在永久删除..." : "永久注销账号"}</Text>
-            </TouchableOpacity>
+            />
           </View>
+          {dangerOpen ? (
+            <View style={styles.dangerCard}>
+              <Text style={styles.dangerTitle}>确认永久注销</Text>
+              <Text style={styles.dangerCopy}>此操作会删除档案、记录、报告、附件和云端对象，且不可恢复。请先确认本机已不再需要这些资料。</Text>
+              <TextInput
+                value={accountPassword}
+                onChangeText={setAccountPassword}
+                placeholder="账号登录密码"
+                placeholderTextColor={colors.subtle}
+                style={styles.archiveTextInput}
+                secureTextEntry
+              />
+              <TextInput
+                value={deleteConfirmation}
+                onChangeText={setDeleteConfirmation}
+                placeholder="输入确认词：注销账号"
+                placeholderTextColor={colors.subtle}
+                style={styles.archiveTextInput}
+              />
+              <View style={styles.dangerActions}>
+                <TouchableOpacity
+                  style={styles.dangerCancelButton}
+                  activeOpacity={0.78}
+                  disabled={deleting}
+                  onPress={() => {
+                    setDangerOpen(false);
+                    setAccountPassword("");
+                    setDeleteConfirmation("");
+                  }}
+                >
+                  <Text style={styles.dangerCancelButtonText}>取消</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.dangerButton,
+                    styles.dangerConfirmButton,
+                    (deleting || accountPassword.length < 8 || deleteConfirmation !== "注销账号")
+                      && styles.dangerButtonDisabled,
+                  ]}
+                  activeOpacity={0.78}
+                  disabled={deleting || accountPassword.length < 8 || deleteConfirmation !== "注销账号"}
+                  onPress={() => {
+                    setDeleting(true);
+                    void onDeleteAccount(accountPassword)
+                      .catch((error) => {
+                        onNotice("账号注销失败", error instanceof Error ? error.message : "请核对密码后重试。");
+                        setDeleting(false);
+                      });
+                  }}
+                >
+                  <Trash2 size={16} color={colors.danger} />
+                  <Text style={styles.dangerButtonText}>{deleting ? "正在删除..." : "确认注销"}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
         </>
       ) : null}
     </View>
@@ -6061,7 +6288,7 @@ function SessionCard({
   onNotice: (title: string, detail: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [timeDraft, setTimeDraft] = useState(session.occurredAt.slice(0, 16).replace("T", " "));
+  const [timeDraft, setTimeDraft] = useState(() => formatDateTimeInput(session.occurredAt));
   const [summaryDraft, setSummaryDraft] = useState(session.summary);
   const [tagDraft, setTagDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -6077,7 +6304,7 @@ function SessionCard({
     if (savingEdit) return;
     const occurredAt = normalizeSessionDate(timeDraft);
     if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) {
-      onNotice("日期时间格式不正确", "请按 2026-06-08 18:00 的格式填写。");
+      onNotice("日期时间格式不正确", "请重新选择记录时间。");
       return;
     }
     setSavingEdit(true);
@@ -6151,12 +6378,10 @@ function SessionCard({
 
       {editing ? (
         <View style={styles.sessionEditPanel}>
-          <TextInput
+          <DateTimePickerField
             value={timeDraft}
-            onChangeText={setTimeDraft}
-            placeholder="日期时间，例如 2026-06-08 18:00"
-            placeholderTextColor={colors.subtle}
-            style={styles.archiveTextInput}
+            onChange={setTimeDraft}
+            defaultOpen
           />
           <TextInput
             value={summaryDraft}
@@ -6228,12 +6453,172 @@ function SessionAction({ icon: Icon, label, status, tone, onPress }: { icon: typ
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function DateTimePickerField({
+  value,
+  onChange,
+  defaultOpen = false,
+  placeholder = "选择日期时间",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  defaultOpen?: boolean;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const selected = dateFromDateTimeInput(value) ?? new Date();
+  const display = value ? formatDateTimeInput(value) : "";
+  const two = (number: number) => `${number}`.padStart(2, "0");
+  const webDateValue = `${selected.getFullYear()}-${two(selected.getMonth() + 1)}-${two(selected.getDate())}`;
+  const webTimeValue = `${two(selected.getHours())}:${two(selected.getMinutes())}:${two(selected.getSeconds())}`;
+  const webInputStyle = {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 44,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.line,
+    backgroundColor: colors.surfaceSoft,
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: 800,
+    paddingLeft: 12,
+    paddingRight: 12,
+    outline: "none",
+  };
+  const commit = (date: Date) => onChange(formatDateTimeInput(date));
+  const handleNativeChange = (event: DateTimePickerEvent, date?: Date) => {
+    if (event.type !== "set" || !date) return;
+    commit(date);
+  };
+
+  const commitDatePart = (date: Date) => {
+    const next = new Date(selected);
+    next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+    commit(next);
+  };
+  const commitTimePart = (date: Date) => {
+    const next = new Date(selected);
+    next.setHours(date.getHours(), date.getMinutes(), selected.getSeconds(), 0);
+    commit(next);
+  };
+  const commitSecond = (text: string) => {
+    const second = Math.max(0, Math.min(59, Number.parseInt(text.replace(/\D/g, ""), 10) || 0));
+    const next = new Date(selected);
+    next.setSeconds(second, 0);
+    commit(next);
+  };
+  const commitWebDate = (text: string) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!match) return;
+    const next = new Date(selected);
+    next.setFullYear(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    commit(next);
+  };
+  const commitWebTime = (text: string) => {
+    const match = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text);
+    if (!match) return;
+    const next = new Date(selected);
+    next.setHours(Number(match[1]), Number(match[2]), Number(match[3] ?? selected.getSeconds()), 0);
+    commit(next);
+  };
+  const openAndroidPicker = (mode: "date" | "time") => {
+    DateTimePickerAndroid.open({
+      value: selected,
+      mode,
+      display: mode === "date" ? "calendar" : "clock",
+      is24Hour: true,
+      positiveButton: { label: "确定", textColor: colors.clayDark },
+      negativeButton: { label: "取消" },
+      onChange: (event, date) => {
+        if (event.type !== "set" || !date) return;
+        if (mode === "date") commitDatePart(date);
+        if (mode === "time") commitTimePart(date);
+      },
+    });
+  };
+
   return (
-    <View style={styles.miniStat}>
+    <View style={styles.datePicker}>
+      <TouchableOpacity style={styles.datePickerTrigger} activeOpacity={0.78} onPress={() => setOpen((current) => !current)}>
+        <CalendarDays size={17} color={colors.clayDark} />
+        <Text style={[styles.datePickerTriggerText, !display && styles.datePickerPlaceholder]}>
+          {display || placeholder}
+        </Text>
+        <Text style={styles.datePickerActionText}>{open ? "收起" : "选择时间"}</Text>
+      </TouchableOpacity>
+      {open ? (
+        <View style={styles.datePickerPanel}>
+          {Platform.OS === "android" ? (
+            <View style={styles.datePickerAndroidActions}>
+              <TouchableOpacity style={styles.datePickerNativeButton} activeOpacity={0.78} onPress={() => openAndroidPicker("date")}>
+                <Text style={styles.datePickerNativeButtonText}>选择日期</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.datePickerNativeButton} activeOpacity={0.78} onPress={() => openAndroidPicker("time")}>
+                <Text style={styles.datePickerNativeButtonText}>选择时间</Text>
+              </TouchableOpacity>
+            </View>
+          ) : Platform.OS === "web" ? (
+            <View style={styles.datePickerWebRow}>
+              <View style={styles.datePickerWebField}>
+                <Text style={styles.datePickerNativeLabel}>日期</Text>
+                {createElement("input", {
+                  type: "date",
+                  value: webDateValue,
+                  "aria-label": placeholder,
+                  onChange: (event: { currentTarget: HTMLInputElement }) => commitWebDate(event.currentTarget.value),
+                  style: webInputStyle,
+                })}
+              </View>
+              <View style={styles.datePickerWebField}>
+                <Text style={styles.datePickerNativeLabel}>时间</Text>
+                {createElement("input", {
+                  type: "time",
+                  step: 1,
+                  value: webTimeValue,
+                  "aria-label": "选择时分秒",
+                  onChange: (event: { currentTarget: HTMLInputElement }) => commitWebTime(event.currentTarget.value),
+                  style: webInputStyle,
+                })}
+              </View>
+            </View>
+          ) : (
+            <View style={styles.datePickerIOSBox}>
+              <NativeDateTimePicker
+                value={selected}
+                mode="datetime"
+                display="inline"
+                locale="zh-Hans-CN"
+                accentColor={colors.clayDark}
+                onChange={handleNativeChange}
+              />
+            </View>
+          )}
+          {Platform.OS !== "web" ? <View style={styles.secondPickerRow}>
+            <Text style={styles.datePickerNativeLabel}>秒</Text>
+            <TextInput
+              value={String(selected.getSeconds()).padStart(2, "0")}
+              onChangeText={commitSecond}
+              keyboardType="number-pad"
+              maxLength={2}
+              style={styles.secondPickerInput}
+              placeholder="00"
+              placeholderTextColor={colors.subtle}
+            />
+          </View> : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function MiniStat({ label, value, onPress }: { label: string; value: string; onPress?: () => void }) {
+  const Wrapper = onPress ? TouchableOpacity : View;
+  return (
+    <Wrapper style={styles.miniStat} {...(onPress ? { activeOpacity: 0.78, onPress } : {})}>
       <Text style={styles.miniStatValue}>{value}</Text>
       <Text style={styles.miniStatLabel}>{label}</Text>
-    </View>
+    </Wrapper>
   );
 }
 
@@ -6308,6 +6693,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.paper,
     alignItems: "center",
+    paddingTop: Platform.OS === "android" ? NativeStatusBar.currentHeight ?? 0 : 0,
   },
   authLoading: {
     width: "100%",
@@ -6906,6 +7292,98 @@ const styles = StyleSheet.create({
     minHeight: 76,
     paddingTop: 12,
     textAlignVertical: "top",
+  },
+  datePicker: {
+    gap: 8,
+  },
+  datePickerTrigger: {
+    minHeight: 48,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  datePickerTriggerText: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  datePickerPlaceholder: {
+    color: colors.subtle,
+  },
+  datePickerActionText: {
+    color: colors.clayDark,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  datePickerPanel: {
+    borderRadius: radius.sm,
+    padding: 12,
+    gap: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  datePickerIOSBox: {
+    minHeight: 150,
+    justifyContent: "center",
+  },
+  datePickerNativeLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  datePickerAndroidActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  datePickerWebRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  datePickerWebField: {
+    flex: 1,
+    minWidth: 0,
+    gap: 6,
+  },
+  datePickerNativeButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: radius.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  datePickerNativeButtonText: {
+    color: colors.clayDark,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  secondPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  secondPickerInput: {
+    width: 76,
+    minHeight: 42,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: 12,
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: "900",
+    textAlign: "center",
   },
   pendingPrimaryButton: {
     backgroundColor: colors.subtle,
@@ -7700,6 +8178,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     color: colors.clayDark,
     fontSize: 12,
+    fontWeight: "900",
+  },
+  speakerKeyLabel: {
+    width: 72,
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  transcriptSpeakerLabel: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 13,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    color: colors.clayDark,
+    fontSize: 14,
     fontWeight: "900",
   },
   transcriptToolCopy: {
@@ -8739,6 +9236,25 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: "700",
   },
+  dangerActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  dangerCancelButton: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dangerCancelButtonText: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "900",
+  },
   dangerButton: {
     minHeight: 40,
     borderRadius: radius.sm,
@@ -8749,6 +9265,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 7,
+  },
+  dangerConfirmButton: {
+    flex: 1,
   },
   dangerButtonDisabled: {
     opacity: 0.55,

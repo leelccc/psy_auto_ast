@@ -53,7 +53,8 @@
         }
       ],
       "expo-document-picker",
-      "expo-file-system"
+      "expo-file-system",
+      "@react-native-community/datetimepicker"
     ]
   }
 }

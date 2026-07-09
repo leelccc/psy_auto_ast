@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { getAuthorizableResources, mergeAuthorizedResources } from "../privacyFlow";
+import { getAuthorizableResources, mergeAuthorizedResources, privacyResourceTypeLabel } from "../privacyFlow";
 
 const resources = [
   { title: "咨询转写", type: "转写文本", expires: "13 天后销毁", preservable: true },
@@ -15,4 +15,12 @@ test("original audio is never included in authorizable resources", () => {
 
 test("authorized resources merge without duplicates", () => {
   assert.deepEqual(mergeAuthorizedResources(["咨询转写"], ["咨询转写", "录音纪要"]), ["咨询转写", "录音纪要"]);
+});
+
+test("privacy resource types are shown in Chinese", () => {
+  assert.equal(privacyResourceTypeLabel("audio"), "原始录音");
+  assert.equal(privacyResourceTypeLabel("transcript"), "转写文本");
+  assert.equal(privacyResourceTypeLabel("recording_summary"), "录音纪要");
+  assert.equal(privacyResourceTypeLabel("report"), "报告");
+  assert.equal(privacyResourceTypeLabel("video"), "视频");
 });
