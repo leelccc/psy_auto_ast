@@ -6506,11 +6506,18 @@ function DateTimePickerField({
     date.setSeconds(0, 0);
     onChange(formatDateTimeInput(date));
   };
-  const handleNativeChange = (event: DateTimePickerEvent, date?: Date) => {
+  const handleNativeDateChange = (event: DateTimePickerEvent, date?: Date) => {
     if (event.type !== "set" || !date) return;
-    commit(date);
+    const next = new Date(selected);
+    next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+    commit(next);
   };
-
+  const handleNativeTimeChange = (event: DateTimePickerEvent, date?: Date) => {
+    if (event.type !== "set" || !date) return;
+    const next = new Date(selected);
+    next.setHours(date.getHours(), date.getMinutes(), 0, 0);
+    commit(next);
+  };
   const commitDatePart = (date: Date) => {
     const next = new Date(selected);
     next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
@@ -6596,15 +6603,27 @@ function DateTimePickerField({
               </View>
             </View>
           ) : (
-            <View style={styles.datePickerIOSBox}>
+            <View style={styles.datePickerIOSSpinners}>
               <NativeDateTimePicker
                 value={selected}
-                mode="datetime"
-                display="inline"
+                mode="date"
+                display="spinner"
                 locale="zh-Hans-CN"
                 accentColor={colors.clayDark}
                 themeVariant="light"
-                onChange={handleNativeChange}
+                onChange={handleNativeDateChange}
+                style={styles.datePickerIOSSpinner}
+              />
+              <View style={styles.datePickerIOSSpinnerDivider} />
+              <NativeDateTimePicker
+                value={selected}
+                mode="time"
+                display="spinner"
+                locale="zh-Hans-CN"
+                accentColor={colors.clayDark}
+                themeVariant="light"
+                onChange={handleNativeTimeChange}
+                style={styles.datePickerIOSSpinner}
               />
             </View>
           )}
@@ -7385,11 +7404,22 @@ const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: colors.surfaceSoft,
   },
-  datePickerIOSBox: {
+  datePickerIOSSpinners: {
+    flexDirection: "row",
+    alignItems: "center",
     borderRadius: radius.sm,
     backgroundColor: colors.surface,
     overflow: "hidden",
-    justifyContent: "center",
+    minHeight: 190,
+  },
+  datePickerIOSSpinner: {
+    flex: 1,
+  },
+  datePickerIOSSpinnerDivider: {
+    width: 1,
+    alignSelf: "stretch",
+    backgroundColor: colors.line,
+    marginVertical: 12,
   },
   datePickerNativeLabel: {
     color: colors.muted,
