@@ -6612,7 +6612,7 @@ function DateTimePickerField({
                 accentColor={colors.clayDark}
                 themeVariant="light"
                 onChange={handleNativeDateChange}
-                style={styles.datePickerIOSSpinner}
+                style={styles.datePickerIOSSpinnerDate}
               />
               <View style={styles.datePickerIOSSpinnerDivider} />
               <NativeDateTimePicker
@@ -6623,7 +6623,7 @@ function DateTimePickerField({
                 accentColor={colors.clayDark}
                 themeVariant="light"
                 onChange={handleNativeTimeChange}
-                style={styles.datePickerIOSSpinner}
+                style={styles.datePickerIOSSpinnerTime}
               />
             </View>
           )}
@@ -7410,10 +7410,19 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     backgroundColor: colors.surface,
     overflow: "hidden",
-    minHeight: 190,
+    minHeight: 170,
   },
   datePickerIOSSpinner: {
     flex: 1,
+    transform: [{ scale: 0.85 }],
+  },
+  datePickerIOSSpinnerDate: {
+    flex: 1.5,
+    transform: [{ scale: 0.85 }],
+  },
+  datePickerIOSSpinnerTime: {
+    flex: 1,
+    transform: [{ scale: 0.85 }],
   },
   datePickerIOSSpinnerDivider: {
     width: 1,
