@@ -3592,7 +3592,7 @@ function ProfileDetailScreen({
       {editingNextSession ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formPreviewTitle}>设置下次{sessionNoun}时间</Text>
-          <DateTimePickerField value={nextSessionDraft} onChange={setNextSessionDraft} defaultOpen />
+          <DateTimePickerField value={nextSessionDraft} onChange={setNextSessionDraft} placeholder="设置下次咨询时间" defaultOpen />
           <View style={styles.inlineActions}>
             <GhostButton icon={X} label="清空下次" onPress={async () => {
               if (savingNextSession) return;
@@ -3674,6 +3674,7 @@ function ProfileDetailScreen({
           <DateTimePickerField
             value={newSessionTime}
             onChange={setNewSessionTime}
+            placeholder={`选择${sessionNoun}时间`}
             defaultOpen
           />
           <TextInput
@@ -6388,6 +6389,7 @@ function SessionCard({
           <DateTimePickerField
             value={timeDraft}
             onChange={setTimeDraft}
+            placeholder="选择咨询时间"
             defaultOpen
           />
           <TextInput
