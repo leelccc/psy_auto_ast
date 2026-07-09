@@ -49,11 +49,13 @@ import { createElement, useCallback, useEffect, useMemo, useRef, useState } from
 import {
   SafeAreaView,
   ActivityIndicator,
+  Modal,
   Platform,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
   useWindowDimensions,
   ScrollView,
@@ -6567,7 +6569,52 @@ function DateTimePickerField({
         </Text>
         <Text style={styles.datePickerActionText}>{open ? "收起" : display ? "修改" : "选择时间"}</Text>
       </TouchableOpacity>
-      {open ? (
+      {Platform.OS === "ios" ? (
+        <Modal
+          visible={open}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setOpen(false)}
+        >
+          <TouchableWithoutFeedback onPress={() => setOpen(false)}>
+            <View style={styles.datePickerBackdrop}>
+              <TouchableWithoutFeedback onPress={() => {}}>
+                <View style={styles.datePickerSheet}>
+                  <View style={styles.datePickerSheetHeader}>
+                    <Text style={styles.datePickerSheetTitle}>{placeholder || "选择日期时间"}</Text>
+                    <TouchableOpacity activeOpacity={0.7} onPress={() => setOpen(false)}>
+                      <Text style={styles.datePickerSheetDone}>完成</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.datePickerIOSSpinners}>
+                    <NativeDateTimePicker
+                      value={selected}
+                      mode="date"
+                      display="spinner"
+                      locale="zh-Hans-CN"
+                      accentColor={colors.clayDark}
+                      themeVariant="light"
+                      onChange={handleNativeDateChange}
+                      style={styles.datePickerIOSSpinnerDate}
+                    />
+                    <View style={styles.datePickerIOSSpinnerDivider} />
+                    <NativeDateTimePicker
+                      value={selected}
+                      mode="time"
+                      display="spinner"
+                      locale="zh-Hans-CN"
+                      accentColor={colors.clayDark}
+                      themeVariant="light"
+                      onChange={handleNativeTimeChange}
+                      style={styles.datePickerIOSSpinnerTime}
+                    />
+                  </View>
+                </View>
+              </TouchableWithoutFeedback>
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
+      ) : open ? (
         <View style={styles.datePickerPanel}>
           {Platform.OS === "android" ? (
             <View style={styles.datePickerAndroidActions}>
@@ -6578,7 +6625,7 @@ function DateTimePickerField({
                 <Text style={styles.datePickerNativeButtonText}>选择时间</Text>
               </TouchableOpacity>
             </View>
-          ) : Platform.OS === "web" ? (
+          ) : (
             <View style={styles.datePickerWebRow}>
               <View style={styles.datePickerWebField}>
                 <Text style={styles.datePickerNativeLabel}>日期</Text>
@@ -6601,30 +6648,6 @@ function DateTimePickerField({
                   style: webInputStyle,
                 })}
               </View>
-            </View>
-          ) : (
-            <View style={styles.datePickerIOSSpinners}>
-              <NativeDateTimePicker
-                value={selected}
-                mode="date"
-                display="spinner"
-                locale="zh-Hans-CN"
-                accentColor={colors.clayDark}
-                themeVariant="light"
-                onChange={handleNativeDateChange}
-                style={styles.datePickerIOSSpinnerDate}
-              />
-              <View style={styles.datePickerIOSSpinnerDivider} />
-              <NativeDateTimePicker
-                value={selected}
-                mode="time"
-                display="spinner"
-                locale="zh-Hans-CN"
-                accentColor={colors.clayDark}
-                themeVariant="light"
-                onChange={handleNativeTimeChange}
-                style={styles.datePickerIOSSpinnerTime}
-              />
             </View>
           )}
         </View>
@@ -7412,12 +7435,45 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     minHeight: 170,
   },
+  datePickerBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(40, 30, 24, 0.45)",
+  },
+  datePickerSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    paddingTop: 10,
+    paddingBottom: 26,
+    paddingHorizontal: 16,
+    ...shadow.modal,
+  },
+  datePickerSheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    marginBottom: 4,
+  },
+  datePickerSheetTitle: {
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  datePickerSheetDone: {
+    color: colors.clayDark,
+    fontSize: 15,
+    fontWeight: "900",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
   datePickerIOSSpinner: {
     flex: 1,
     transform: [{ scale: 0.85 }],
   },
   datePickerIOSSpinnerDate: {
-    flex: 1.5,
+    flex: 2,
     transform: [{ scale: 0.85 }],
   },
   datePickerIOSSpinnerTime: {

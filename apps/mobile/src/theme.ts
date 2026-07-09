@@ -31,4 +31,11 @@ export const shadow = {
     shadowOffset: { width: 0, height: 10 },
     elevation: 4,
   },
+  modal: {
+    shadowColor: "rgba(40, 30, 24, 0.28)",
+    shadowOpacity: 0.24,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: -6 },
+    elevation: 12,
+  },
 };
