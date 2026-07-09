@@ -3578,8 +3578,13 @@ function ProfileDetailScreen({
         <View style={styles.detailStats}>
           <MiniStat label="状态" value={profile.profileStatus ?? (hasRecords ? "处理中" : "新建")} />
           <MiniStat label="频率" value={profile.profileFrequency ?? "未设置"} />
-          <MiniStat label={nextStatLabel} value={profile.profileNext ?? "未设置"} onPress={() => setEditingNextSession((current) => !current)} />
         </View>
+        <NextSessionStat
+          label={nextStatLabel}
+          next={profile.profileNext ?? "未设置"}
+          nextAt={profile.profileNextSessionAt}
+          onPress={() => setEditingNextSession((current) => !current)}
+        />
       </View>
 
       {editingNextSession ? (
@@ -6453,6 +6458,17 @@ function SessionAction({ icon: Icon, label, status, tone, onPress }: { icon: typ
   );
 }
 
+function formatDateTimeDisplay(value: string): string {
+  const date = dateFromDateTimeInput(value);
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const weekday = date.toLocaleDateString("zh-CN", { weekday: "short" });
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${date.getFullYear()}年${month}月${day}日 ${weekday} ${hour}:${minute}`;
+}
+
 function DateTimePickerField({
   value,
   onChange,
@@ -6466,10 +6482,10 @@ function DateTimePickerField({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const selected = dateFromDateTimeInput(value) ?? new Date();
-  const display = value ? formatDateTimeInput(value) : "";
+  const display = value ? formatDateTimeDisplay(value) : "";
   const two = (number: number) => `${number}`.padStart(2, "0");
   const webDateValue = `${selected.getFullYear()}-${two(selected.getMonth() + 1)}-${two(selected.getDate())}`;
-  const webTimeValue = `${two(selected.getHours())}:${two(selected.getMinutes())}:${two(selected.getSeconds())}`;
+  const webTimeValue = `${two(selected.getHours())}:${two(selected.getMinutes())}`;
   const webInputStyle = {
     flex: 1,
     minWidth: 0,
@@ -6486,7 +6502,10 @@ function DateTimePickerField({
     paddingRight: 12,
     outline: "none",
   };
-  const commit = (date: Date) => onChange(formatDateTimeInput(date));
+  const commit = (date: Date) => {
+    date.setSeconds(0, 0);
+    onChange(formatDateTimeInput(date));
+  };
   const handleNativeChange = (event: DateTimePickerEvent, date?: Date) => {
     if (event.type !== "set" || !date) return;
     commit(date);
@@ -6499,13 +6518,7 @@ function DateTimePickerField({
   };
   const commitTimePart = (date: Date) => {
     const next = new Date(selected);
-    next.setHours(date.getHours(), date.getMinutes(), selected.getSeconds(), 0);
-    commit(next);
-  };
-  const commitSecond = (text: string) => {
-    const second = Math.max(0, Math.min(59, Number.parseInt(text.replace(/\D/g, ""), 10) || 0));
-    const next = new Date(selected);
-    next.setSeconds(second, 0);
+    next.setHours(date.getHours(), date.getMinutes(), 0, 0);
     commit(next);
   };
   const commitWebDate = (text: string) => {
@@ -6516,10 +6529,10 @@ function DateTimePickerField({
     commit(next);
   };
   const commitWebTime = (text: string) => {
-    const match = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text);
+    const match = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(text);
     if (!match) return;
     const next = new Date(selected);
-    next.setHours(Number(match[1]), Number(match[2]), Number(match[3] ?? selected.getSeconds()), 0);
+    next.setHours(Number(match[1]), Number(match[2]), 0, 0);
     commit(next);
   };
   const openAndroidPicker = (mode: "date" | "time") => {
@@ -6541,11 +6554,11 @@ function DateTimePickerField({
   return (
     <View style={styles.datePicker}>
       <TouchableOpacity style={styles.datePickerTrigger} activeOpacity={0.78} onPress={() => setOpen((current) => !current)}>
-        <CalendarDays size={17} color={colors.clayDark} />
+        <CalendarDays size={17} color={display ? colors.clayDark : colors.subtle} />
         <Text style={[styles.datePickerTriggerText, !display && styles.datePickerPlaceholder]}>
           {display || placeholder}
         </Text>
-        <Text style={styles.datePickerActionText}>{open ? "收起" : "选择时间"}</Text>
+        <Text style={styles.datePickerActionText}>{open ? "收起" : display ? "修改" : "选择时间"}</Text>
       </TouchableOpacity>
       {open ? (
         <View style={styles.datePickerPanel}>
@@ -6574,9 +6587,9 @@ function DateTimePickerField({
                 <Text style={styles.datePickerNativeLabel}>时间</Text>
                 {createElement("input", {
                   type: "time",
-                  step: 1,
+                  step: 60,
                   value: webTimeValue,
-                  "aria-label": "选择时分秒",
+                  "aria-label": "选择时分",
                   onChange: (event: { currentTarget: HTMLInputElement }) => commitWebTime(event.currentTarget.value),
                   style: webInputStyle,
                 })}
@@ -6590,22 +6603,11 @@ function DateTimePickerField({
                 display="inline"
                 locale="zh-Hans-CN"
                 accentColor={colors.clayDark}
+                themeVariant="light"
                 onChange={handleNativeChange}
               />
             </View>
           )}
-          {Platform.OS !== "web" ? <View style={styles.secondPickerRow}>
-            <Text style={styles.datePickerNativeLabel}>秒</Text>
-            <TextInput
-              value={String(selected.getSeconds()).padStart(2, "0")}
-              onChangeText={commitSecond}
-              keyboardType="number-pad"
-              maxLength={2}
-              style={styles.secondPickerInput}
-              placeholder="00"
-              placeholderTextColor={colors.subtle}
-            />
-          </View> : null}
         </View>
       ) : null}
     </View>
@@ -6616,9 +6618,65 @@ function MiniStat({ label, value, onPress }: { label: string; value: string; onP
   const Wrapper = onPress ? TouchableOpacity : View;
   return (
     <Wrapper style={styles.miniStat} {...(onPress ? { activeOpacity: 0.78, onPress } : {})}>
-      <Text style={styles.miniStatValue}>{value}</Text>
       <Text style={styles.miniStatLabel}>{label}</Text>
+      <Text style={styles.miniStatValue}>{value}</Text>
     </Wrapper>
+  );
+}
+
+function NextSessionStat({
+  label,
+  next,
+  nextAt,
+  onPress,
+}: {
+  label: string;
+  next: string;
+  nextAt?: string | null;
+  onPress: () => void;
+}) {
+  const date = nextAt ? dateFromDateTimeInput(nextAt) : null;
+  const isUnset = !date || Number.isNaN(date.getTime()) || next.includes("未设置");
+  const isExpired = next.startsWith("已过期");
+  if (isUnset) {
+    return (
+      <TouchableOpacity style={styles.nextSessionStat} activeOpacity={0.78} onPress={onPress}>
+        <View style={styles.nextSessionIcon}>
+          <CalendarDays size={20} color={colors.clayDark} />
+        </View>
+        <View style={styles.nextSessionBody}>
+          <Text style={styles.nextSessionEmpty}>未设置下次{label === "安排" ? "安排" : "咨询"}</Text>
+          <Text style={styles.nextSessionHint}>点击设置时间</Text>
+        </View>
+        <ChevronRight size={18} color={colors.subtle} />
+      </TouchableOpacity>
+    );
+  }
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const weekday = date.toLocaleDateString("zh-CN", { weekday: "short" });
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return (
+    <TouchableOpacity style={styles.nextSessionStat} activeOpacity={0.78} onPress={onPress}>
+      <View style={[styles.nextSessionIcon, isExpired && { backgroundColor: "rgba(196, 93, 84, 0.12)" }]}>
+        <CalendarDays size={20} color={isExpired ? colors.danger : colors.clayDark} />
+      </View>
+      <View style={styles.nextSessionBody}>
+        <View style={styles.nextSessionTop}>
+          <Text style={[styles.nextSessionDate, isExpired && { color: colors.danger }]}>
+            {month}月{day}日 {weekday}
+          </Text>
+          {isExpired ? (
+            <View style={styles.nextSessionExpiredBadge}>
+              <Text style={styles.nextSessionExpiredBadgeText}>已过期</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text style={styles.nextSessionTime}>{hour}:{minute}</Text>
+      </View>
+      <ChevronRight size={18} color={colors.subtle} />
+    </TouchableOpacity>
   );
 }
 
@@ -7322,15 +7380,15 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   datePickerPanel: {
-    borderRadius: radius.sm,
-    padding: 12,
-    gap: 10,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.line,
+    borderRadius: radius.md,
+    padding: 8,
+    gap: 8,
+    backgroundColor: colors.surfaceSoft,
   },
   datePickerIOSBox: {
-    minHeight: 150,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    overflow: "hidden",
     justifyContent: "center",
   },
   datePickerNativeLabel: {
@@ -7365,25 +7423,6 @@ const styles = StyleSheet.create({
     color: colors.clayDark,
     fontSize: 13,
     fontWeight: "900",
-  },
-  secondPickerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  secondPickerInput: {
-    width: 76,
-    minHeight: 42,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surfaceSoft,
-    borderWidth: 1,
-    borderColor: colors.line,
-    paddingHorizontal: 12,
-    color: colors.ink,
-    fontSize: 15,
-    fontWeight: "900",
-    textAlign: "center",
   },
   pendingPrimaryButton: {
     backgroundColor: colors.subtle,
@@ -7810,22 +7849,80 @@ const styles = StyleSheet.create({
   },
   miniStat: {
     flex: 1,
-    minHeight: 58,
+    minHeight: 54,
     borderRadius: radius.sm,
     backgroundColor: colors.surfaceSoft,
     padding: 10,
     justifyContent: "center",
+    gap: 3,
+  },
+  miniStatLabel: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "800",
   },
   miniStatValue: {
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  nextSessionStat: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    minHeight: 64,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    padding: 12,
+  },
+  nextSessionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  nextSessionBody: {
+    flex: 1,
+    gap: 3,
+  },
+  nextSessionTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  nextSessionDate: {
     color: colors.ink,
     fontSize: 16,
     fontWeight: "900",
   },
-  miniStatLabel: {
-    marginTop: 3,
+  nextSessionTime: {
     color: colors.muted,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  nextSessionEmpty: {
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  nextSessionHint: {
+    color: colors.subtle,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  nextSessionExpiredBadge: {
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: "rgba(196, 93, 84, 0.12)",
+  },
+  nextSessionExpiredBadgeText: {
+    color: colors.danger,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "900",
   },
   inlineActions: {
     flexDirection: "row",
