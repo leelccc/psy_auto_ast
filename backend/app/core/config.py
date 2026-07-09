@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     bailian_timeout_seconds: float = 120
     bailian_poll_interval_seconds: float = 1
     bailian_max_poll_attempts: int = 120
+    # 逗号分隔的来源白名单；原生 App 不走 CORS，仅 Web 端受影响
+    cors_allow_origins: str = (
+        "http://localhost:8081,"
+        "http://127.0.0.1:8081,"
+        "http://localhost:19006,"
+        "http://127.0.0.1:19006"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
