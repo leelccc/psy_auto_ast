@@ -16,6 +16,7 @@ from app.api.routes.admin_console import router as admin_console_router
 from app.api.routes.admin_config import router as admin_config_router
 from app.api.routes.admin_users import router as admin_users_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.wechat_auth import router as wechat_auth_router
 from app.api.routes.calendar import router as calendar_router
 from app.api.routes.files import create_files_router
 from app.api.routes.jobs import router as jobs_router
@@ -24,7 +25,7 @@ from app.api.routes.recordings import create_recordings_router
 from app.api.routes.reports import create_reports_router
 from app.api.routes.security import router as security_router
 from app.api.routes.supervision import router as supervision_router
-from app.core.config import get_settings
+from app.core.config import DEV_JWT_SECRET, get_settings
 from app.db.session import get_db
 from app.models import Profile as DatabaseProfile
 from app.models import SessionRecord
@@ -104,6 +105,11 @@ def create_app(
     recording_audio_input_mode: str | None = None,
 ) -> FastAPI:
     settings = get_settings()
+    if settings.environment == "production":
+        if not settings.jwt_secret_key or settings.jwt_secret_key == DEV_JWT_SECRET:
+            raise RuntimeError("生产环境必须通过环境变量 JWT_SECRET_KEY 设置强密钥，不能使用开发默认值或留空。")
+        if len(settings.jwt_secret_key) < 32:
+            raise RuntimeError("生产环境 JWT_SECRET_KEY 长度不足，至少 32 位。")
     app = FastAPI(title="Counselor Assistant API")
     app.add_middleware(
         CORSMiddleware,
@@ -124,6 +130,7 @@ def create_app(
     if recording_audio_input_mode not in {"base64", "minio_url"}:
         raise ValueError("录音 AI 输入模式必须是 base64 或 minio_url。")
     app.include_router(auth_router)
+    app.include_router(wechat_auth_router)
     app.include_router(admin_console_router)
     app.include_router(admin_config_router)
     app.include_router(admin_users_router)

@@ -24,6 +24,7 @@ __all__ = [
     "AIJob",
     "CalendarEvent",
     "CalendarSetting",
+    "ExternalAccount",
     "ProfileAccessGrant",
     "ProfileAccessPassword",
     "Recording",
@@ -42,4 +43,4 @@ __all__ = [
     "SupervisionMessage",
     "User",
 ]
-from app.models.auth import ProfileAccessGrant, ProfileAccessPassword, RefreshToken
+from app.models.auth import ExternalAccount, ProfileAccessGrant, ProfileAccessPassword, RefreshToken

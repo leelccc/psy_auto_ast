@@ -119,6 +119,7 @@ import {
 } from "./src/fileService";
 import { decideRecordingRegeneration, updateAtIndex } from "./src/recordingEditorFlow";
 import { dateFromDateTimeInput, formatDateTimeInput, normalizeSessionDate } from "./src/dateTimeInput";
+import WebDatePicker from "./src/WebDatePicker";
 import {
   getMaterialUpdateMessage,
   materialCategoryCopy,
@@ -540,6 +541,10 @@ export default function App() {
     recordLabel: "第 6 次咨询",
   });
   const [activeProfileId, setActiveProfileId] = useState("profile-chen-yu");
+  // 防止快速切换/连续刷新时，旧异步请求返回后覆盖新数据（竞态 → 显示错档案/录音记录）。
+  // 每次发起请求自增计数并捕获本次 id，返回后若不是最新则丢弃结果。
+  const profileDataRequestId = useRef(0);
+  const recordingDetailRequestId = useRef(0);
   const [pendingProfile, setPendingProfile] = useState<ProfileListItem | null>(null);
   const [pendingRecordingAfterUnlock, setPendingRecordingAfterUnlock] = useState<RecordingItem | null>(null);
   const [pendingRecordingReturn, setPendingRecordingReturn] = useState<QuickView>("recordingRecords");
@@ -642,10 +647,12 @@ export default function App() {
   };
   const loadRecordingDetail = async (recording: RecordingItem) => {
     if (!recording.id) return;
+    const requestId = ++recordingDetailRequestId.current;
     const [summary, transcript] = await Promise.all([
       recordingService.summary(recording.id),
       recordingService.transcript(recording.id),
     ]);
+    if (recordingDetailRequestId.current !== requestId) return;
     setRecordingSummary(summary.mainSummary);
     setRecordingChapters(summary.chapterOverview.map((chapter, index) => {
       const startMs = Number(chapter.start_ms ?? 0);
@@ -667,11 +674,13 @@ export default function App() {
     setRecordingHasEdits(summary.manualEdited || transcript.manualEdited);
   };
   const loadProfileData = async (profileId: string, recordingsForStatus = recordingItems) => {
+    const requestId = ++profileDataRequestId.current;
     try {
       const [sessions, profileAttachments] = await Promise.all([
         sessionService.list(profileId),
         attachmentService.listProfile(profileId),
       ]);
+      if (profileDataRequestId.current !== requestId) return;
       setLegalAttachments(profileAttachments);
       const materials = (await Promise.all(
         sessions.map((session) => attachmentService.listSession(session.id)),
@@ -708,6 +717,7 @@ export default function App() {
         };
       });
     } catch (error) {
+      if (profileDataRequestId.current !== requestId) return;
       setSessionHistory([]);
       setSessionMaterials([]);
       setLegalAttachments([]);
@@ -1106,6 +1116,30 @@ export default function App() {
       }
     });
     void (async () => {
+      // Web 端：微信登录回调会把 token 放在 URL fragment（避免进入服务器日志）
+      if (Platform.OS === "web") {
+        const fragment = window.location.hash.replace(/^#/, "");
+        const params = new URLSearchParams(fragment);
+        const wechatAccess = params.get("access_token");
+        const wechatRefresh = params.get("refresh_token");
+        if (wechatAccess && wechatRefresh) {
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          apiClient.setTokens(wechatAccess, wechatRefresh);
+          setRefreshToken(wechatRefresh);
+          try {
+            const user = await withTimeout(authService.me(), 8000, null);
+            if (!user) throw new Error("WeChat session restore timed out");
+            await authSessionStore.save({ accessToken: wechatAccess, refreshToken: wechatRefresh });
+            setCurrentUser(user);
+            setAuthStatus("authenticated");
+            return;
+          } catch {
+            apiClient.setTokens("demo-token", null);
+            setAuthStatus("guest");
+            return;
+          }
+        }
+      }
       const session = await withTimeout(authSessionStore.load(), 5000, null);
       if (!session) {
         setAuthStatus("guest");
@@ -2035,6 +2069,23 @@ function AuthScreen({
       setSubmitting(false);
     }
   };
+  const handleWechat = async () => {
+    if (Platform.OS === "web") {
+      try {
+        const res = await fetch(`${configuredApiBaseUrl()}/auth/wechat/status`);
+        const data = await res.json() as { web?: boolean };
+        if (!data.web) {
+          setError("微信网页登录尚未配置，请在 backend/.env 填写 AppID/Secret 并重启后端。");
+          return;
+        }
+      } catch {
+        // 检测失败不阻断，直接跳转由后端处理
+      }
+      window.location.href = `${configuredApiBaseUrl()}/auth/wechat/web/authorize`;
+      return;
+    }
+    setError("原生端微信登录需先接入微信 SDK（见 docs/wechat-login.md）。");
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -2093,6 +2144,18 @@ function AuthScreen({
             <Text style={styles.primaryButtonText}>
               {submitting ? "正在验证..." : mode === "login" ? "安全登录" : "创建账号"}
             </Text>
+          </TouchableOpacity>
+          <View style={{ flexDirection: "row", alignItems: "center", marginVertical: 14 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
+            <Text style={{ marginHorizontal: 10, color: colors.subtle, fontSize: 12 }}>或</Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
+          </View>
+          <TouchableOpacity
+            style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", height: 50, borderRadius: 12, backgroundColor: "#07C160" }}
+            activeOpacity={0.85}
+            onPress={handleWechat}
+          >
+            <Text style={{ color: "#FFFFFF", fontSize: 16, fontWeight: "600" }}>微信登录</Text>
           </TouchableOpacity>
           <TouchableOpacity
             activeOpacity={0.75}
@@ -6487,25 +6550,6 @@ function DateTimePickerField({
   const [open, setOpen] = useState(defaultOpen);
   const selected = dateFromDateTimeInput(value) ?? new Date();
   const display = value ? formatDateTimeDisplay(value) : "";
-  const two = (number: number) => `${number}`.padStart(2, "0");
-  const webDateValue = `${selected.getFullYear()}-${two(selected.getMonth() + 1)}-${two(selected.getDate())}`;
-  const webTimeValue = `${two(selected.getHours())}:${two(selected.getMinutes())}`;
-  const webInputStyle = {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 44,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderStyle: "solid",
-    borderColor: colors.line,
-    backgroundColor: colors.surfaceSoft,
-    color: colors.ink,
-    fontSize: 15,
-    fontWeight: 800,
-    paddingLeft: 12,
-    paddingRight: 12,
-    outline: "none",
-  };
   const commit = (date: Date) => {
     date.setSeconds(0, 0);
     onChange(formatDateTimeInput(date));
@@ -6530,20 +6574,6 @@ function DateTimePickerField({
   const commitTimePart = (date: Date) => {
     const next = new Date(selected);
     next.setHours(date.getHours(), date.getMinutes(), 0, 0);
-    commit(next);
-  };
-  const commitWebDate = (text: string) => {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-    if (!match) return;
-    const next = new Date(selected);
-    next.setFullYear(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-    commit(next);
-  };
-  const commitWebTime = (text: string) => {
-    const match = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(text);
-    if (!match) return;
-    const next = new Date(selected);
-    next.setHours(Number(match[1]), Number(match[2]), 0, 0);
     commit(next);
   };
   const openAndroidPicker = (mode: "date" | "time") => {
@@ -6628,29 +6658,13 @@ function DateTimePickerField({
               </TouchableOpacity>
             </View>
           ) : (
-            <View style={styles.datePickerWebRow}>
-              <View style={styles.datePickerWebField}>
-                <Text style={styles.datePickerNativeLabel}>日期</Text>
-                {createElement("input", {
-                  type: "date",
-                  value: webDateValue,
-                  "aria-label": placeholder,
-                  onChange: (event: { currentTarget: HTMLInputElement }) => commitWebDate(event.currentTarget.value),
-                  style: webInputStyle,
-                })}
-              </View>
-              <View style={styles.datePickerWebField}>
-                <Text style={styles.datePickerNativeLabel}>时间</Text>
-                {createElement("input", {
-                  type: "time",
-                  step: 60,
-                  value: webTimeValue,
-                  "aria-label": "选择时分",
-                  onChange: (event: { currentTarget: HTMLInputElement }) => commitWebTime(event.currentTarget.value),
-                  style: webInputStyle,
-                })}
-              </View>
-            </View>
+            <WebDatePicker
+              value={selected}
+              onChange={(date: Date) => {
+                commit(date);
+                setOpen(false);
+              }}
+            />
           )}
         </View>
       ) : null}

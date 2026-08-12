@@ -24,6 +24,11 @@ export function createAuthService(client: ApiClient) {
     async login(email: string, password: string) {
       return applyTokens(await client.post<TokenPair>("/auth/login", { email, password }));
     },
+    async loginWithWechatMobile(code: string) {
+      const result = await client.post<TokenPair & { user: CurrentUser }>("/auth/wechat/mobile", { code });
+      client.setTokens(result.access_token, result.refresh_token);
+      return result;
+    },
     me: () => client.get<CurrentUser>("/me"),
     updateMe: (displayName: string) => client.patch<CurrentUser>("/me", { display_name: displayName }),
     async logout(refreshToken: string) {
