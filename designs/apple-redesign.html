@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>咨询师助手 · Apple 风格 UI 预览</title>
+<link href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" rel="stylesheet" />
+<style>
+  /* ============ Tokens · 暖陶土品牌色（沿用 clayDark）============ */
+  :root{
+    --accent:#9F5747; --accent-press:#8A4738; --accent-soft:rgba(159,87,71,0.10); --accent-on:#FFFFFF;
+    --sage:#5F806F; --sage-soft:rgba(95,128,111,0.12);
+    --gold:#B8893F;
+    --ink:#2B2622; --label-2:#6F645B; --label-3:#A99C90;
+    --line:#E9DDD0; --line-soft:#F1E8DD;
+    --bg-app:#F4EEE6; --bg-card:#FFFDF9; --bg-fill:rgba(120,100,90,0.08);
+    --nav-bg:rgba(255,253,249,0.72); --tab-bg:rgba(255,253,249,0.82);
+    --shadow-card:0 1px 2px rgba(99,71,50,0.06),0 1px 3px rgba(99,71,50,0.08);
+    --shadow-lg:0 12px 30px rgba(99,71,50,0.16),0 4px 10px rgba(99,71,50,0.08);
+    --shadow-sheet:0 -8px 40px rgba(40,30,24,0.22);
+    --page-bg:#1C1714;
+    --avatar-1:#9F5747; --avatar-2:#5F806F; --avatar-3:#B8893F; --avatar-4:#8FA6C2; --avatar-5:#C97965;
+    --font:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text','PingFang SC','Helvetica Neue',sans-serif;
+    --r-card:20px; --r-md:14px; --r-sm:10px; --r-pill:9999px;
+    --sp-4:4px; --sp-8:8px; --sp-12:12px; --sp-16:16px; --sp-20:20px; --sp-24:24px; --sp-32:32px;
+  }
+  html[data-theme="dark"]{
+    --accent:#C0745F; --accent-press:#A8604C; --accent-soft:rgba(192,116,95,0.16); --accent-on:#1A1410;
+    --sage:#7FA68F; --sage-soft:rgba(127,166,143,0.16);
+    --gold:#D6A45F;
+    --ink:#F4ECE3; --label-2:#C9BBAE; --label-3:#8A7E72;
+    --line:#332A24; --line-soft:#2A221D;
+    --bg-app:#14100D; --bg-card:#1F1915; --bg-fill:rgba(255,255,255,0.06);
+    --nav-bg:rgba(20,16,13,0.72); --tab-bg:rgba(20,16,13,0.82);
+    --shadow-card:0 1px 2px rgba(0,0,0,0.4),0 1px 3px rgba(0,0,0,0.3);
+    --shadow-lg:0 12px 30px rgba(0,0,0,0.5),0 4px 10px rgba(0,0,0,0.3);
+    --shadow-sheet:0 -8px 40px rgba(0,0,0,0.55);
+    --page-bg:#E8E2DA;
+    --avatar-1:#C0745F; --avatar-2:#7FA68F; --avatar-3:#D6A45F; --avatar-4:#8FA6C2; --avatar-5:#C97965;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:var(--font); background:var(--page-bg); color:var(--ink);
+    min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    padding:28px 16px 48px; transition:background .35s ease;
+  }
+
+  /* ============ 顶部说明 + 屏幕切换器 ============ */
+  .topbar{width:390px; max-width:100%; margin-bottom:18px}
+  .topbar h1{font-size:15px; font-weight:600; color:#F4ECE3; margin:0 0 4px; letter-spacing:.2px}
+  html[data-theme="dark"] .topbar h1{color:#2B2622}
+  .topbar p{font-size:12px; color:rgba(244,236,227,.55); margin:0 0 14px; line-height:1.5}
+  html[data-theme="dark"] .topbar p{color:rgba(43,38,34,.6)}
+  .seg{display:flex; gap:4px; background:rgba(255,253,249,.10); padding:4px; border-radius:var(--r-pill); border:1px solid rgba(255,253,249,.12)}
+  html[data-theme="dark"] .seg{background:rgba(43,38,34,.06); border-color:rgba(43,38,34,.1)}
+  .seg button{flex:1; height:38px; border:0; background:transparent; color:rgba(244,236,227,.7); font-size:13px; font-weight:500; font-family:var(--font); border-radius:var(--r-pill); cursor:pointer; transition:all .2s cubic-bezier(.34,1.56,.64,1)}
+  html[data-theme="dark"] .seg button{color:rgba(43,38,34,.6)}
+  .seg button.active{background:var(--bg-card); color:var(--accent); box-shadow:var(--shadow-card)}
+
+  /* ============ 手机原型（直角矩形，单台）============ */
+  .phone{
+    width:390px; max-width:100%; height:844px; background:var(--bg-app);
+    border-radius:0; overflow:hidden; position:relative;
+    box-shadow:0 24px 60px rgba(0,0,0,.35); display:flex; flex-direction:column;
+  }
+  .app{flex:1; overflow-y:auto; overflow-x:hidden; scrollbar-width:none; -webkit-overflow-scrolling:touch; position:relative}
+  .app::-webkit-scrollbar{display:none}
+
+  /* 状态栏（双击切主题） */
+  .statusbar{position:sticky; top:0; z-index:60; height:48px; display:flex; align-items:flex-end; justify-content:space-between; padding:0 24px 6px; background:var(--nav-bg); backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px); cursor:pointer; user-select:none}
+  .statusbar .time{font-size:15px; font-weight:600; color:var(--ink)}
+  .statusbar .signals{display:flex; gap:6px; align-items:center; color:var(--ink); font-size:15px}
+  .statusbar::after{content:'双击切换主题'; position:absolute; top:calc(100% + 4px); left:50%; transform:translateX(-50%); padding:5px 12px; background:var(--accent); color:var(--accent-on); font-size:10px; font-weight:600; border-radius:var(--r-pill); white-space:nowrap; pointer-events:none; opacity:0; animation:hint 4.5s ease-out .6s 1 both; z-index:200; box-shadow:var(--shadow-card)}
+  @keyframes hint{0%{opacity:0;transform:translate(-50%,-4px)}15%{opacity:1;transform:translate(-50%,0)}80%{opacity:1}100%{opacity:0;transform:translate(-50%,-4px)}}
+
+  /* 导航栏 */
+  .navbar{position:sticky; top:48px; z-index:55; display:flex; align-items:center; gap:8px; height:52px; padding:0 16px; background:var(--nav-bg); backdrop-filter:saturate(180%) blur(24px); -webkit-backdrop-filter:saturate(180%) blur(24px); border-bottom:.5px solid var(--line)}
+  .nav-title{flex:1; font-size:17px; font-weight:600; color:var(--ink)}
+  .nav-large{font-size:34px; font-weight:700; letter-spacing:.3px; line-height:1.1}
+  .icon-btn{width:38px; height:38px; border-radius:var(--r-pill); border:0; background:transparent; color:var(--ink); display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:20px; transition:transform .15s cubic-bezier(.34,1.56,.64,1)}
+  .icon-btn:active{transform:scale(.9)}
+
+  /* 页面 */
+  .page{padding:8px 16px 120px}
+  .page-login{padding:0 24px 60px; display:flex; flex-direction:column; min-height:calc(844px - 48px)}
+
+  /* 屏幕切换 */
+  .screen{display:none}
+  .screen.active{display:block}
+
+  /* ============ 通用组件 ============ */
+  .card{background:var(--bg-card); border-radius:var(--r-card); padding:18px; box-shadow:var(--shadow-card); margin-bottom:var(--sp-12)}
+  .section-title{font-size:13px; font-weight:600; color:var(--label-2); letter-spacing:.3px; margin:20px 4px 10px; text-transform:none}
+  .row-meta{font-size:13px; color:var(--label-2); line-height:1.5}
+
+  /* 头像 */
+  .avatar{width:44px; height:44px; border-radius:var(--r-pill); display:flex; align-items:center; justify-content:center; color:#fff; font-size:17px; font-weight:600; flex-shrink:0}
+  .avatar.lg{width:60px; height:60px; font-size:26px}
+
+  /* 分段控件（来访者/督导师/受督者） */
+  .segmented{display:flex; background:var(--bg-fill); border-radius:var(--r-md); padding:3px; margin:8px 0 14px}
+  .segmented button{flex:1; height:34px; border:0; background:transparent; color:var(--label-2); font-size:13px; font-weight:500; font-family:var(--font); border-radius:11px; cursor:pointer; transition:all .2s cubic-bezier(.34,1.56,.64,1)}
+  .segmented button.active{background:var(--bg-card); color:var(--ink); font-weight:600; box-shadow:var(--shadow-card)}
+
+  /* 搜索框 */
+  .search{display:flex; align-items:center; gap:8px; background:var(--bg-card); border-radius:var(--r-md); padding:0 14px; height:40px; margin-bottom:14px; box-shadow:var(--shadow-card)}
+  .search i{color:var(--label-3); font-size:17px}
+  .search input{flex:1; border:0; background:transparent; color:var(--ink); font-size:15px; font-family:var(--font); outline:none}
+  .search input::placeholder{color:var(--label-3)}
+
+  /* 档案列表卡片 */
+  .list-card{display:flex; align-items:center; gap:14px; background:var(--bg-card); border-radius:var(--r-card); padding:14px 16px; margin-bottom:10px; box-shadow:var(--shadow-card); cursor:pointer; transition:transform .15s cubic-bezier(.34,1.56,.64,1)}
+  .list-card:active{transform:scale(.985)}
+  .list-card .body{flex:1; min-width:0}
+  .list-card .name{font-size:16px; font-weight:600; color:var(--ink); display:flex; align-items:center; gap:8px}
+  .list-card .name .code{font-size:12px; font-weight:500; color:var(--label-3); font-family:var(--font)}
+  .list-card .meta{font-size:12.5px; color:var(--label-2); margin-top:3px; line-height:1.4}
+  .list-card .next{font-size:12px; color:var(--accent); margin-top:2px; font-weight:500; display:flex; align-items:center; gap:4px}
+  .list-card .next.muted{color:var(--label-3)}
+  .list-card .chev{color:var(--label-3); font-size:18px}
+  .badge{font-size:11px; font-weight:600; padding:3px 9px; border-radius:var(--r-pill); white-space:nowrap}
+  .badge.green{background:var(--sage-soft); color:var(--sage)}
+  .badge.gold{background:rgba(184,137,63,.14); color:var(--gold)}
+  .badge.gray{background:var(--bg-fill); color:var(--label-2)}
+
+  /* 浮动新增按钮 */
+  .fab{position:sticky; bottom:88px; margin-left:auto; width:52px; height:52px; border-radius:var(--r-pill); background:var(--accent); color:var(--accent-on); border:0; box-shadow:0 8px 20px rgba(159,87,71,.4); font-size:24px; display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:40; transition:transform .15s cubic-bezier(.34,1.56,.64,1)}
+  .fab:active{transform:scale(.9)}
+
+  /* Tab Bar */
+  .tabbar{position:sticky; bottom:0; height:78px; margin-top:-78px; z-index:50; display:flex; background:var(--tab-bg); backdrop-filter:saturate(180%) blur(28px); -webkit-backdrop-filter:saturate(180%) blur(28px); border-top:.5px solid var(--line); padding-bottom:22px}
+  .tabbar a{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; color:var(--label-3); text-decoration:none; font-size:10.5px; font-weight:500}
+  .tabbar a i{font-size:23px}
+  .tabbar a.active{color:var(--accent)}
+
+  /* ============ 登录屏 ============ */
+  .login-hero{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding-top:40px}
+  .brand-mark{width:72px; height:72px; border-radius:var(--r-card); background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; font-size:34px; margin-bottom:20px}
+  .kicker{font-size:13px; font-weight:600; color:var(--accent); letter-spacing:1.5px; text-transform:uppercase; margin-bottom:8px}
+  .login-hero h2{font-size:28px; font-weight:700; color:var(--ink); margin:0 0 10px; letter-spacing:.2px}
+  .login-hero p{font-size:14.5px; color:var(--label-2); line-height:1.55; margin:0 0 28px; max-width:280px}
+  .login-card{background:var(--bg-card); border-radius:var(--r-card); padding:8px; box-shadow:var(--shadow-card); margin-bottom:20px}
+  .field{display:flex; align-items:center; gap:10px; height:50px; padding:0 16px; border-radius:var(--r-md)}
+  .field + .field{border-top:.5px solid var(--line)}
+  .field i{color:var(--label-3); font-size:18px; width:20px; text-align:center}
+  .field input{flex:1; border:0; background:transparent; color:var(--ink); font-size:16px; font-family:var(--font); outline:none}
+  .field input::placeholder{color:var(--label-3)}
+  .btn-primary{width:100%; height:52px; border:0; border-radius:var(--r-md); background:var(--accent); color:var(--accent-on); font-size:16px; font-weight:600; font-family:var(--font); cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px; transition:transform .15s cubic-bezier(.34,1.56,.64,1), background .2s}
+  .btn-primary:active{transform:scale(.97); background:var(--accent-press)}
+  .btn-plain{display:block; width:100%; margin:18px auto 0; background:transparent; border:0; color:var(--accent); font-size:14px; font-weight:500; font-family:var(--font); cursor:pointer}
+  .login-foot{font-size:11.5px; color:var(--label-3); text-align:center; line-height:1.5}
+
+  /* ============ 档案详情 ============ */
+  .hero-card{background:var(--bg-card); border-radius:var(--r-card); padding:20px; box-shadow:var(--shadow-card); margin-bottom:12px}
+  .hero-top{display:flex; align-items:center; gap:14px}
+  .hero-top .info{flex:1; min-width:0}
+  .hero-top .name{font-size:22px; font-weight:700; color:var(--ink); letter-spacing:.2px}
+  .hero-top .sub{font-size:13px; color:var(--label-2); margin-top:3px}
+  .stat-row{display:flex; gap:10px; margin-top:16px}
+  .stat{flex:1; background:var(--bg-fill); border-radius:var(--r-md); padding:12px 14px}
+  .stat .l{font-size:11.5px; color:var(--label-3); font-weight:500}
+  .stat .v{font-size:16px; font-weight:600; color:var(--ink); margin-top:3px}
+
+  .next-card{display:flex; align-items:center; gap:14px; background:linear-gradient(135deg,var(--accent-soft),rgba(159,87,71,.04)); border:1px solid rgba(159,87,71,.16); border-radius:var(--r-card); padding:16px; margin-bottom:12px; cursor:pointer; transition:transform .15s cubic-bezier(.34,1.56,.64,1)}
+  html[data-theme="dark"] .next-card{background:linear-gradient(135deg,var(--accent-soft),rgba(192,116,95,.04))}
+  .next-card:active{transform:scale(.98)}
+  .next-ic{width:42px; height:42px; border-radius:var(--r-md); background:var(--accent); color:var(--accent-on); display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0}
+  .next-body{flex:1; min-width:0}
+  .next-body .l{font-size:12px; color:var(--label-2); font-weight:500}
+  .next-body .v{font-size:16px; font-weight:600; color:var(--ink); margin-top:2px}
+  .next-body .hint{font-size:11px; color:var(--accent); margin-top:3px; font-weight:500}
+  .next-chev{color:var(--accent); font-size:20px}
+
+  .legal-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:6px}
+  .legal-card{background:var(--bg-card); border-radius:var(--r-md); padding:14px; box-shadow:var(--shadow-card); cursor:pointer}
+  .legal-ic{width:36px; height:36px; border-radius:var(--r-sm); background:var(--sage-soft); color:var(--sage); display:flex; align-items:center; justify-content:center; font-size:18px; margin-bottom:10px}
+  .legal-card .t{font-size:14px; font-weight:600; color:var(--ink)}
+  .legal-card .m{font-size:11.5px; color:var(--label-3); margin-top:3px}
+
+  .timeline-item{display:flex; gap:12px; margin-bottom:2px}
+  .tl-rail{display:flex; flex-direction:column; align-items:center; padding-top:2px}
+  .tl-dot{width:30px; height:30px; border-radius:var(--r-pill); background:var(--accent); color:var(--accent-on); font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0}
+  .tl-line{flex:1; width:2px; background:var(--line); margin:4px 0}
+  .tl-card{flex:1; background:var(--bg-card); border-radius:var(--r-md); padding:14px 16px; box-shadow:var(--shadow-card); margin-bottom:10px; cursor:pointer}
+  .tl-card .top{display:flex; justify-content:space-between; align-items:center}
+  .tl-card .seq{font-size:13px; font-weight:600; color:var(--accent)}
+  .tl-card .date{font-size:11.5px; color:var(--label-3)}
+  .tl-card .sum{font-size:13.5px; color:var(--label-2); line-height:1.5; margin-top:8px}
+  .tl-tags{display:flex; gap:6px; margin-top:10px; flex-wrap:wrap}
+  .tag{font-size:11px; padding:3px 9px; border-radius:var(--r-pill); background:var(--bg-fill); color:var(--label-2)}
+
+  .add-row{display:flex; align-items:center; justify-content:center; gap:8px; padding:14px; color:var(--accent); font-size:14px; font-weight:600; cursor:pointer}
+
+  /* ============ 时间选择器底部弹层（方案 A · spinner）============ */
+  .sheet-backdrop{position:absolute; inset:0; background:rgba(40,30,24,.45); z-index:80; opacity:0; pointer-events:none; transition:opacity .3s ease}
+  .phone.show-sheet .sheet-backdrop{opacity:1; pointer-events:auto}
+  .sheet{position:absolute; left:0; right:0; bottom:0; z-index:90; background:var(--bg-card); border-radius:24px 24px 0 0; box-shadow:var(--shadow-sheet); transform:translateY(100%); transition:transform .42s cubic-bezier(.32,.72,0,1); padding-bottom:30px}
+  .phone.show-sheet .sheet{transform:translateY(0)}
+  .sheet-handle{width:40px; height:5px; border-radius:3px; background:var(--line); margin:10px auto 4px}
+  .sheet-head{display:flex; align-items:center; justify-content:space-between; padding:8px 20px 14px; border-bottom:.5px solid var(--line)}
+  .sheet-head .t{font-size:16px; font-weight:600; color:var(--ink)}
+  .sheet-head .done{font-size:16px; font-weight:600; color:var(--accent); background:transparent; border:0; font-family:var(--font); cursor:pointer}
+  .spinners{display:flex; align-items:center; padding:8px 20px 24px; gap:0; position:relative}
+  .spin-col{flex:1; text-align:center; font-size:20px; color:var(--ink); font-variant-numeric:tabular-nums}
+  .spin-col.date{flex:1.7}
+  .spin-row{height:38px; line-height:38px; color:var(--label-3); font-weight:400}
+  .spin-row.sel{color:var(--ink); font-weight:600; font-size:22px}
+  .spin-row.near{color:var(--label-3); opacity:.7}
+  .spin-band{position:absolute; left:20px; right:20px; top:50%; transform:translateY(-50%); height:38px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--accent-soft); border-radius:var(--r-sm); pointer-events:none}
+  .spin-divider{width:1px; align-self:stretch; background:var(--line); margin:0 6px}
+
+  .reduced-note{font-size:11px; color:var(--label-3); text-align:center; margin-top:6px; max-width:390px}
+  @media (prefers-reduced-motion:reduce){*{transition-duration:.01ms!important;animation-duration:.01ms!important}}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>咨询师助手 · Apple 风格 UI 预览</h1>
+    <p>暖陶土品牌色 · Mobile · 双击顶部状态栏切换深/浅色 · 三屏可切换</p>
+    <div class="seg" id="seg">
+      <button class="active" data-screen="login">登录</button>
+      <button data-screen="list">档案列表</button>
+      <button data-screen="detail">档案详情</button>
+    </div>
+  </div>
+
+  <div class="phone" id="phone">
+    <div class="app">
+      <!-- ===== 状态栏 ===== -->
+      <div class="statusbar" id="statusbar">
+        <span class="time">9:41</span>
+        <span class="signals"><i class="ri-signal-tower-fill"></i><i class="ri-wifi-fill"></i><i class="ri-battery-fill"></i></span>
+      </div>
+
+      <!-- ===== 登录屏 ===== -->
+      <div class="screen active" data-screen="login">
+        <div class="page-login">
+          <div class="login-hero">
+            <div class="brand-mark"><i class="ri-shield-check-line"></i></div>
+            <div class="kicker">咨询师助手</div>
+            <h2>欢迎回来</h2>
+            <p>登录后访问你的档案、录音、报告与督导记录。</p>
+          </div>
+          <div class="login-card">
+            <div class="field"><i class="ri-mail-line"></i><input type="email" placeholder="邮箱" value="user@163.com" /></div>
+            <div class="field"><i class="ri-lock-line"></i><input type="password" placeholder="密码" value="······" /></div>
+          </div>
+          <button class="btn-primary"><i class="ri-lock-line"></i> 安全登录</button>
+          <button class="btn-plain">还没有账号？创建账号</button>
+          <div class="login-foot">开发演示账号：user@163.com / 123456</div>
+        </div>
+      </div>
+
+      <!-- ===== 档案列表 ===== -->
+      <div class="screen" data-screen="list">
+        <div class="navbar">
+          <span class="nav-title nav-large">档案</span>
+          <button class="icon-btn"><i class="ri-search-line"></i></button>
+        </div>
+        <div class="page">
+          <div class="segmented">
+            <button class="active">来访者</button>
+            <button>督导师</button>
+            <button>受督者</button>
+          </div>
+          <div class="search"><i class="ri-search-line"></i><input placeholder="搜索姓名或档案编号" /></div>
+
+          <div class="list-card">
+            <div class="avatar" style="background:var(--avatar-1)">陈</div>
+            <div class="body">
+              <div class="name">陈雨 <span class="code">C26-012</span></div>
+              <div class="meta">处理中 · 第 8 次咨询</div>
+              <div class="next"><i class="ri-calendar-line"></i> 下次 7月18日 周五 14:30</div>
+            </div>
+            <i class="ri-chevron-right-line chev"></i>
+          </div>
+          <div class="list-card">
+            <div class="avatar" style="background:var(--avatar-2)">林</div>
+            <div class="body">
+              <div class="name">林知遥 <span class="code">C26-007</span></div>
+              <div class="meta">处理中 · 第 5 次咨询</div>
+              <div class="next"><i class="ri-calendar-line"></i> 下次 7月15日 周二 10:00</div>
+            </div>
+            <i class="ri-chevron-right-line chev"></i>
+          </div>
+          <div class="list-card">
+            <div class="avatar" style="background:var(--avatar-3)">周</div>
+            <div class="body">
+              <div class="name">周屿 <span class="code">C26-003</span></div>
+              <div class="meta">暂停 · 第 12 次咨询</div>
+              <div class="next muted"><i class="ri-time-line"></i> 已过期 6 天</div>
+            </div>
+            <span class="badge gray">暂停</span>
+          </div>
+          <div class="list-card">
+            <div class="avatar" style="background:var(--avatar-4)">苏</div>
+            <div class="body">
+              <div class="name">苏念 <span class="code">C26-021</span></div>
+              <div class="meta">新建 · 第 1 次咨询</div>
+              <div class="next muted"><i class="ri-add-line"></i> 未设置下次时间</div>
+            </div>
+            <i class="ri-chevron-right-line chev"></i>
+          </div>
+          <button class="fab" title="新增档案"><i class="ri-add-line"></i></button>
+        </div>
+        <nav class="tabbar">
+          <a class="active"><i class="ri-folder-line"></i>档案</a>
+          <a><i class="ri-mic-line"></i>录音</a>
+          <a><i class="ri-user-line"></i>我的</a>
+        </nav>
+      </div>
+
+      <!-- ===== 档案详情 ===== -->
+      <div class="screen" data-screen="detail">
+        <div class="navbar">
+          <button class="icon-btn"><i class="ri-arrow-left-s-line"></i></button>
+          <span class="nav-title">档案详情</span>
+          <button class="icon-btn"><i class="ri-more-2-fill"></i></button>
+        </div>
+        <div class="page">
+          <!-- Hero -->
+          <div class="hero-card">
+            <div class="hero-top">
+              <div class="avatar lg" style="background:var(--avatar-1)">陈</div>
+              <div class="info">
+                <div class="name">陈雨</div>
+                <div class="sub">来访者档案 · 第 8 次咨询</div>
+              </div>
+              <span class="badge green">已解锁</span>
+            </div>
+            <div class="stat-row">
+              <div class="stat"><div class="l">状态</div><div class="v">处理中</div></div>
+              <div class="stat"><div class="l">频率</div><div class="v">每周</div></div>
+            </div>
+          </div>
+
+          <!-- 下次咨询卡（点击预览时间选择器弹层） -->
+          <div class="next-card" id="openPicker">
+            <div class="next-ic"><i class="ri-calendar-line"></i></div>
+            <div class="next-body">
+              <div class="l">下次咨询</div>
+              <div class="v">7月18日 周五 14:30</div>
+              <div class="hint">点击修改 · 预览时间选择器</div>
+            </div>
+            <i class="ri-arrow-right-s-line next-chev"></i>
+          </div>
+
+          <!-- 法律文件 -->
+          <div class="section-title">法律及伦理文件</div>
+          <div class="legal-grid">
+            <div class="legal-card">
+              <div class="legal-ic"><i class="ri-file-text-line"></i></div>
+              <div class="t">知情同意书</div>
+              <div class="m">待上传</div>
+            </div>
+            <div class="legal-card">
+              <div class="legal-ic" style="background:var(--sage-soft)"><i class="ri-clipboard-line"></i></div>
+              <div class="t">咨询协议</div>
+              <div class="m">已上传 · PDF</div>
+            </div>
+          </div>
+
+          <!-- 咨询历程 -->
+          <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+            <span>咨询历程</span>
+            <span style="color:var(--accent);font-weight:600;font-size:13px">新增记录</span>
+          </div>
+
+          <div class="timeline-item">
+            <div class="tl-rail"><div class="tl-dot">8</div><div class="tl-line"></div></div>
+            <div class="tl-card">
+              <div class="top"><span class="seq">第 8 次</span><span class="date">7月11日 周五</span></div>
+              <div class="sum">来访者能识别焦虑前的身体信号，开始区分事实与推测，本次聚焦评价场景的应对策略。</div>
+              <div class="tl-tags"><span class="tag">焦虑</span><span class="tag">认知重构</span><span class="tag">家庭作业</span></div>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="tl-rail"><div class="tl-dot">7</div><div class="tl-line"></div></div>
+            <div class="tl-card">
+              <div class="top"><span class="seq">第 7 次</span><span class="date">7月4日 周五</span></div>
+              <div class="sum">回顾睡眠改善情况，讨论工作中的自我怀疑，引入行为激活实验。</div>
+              <div class="tl-tags"><span class="tag">睡眠</span><span class="tag">行为激活</span></div>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <div class="tl-rail"><div class="tl-dot">6</div></div>
+            <div class="tl-card">
+              <div class="top"><span class="seq">第 6 次</span><span class="date">6月27日 周五</span></div>
+              <div class="sum">建立焦虑等级表，首次尝试暴露练习，反馈良好。</div>
+              <div class="tl-tags"><span class="tag">暴露</span><span class="tag">焦虑等级</span></div>
+            </div>
+          </div>
+        </div>
+        <nav class="tabbar">
+          <a class="active"><i class="ri-folder-line"></i>档案</a>
+          <a><i class="ri-mic-line"></i>录音</a>
+          <a><i class="ri-user-line"></i>我的</a>
+        </nav>
+      </div>
+    </div>
+
+    <!-- ===== 时间选择器底部弹层（方案 A） ===== -->
+    <div class="sheet-backdrop" id="sheetBackdrop"></div>
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <span class="t">设置下次咨询时间</span>
+        <button class="done">完成</button>
+      </div>
+      <div class="spinners">
+        <div class="spin-band"></div>
+        <div class="spin-col date">
+          <div class="spin-row near">7月15日 周二</div>
+          <div class="spin-row near">7月17日 周四</div>
+          <div class="spin-row sel">7月18日 周五</div>
+          <div class="spin-row near">7月19日 周六</div>
+          <div class="spin-row near">7月22日 周二</div>
+        </div>
+        <div class="spin-divider"></div>
+        <div class="spin-col">
+          <div class="spin-row near">13:00</div>
+          <div class="spin-row near">13:30</div>
+          <div class="spin-row sel">14:30</div>
+          <div class="spin-row near">15:00</div>
+          <div class="spin-row near">15:30</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="reduced-note">说明：此为设计预览（静态 HTML），非真实交互；落地到 RN 时组件化、接入真实数据与动效。</div>
+
+<script>
+  // 屏幕切换
+  const seg = document.getElementById('seg');
+  const phone = document.getElementById('phone');
+  seg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-screen]');
+    if (!btn) return;
+    seg.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+    const target = btn.dataset.screen;
+    document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.dataset.screen === target));
+    phone.classList.remove('show-sheet');
+    const app = phone.querySelector('.app');
+    if (app) app.scrollTop = 0;
+  });
+
+  // 分段控件（列表内 来访者/督导师/受督者）
+  document.querySelectorAll('.segmented').forEach(segEl => {
+    segEl.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      segEl.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+    });
+  });
+
+  // 双击状态栏切换主题
+  const STORAGE_KEY = 'psy-apple-preview-theme';
+  const root = document.documentElement;
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved === 'dark' || saved === 'light') root.setAttribute('data-theme', saved);
+  document.getElementById('statusbar').addEventListener('dblclick', () => {
+    const cur = root.getAttribute('data-theme') || 'light';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem(STORAGE_KEY, next);
+  });
+
+  // 时间选择器弹层（仅详情屏）
+  const openPicker = document.getElementById('openPicker');
+  const backdrop = document.getElementById('sheetBackdrop');
+  function showSheet(){ phone.classList.add('show-sheet'); }
+  function hideSheet(){ phone.classList.remove('show-sheet'); }
+  if (openPicker) openPicker.addEventListener('click', showSheet);
+  backdrop.addEventListener('click', hideSheet);
+  document.querySelector('.sheet .done').addEventListener('click', hideSheet);
+</script>
+</body>
+</html>
