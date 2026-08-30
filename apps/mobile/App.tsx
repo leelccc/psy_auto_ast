@@ -168,6 +168,10 @@ import { colors, radius, shadow } from "./src/theme";
 
 LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
+// 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
+// 出现「改了代码但手机上还是旧样子」时，先看这个标识。
+const BUILD_TAG = "0830-3";
+
 type QuickView =
   | "overview"
   | "recording"
@@ -6338,6 +6342,9 @@ function AccountScreen({
         <SettingsRow icon={ShieldCheck} title="账号安全" value="邮箱登录" onPress={() => onOpenSecurity("account")} />
         <SettingsRow icon={LogOut} title="退出登录" value="清除本机安全会话" onPress={() => void onLogout()} />
       </View>
+      <Text style={styles.buildTag}>
+        构建版本 {BUILD_TAG} · 若功能与预期不符，请先卸载 App 再重新安装
+      </Text>
     </View>
   );
 }
@@ -8860,6 +8867,12 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
     marginBottom: 4,
+  },
+  buildTag: {
+    marginTop: 10,
+    textAlign: "center",
+    color: colors.subtle,
+    fontSize: 12,
   },
   choicePill: {
     minHeight: 34,
