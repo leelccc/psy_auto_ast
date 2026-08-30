@@ -12,6 +12,16 @@
 
 ## 更新日志（Change Log）
 
+### 2026-08-30 · 问题0830-1 继续定位（构建 0830-5，诊断探针）
+
+- **现状**：前面几轮把确认框从 absolute 覆盖层 → `<Modal>` → 全屏页面，Android 端点击「生成咨询记录」仍无任何反应，而 web 端正常。由于无法在本机复现 Android，改为「先加确定性的探针、再据现象定点修复」。
+- **本次改动（均为前端 `App.tsx`）**：
+  - 点击按钮**先弹 toast「已触发生成」（含构建号 0830-5）**，用于区分两类根因：① 看到 toast 但页面不跳 → 是跳转/渲染或 `openSessionRecord` 内抛错（已加 try/catch 把错误用 toast 显式报出）；② 连 toast 都看不到 → 触摸事件根本没送到按钮（走响应链/覆盖层方向查）。
+  - `openSessionRecord` 整体包 try/catch，`setQuickView("reportGeneration")` + `setPendingReportGeneration` 仍保持同步最先执行，任何异常都会被显式提示，不再静默失败。
+  - 生成按钮由 `Pressable` 改回 `TouchableOpacity`（与同卡片内「录音/量表/作业」一致，触摸响应最稳），并给主 `ScrollView` 加 `keyboardShouldPersistTaps="handled"`（规避输入框聚焦时按钮点击被吞）。
+  - `BUILD_TAG` 升至 `0830-5`，便于安装后一眼核对。
+- **让用户怎么看**：装完 0830-5 后点「生成」——若底部弹出「已触发生成」但没进页面，把「打开生成页失败」那条 toast 内容发我；若完全没反应，说明是触摸没送达，我再查卡片层级/覆盖层。
+
 ### 2026-08-30 · APK 分发缓存修复 + 构建版本标识
 
 - **APK 装完仍是旧版**：根因在服务器 `nginx.conf` 的 `/apk/` 配置了 `Cache-Control: public, max-age=3600`。每次发版都覆盖同名 `app-release.apk`，但浏览器/下载器在缓存期内会继续返回旧包，于是反复出现「代码明明改了、手机上还是原样」。已改为 `no-store, no-cache, must-revalidate` + `expires -1`；web 的 `_expo/` 静态资源带内容 hash，仍保留 `public, immutable`（两者要区分开）。下载页链接另加 `?v=<构建标识>` 作为双保险。

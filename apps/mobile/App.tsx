@@ -171,7 +171,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0830-4";
+const BUILD_TAG = "0830-5";
 
 type QuickView =
   | "overview"
@@ -942,24 +942,28 @@ export default function App() {
     setQuickView("recordEditor");
   };
   const openSessionRecord = async (sessionId: string, returnView: QuickView) => {
-    const reportType = getReportType(activeProfile.kindLabel);
-    const session = sessionHistory.find((item) => item.id === sessionId);
-    const recordType = getRecordType(activeProfile.kindLabel);
-    setActiveSessionId(sessionId);
-    setActiveRecordLabel(session ? `第 ${session.sequence} 次${recordType}` : activeProfile.recordLabel);
-    setRecordEditorReturn(returnView);
-    // 立即进入生成页，请求在页面内完成（页面显示「正在读取可用资料」）。
-    // 过去要先 await 两个请求才决定是否弹层，网络慢时表现为「点了没反应」。
-    setPendingReportGeneration({
-      mode: "create",
-      sessionId,
-      returnView,
-      reportType,
-      recordType,
-      sources: [],
-      loading: true,
-    });
-    setQuickView("reportGeneration");
+    try {
+      const reportType = getReportType(activeProfile.kindLabel);
+      const session = sessionHistory.find((item) => item.id === sessionId);
+      const recordType = getRecordType(activeProfile.kindLabel);
+      setActiveSessionId(sessionId);
+      setActiveRecordLabel(session ? `第 ${session.sequence} 次${recordType}` : activeProfile.recordLabel);
+      setRecordEditorReturn(returnView);
+      // 立即进入生成页，请求在页面内完成（页面显示「正在读取可用资料」）。
+      // 过去要先 await 两个请求才决定是否弹层，网络慢时表现为「点了没反应」。
+      setPendingReportGeneration({
+        mode: "create",
+        sessionId,
+        returnView,
+        reportType,
+        recordType,
+        sources: [],
+        loading: true,
+      });
+      setQuickView("reportGeneration");
+    } catch (error) {
+      showNotice("打开生成页失败", errorMessage(error));
+    }
   };
   const confirmReportGeneration = async () => {
     if (!pendingReportGeneration || reportGenerationBusy) return;
@@ -1439,7 +1443,7 @@ export default function App() {
         <StatusBar style="dark" />
       <View style={[styles.phoneShell, isCompact && styles.phoneShellCompact]}>
         <Header title={title} quickView={quickView} onBack={handleBack} onOpenSchedule={() => setQuickView("schedule")} />
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {tab === "home" && quickView === "overview" ? (
             <HomeScreen
               profiles={profileItems}
@@ -7442,10 +7446,12 @@ function SessionCard({
 
       <View style={styles.sessionFooter}>
         <Text style={styles.sessionRule}>记录可存草稿/正式版；敏感资料需主动授权长期保存</Text>
-        <Pressable
-          style={({ pressed }) => [styles.sessionGenerateButton, pressed && styles.sessionGenerateButtonPressed]}
-          android_ripple={{ color: "#F2DED0" }}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          style={styles.sessionGenerateButton}
           onPress={() => {
+            // 诊断探针：点击先弹 toast，用于区分「触摸没送达」与「跳转失败」
+            onNotice("已触发生成", `即将打开「${recordActionLabel}」页（构建 0830-5）`);
             if (opening) return;
             setOpening(true);
             onOpenRecord();
@@ -7454,7 +7460,7 @@ function SessionCard({
         >
           {recordPending ? <FileText size={16} color={colors.clayDark} /> : <Eye size={16} color={colors.clayDark} />}
           <Text style={styles.sessionGenerateText}>{opening ? "正在打开…" : recordActionLabel}</Text>
-        </Pressable>
+        </TouchableOpacity>
       </View>
     </View>
   );
