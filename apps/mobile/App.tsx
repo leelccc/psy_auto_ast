@@ -53,6 +53,7 @@ import {
   Image,
   Modal,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -170,7 +171,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0830-3";
+const BUILD_TAG = "0830-4";
 
 type QuickView =
   | "overview"
@@ -7296,6 +7297,7 @@ function SessionCard({
   onNotice: (title: string, detail: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [timeDraft, setTimeDraft] = useState(() => formatDateTimeInput(session.occurredAt));
   const [summaryDraft, setSummaryDraft] = useState(session.summary);
   const [tagDraft, setTagDraft] = useState("");
@@ -7440,10 +7442,19 @@ function SessionCard({
 
       <View style={styles.sessionFooter}>
         <Text style={styles.sessionRule}>记录可存草稿/正式版；敏感资料需主动授权长期保存</Text>
-        <TouchableOpacity style={styles.sessionGenerateButton} activeOpacity={0.78} onPress={onOpenRecord}>
+        <Pressable
+          style={({ pressed }) => [styles.sessionGenerateButton, pressed && styles.sessionGenerateButtonPressed]}
+          android_ripple={{ color: "#F2DED0" }}
+          onPress={() => {
+            if (opening) return;
+            setOpening(true);
+            onOpenRecord();
+            setTimeout(() => setOpening(false), 2500);
+          }}
+        >
           {recordPending ? <FileText size={16} color={colors.clayDark} /> : <Eye size={16} color={colors.clayDark} />}
-          <Text style={styles.sessionGenerateText}>{recordActionLabel}</Text>
-        </TouchableOpacity>
+          <Text style={styles.sessionGenerateText}>{opening ? "正在打开…" : recordActionLabel}</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -9272,6 +9283,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 7,
+  },
+  sessionGenerateButtonPressed: {
+    backgroundColor: "#FBE8DA",
   },
   sessionGenerateText: {
     color: colors.clayDark,
