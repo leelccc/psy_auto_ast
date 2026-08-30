@@ -103,10 +103,12 @@ export function createProfileService(client: ApiClient) {
     },
     async update(profileId: string, input: {
       nextSessionAt?: string | null;
+      frequency?: string;
     }): Promise<ProfileListItem> {
-      const profile = await client.patch<BackendProfile>(`/profiles/${profileId}`, {
-        next_session_at: input.nextSessionAt,
-      });
+      const body: Record<string, unknown> = {};
+      if (input.nextSessionAt !== undefined) body.next_session_at = input.nextSessionAt;
+      if (input.frequency !== undefined) body.metadata = { frequency: input.frequency };
+      const profile = await client.patch<BackendProfile>(`/profiles/${profileId}`, body);
       return mapBackendProfile(profile);
     },
   };

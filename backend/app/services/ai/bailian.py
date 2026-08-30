@@ -25,6 +25,7 @@ class BailianRecordingAIProvider:
         summary_model: str,
         local_asr_model: str | None = None,
         base_url: str = "https://dashscope.aliyuncs.com",
+        report_model: str | None = None,
         llm_api_key: str | None = None,
         llm_base_url: str | None = None,
         timeout_seconds: float = 120,
@@ -38,6 +39,7 @@ class BailianRecordingAIProvider:
         self.asr_model = asr_model
         self.local_asr_model = local_asr_model or asr_model
         self.summary_model = summary_model
+        self.report_model = report_model or summary_model
         self.base_url = base_url.rstrip("/")
         self.llm_api_key = (llm_api_key or api_key).strip()
         self.llm_base_url = (llm_base_url or f"{self.base_url}/compatible-mode/v1").rstrip("/")
@@ -106,6 +108,75 @@ class BailianRecordingAIProvider:
             summary=summary_payload["main_summary"],
             chapters=summary_payload["chapters"],
         )
+
+    def generate_report(
+        self,
+        *,
+        report_type: str,
+        title: str,
+        source_labels: list[str],
+        prompt: object | None = None,
+    ) -> dict[str, object]:
+        """基于已选资料，用 LLM 生成结构化的报告草稿（blocks）。"""
+        system_prompt = (
+            "你是心理咨询专业文档写作助手，协助咨询师把已选资料整理为专业、克制、可校订的草稿。"
+            "只依据用户提供的资料生成，不编造未出现的人名、日期、诊断、风险或干预。"
+            "涉及风险时，必须用「资料显示/资料未提供/需要进一步评估」的措辞。"
+            "输出必须是 JSON 对象，格式为 "
+            '{"blocks":[{"title":"段落标题","content":"段落内容"}],"title":"报告标题"}。'
+            "blocks 的标题必须严格使用用户指定段落标题；内容使用专业中文，避免夸大疗效与确定性诊断。"
+        )
+        user_prompt = (
+            f"报告标题：{title}\n报告类型：{report_type}\n"
+            f"已选资料：{('、'.join(source_labels) if source_labels else '未选择资料')}\n\n"
+            "请生成以下段落（使用用户给出的段落标题作为 block.title）：\n"
+        )
+        if prompt is not None:
+            prompt_system = getattr(prompt, "system_prompt", None)
+            prompt_user = getattr(prompt, "user_prompt", None)
+            if prompt_system:
+                system_prompt = str(prompt_system)
+            if prompt_user:
+                user_prompt = str(prompt_user)
+        response = self._post(
+            "/chat/completions",
+            {
+                "model": self.report_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.3,
+                "response_format": {"type": "json_object"},
+            },
+            base_url=self.llm_base_url,
+            api_key=self.llm_api_key,
+        )
+        try:
+            content = response["choices"][0]["message"]["content"]
+            payload = json.loads(self._strip_json_fence(str(content)))
+            raw_blocks = payload.get("blocks", [])
+            if not isinstance(raw_blocks, list) or not raw_blocks:
+                raise BailianAIError("百炼报告生成未返回有效段落。")
+            blocks: list[dict[str, object]] = []
+            for item in raw_blocks:
+                if not isinstance(item, dict):
+                    continue
+                block_title = str(item.get("title", "")).strip()
+                block_content = str(item.get("content", "")).strip()
+                if not block_title or not block_content:
+                    continue
+                blocks.append({"title": block_title, "content": block_content})
+            if not blocks:
+                raise BailianAIError("百炼报告生成段落内容为空。")
+            return {
+                "blocks": blocks,
+                "title": str(payload.get("title", title)).strip() or title,
+                "generated_by": "bailian",
+                "prompt_version": getattr(prompt, "version", None),
+            }
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError, BailianAIError) as error:
+            raise BailianAIError(f"百炼报告生成返回格式不正确：{error}") from error
 
     def _transcribe_base64(self, audio: str) -> str:
         response = self._post(
@@ -248,7 +319,14 @@ class BailianRecordingAIProvider:
                         "content": (
                             "你是心理咨询记录助手。只依据转写文本整理录音纪要，不推断诊断，"
                             "不编造事实。返回 JSON：main_summary 为简洁完整纪要；chapters 为数组，"
-                            "每项包含 title、summary、start_ms、end_ms。"
+                            "每项包含 title、summary、start_ms、end_ms。\n"
+                            "章节划分要求（必须遵守）：\n"
+                            "1. 按话题或议题的切换分章，不要把每一句、每一次简短对话单独成章；\n"
+                            "2. 单个章节时长不得短于 60 秒，过短的相邻内容必须并入同一章节；\n"
+                            "3. 章节总数控制在 3 到 8 个，按录音时长自适应："
+                            "5 分钟以内约 3 个，10–30 分钟 4–6 个，30 分钟以上不超过 8 个；\n"
+                            "4. 各章节的 start_ms 与 end_ms 必须首尾相接、连续覆盖整段录音，"
+                            "第一个 start_ms 为 0，最后一个 end_ms 为录音总时长。"
                         ),
                     },
                     {
@@ -274,13 +352,14 @@ class BailianRecordingAIProvider:
             raise BailianAIError("百炼录音纪要返回格式不正确。") from error
         if not main_summary or not isinstance(chapters, list):
             raise BailianAIError("百炼录音纪要缺少必要内容。")
+        normalized = [
+            self._normalize_chapter(item, duration_seconds)
+            for item in chapters
+            if isinstance(item, dict)
+        ]
         return {
             "main_summary": main_summary,
-            "chapters": [
-                self._normalize_chapter(item, duration_seconds)
-                for item in chapters
-                if isinstance(item, dict)
-            ],
+            "chapters": self.merge_short_chapters(normalized, duration_seconds),
         }
 
     def _post(
@@ -354,3 +433,66 @@ class BailianRecordingAIProvider:
             "start_ms": start_ms,
             "end_ms": end_ms,
         }
+
+    @staticmethod
+    def merge_short_chapters(
+        chapters: list[dict[str, object]],
+        duration_seconds: int,
+        min_chapter_ms: int = 30_000,
+        max_chapters: int = 8,
+    ) -> list[dict[str, object]]:
+        """兜底合并碎片章节，避免章节速览出现「几秒一章」。
+
+        即使 prompt 已约束，模型偶尔仍会产出过短或过多的章节。
+        这里先把短于阈值的章节并入相邻章节，再把总数压到上限以内，
+        最后保证首尾覆盖整段录音。
+        """
+        duration_ms = max(duration_seconds, 1) * 1000
+        items: list[dict[str, object]] = [
+            dict(chapter) for chapter in chapters if isinstance(chapter, dict)
+        ]
+        items.sort(key=lambda item: int(item.get("start_ms", 0)))
+        if not items:
+            return []
+
+        def span(chapter: dict[str, object]) -> int:
+            return max(0, int(chapter.get("end_ms", 0)) - int(chapter.get("start_ms", 0)))
+
+        def merge_into(base: dict[str, object], extra: dict[str, object]) -> dict[str, object]:
+            return {
+                "title": str(base.get("title") or "录音内容"),
+                "summary": " ".join(
+                    part
+                    for part in (
+                        str(base.get("summary") or "").strip(),
+                        str(extra.get("summary") or "").strip(),
+                    )
+                    if part
+                ).strip(),
+                "start_ms": min(int(base.get("start_ms", 0)), int(extra.get("start_ms", 0))),
+                "end_ms": max(int(base.get("end_ms", 0)), int(extra.get("end_ms", 0))),
+            }
+
+        merged: list[dict[str, object]] = []
+        for chapter in items:
+            if merged and span(chapter) < min_chapter_ms:
+                merged[-1] = merge_into(merged[-1], chapter)
+            else:
+                merged.append(chapter)
+        if len(merged) > 1 and span(merged[0]) < min_chapter_ms:
+            merged[0] = merge_into(merged[0], merged[1])
+            merged.pop(1)
+
+        while len(merged) > max_chapters:
+            shortest_index = min(
+                range(len(merged) - 1),
+                key=lambda index: span(merged[index]) + span(merged[index + 1]),
+            )
+            merged[shortest_index] = merge_into(
+                merged[shortest_index], merged[shortest_index + 1]
+            )
+            merged.pop(shortest_index + 1)
+
+        merged[0]["start_ms"] = 0
+        merged[-1]["end_ms"] = duration_ms
+        return merged

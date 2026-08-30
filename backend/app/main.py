@@ -28,6 +28,7 @@ from app.api.routes.supervision import router as supervision_router
 from app.core.config import DEV_JWT_SECRET, get_settings
 from app.db.session import get_db
 from app.models import Profile as DatabaseProfile
+from app.models import Report
 from app.models import SessionRecord
 from app.services.calendar import sync_profile_next_session_event
 from app.services.ai import RecordingAIProvider
@@ -417,7 +418,13 @@ def create_app(
             )
             .order_by(SessionRecord.occurred_at.desc())
         ).all()
-        return {"items": [serialize_session(session) for session in items]}
+        status_by_session = derive_record_statuses(database, list(items), user_id)
+        return {
+            "items": [
+                serialize_session(session, status_by_session.get(session.id, "pending"))
+                for session in items
+            ]
+        }
 
     @app.post("/api/v1/profiles/{profile_id}/sessions", status_code=201)
     def create_session(
@@ -509,7 +516,10 @@ def create_app(
         session.updated_at = utc_now()
         resequence_profile_sessions(database, profile=profile, user_id=user_id)
         database.commit()
-        return serialize_session(session)
+        return serialize_session(
+            session,
+            derive_record_statuses(database, [session], user_id).get(session.id, "pending"),
+        )
 
     @app.delete("/api/v1/sessions/{session_id}")
     def delete_session(
@@ -566,7 +576,43 @@ def serialize_profile(
     }
 
 
-def serialize_session(session: SessionRecord) -> dict[str, Any]:
+def derive_record_statuses(
+    database: DatabaseSession,
+    sessions: list[SessionRecord],
+    user_id: str,
+) -> dict[str, str]:
+    """按真实 Report 记录派生每次咨询的记录状态。
+
+    session.record_status 是写入时固定的静态字段，会与真实报告脱节
+    （例如种子数据预置 draft、报告被删除后仍显示已生成）。
+    这里统一以 Report 表为准，保证「未生成 / 草稿 / 正式版」与实际情况一致。
+    """
+    if not sessions:
+        return {}
+    session_ids = [session.id for session in sessions]
+    rows = database.execute(
+        select(Report.session_id, Report.formal_saved_at).where(
+            Report.user_id == user_id,
+            Report.session_id.in_(session_ids),
+            Report.destroyed_at.is_(None),
+        )
+    ).all()
+    status_by_session: dict[str, str] = {}
+    for session_id, formal_saved_at in rows:
+        if not session_id:
+            continue
+        # 只要有任意一份正式版，就视为已定稿；否则视为草稿
+        if formal_saved_at is not None:
+            status_by_session[session_id] = "formal"
+        elif status_by_session.get(session_id) != "formal":
+            status_by_session[session_id] = "draft"
+    return status_by_session
+
+
+def serialize_session(
+    session: SessionRecord,
+    record_status: str | None = None,
+) -> dict[str, Any]:
     return {
         "id": session.id,
         "profile_id": session.profile_id,
@@ -578,7 +624,7 @@ def serialize_session(session: SessionRecord) -> dict[str, Any]:
         "mode": session.mode,
         "summary": session.summary,
         "tags": session.tags,
-        "record_status": session.record_status,
+        "record_status": record_status or "pending",
         "created_at": iso(session.created_at),
         "updated_at": iso(session.updated_at),
     }

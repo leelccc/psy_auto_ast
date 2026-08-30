@@ -8,6 +8,7 @@ import {
   useAudioPlayer,
   useAudioPlayerStatus,
   useAudioRecorder,
+  useAudioRecorderState,
 } from "expo-audio";
 import {
   Bell,
@@ -45,10 +46,11 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react-native";
-import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   SafeAreaView,
   ActivityIndicator,
+  Image,
   Modal,
   Platform,
   StyleSheet,
@@ -61,6 +63,8 @@ import {
   ScrollView,
   StatusBar as NativeStatusBar,
   LogBox,
+  BackHandler,
+  Linking,
 } from "react-native";
 
 import { buildArchiveResult, describeArchiveTarget, filterArchiveCandidates, type ArchiveKind } from "./src/archiveFlow";
@@ -112,7 +116,7 @@ import {
   waitForRecordingJob,
   type ArchiveRecording,
 } from "./src/recordingFlow";
-import { buildDownloadArtifact, scheduleDownload } from "./src/downloadFlow";
+import { buildDownloadArtifact, downloadSummaryPdf } from "./src/downloadFlow";
 import {
   getOriginalFileDownloadState,
   type StoredFileReference,
@@ -503,6 +507,51 @@ function optimisticUser(email: string, displayName = "咨询师"): CurrentUser {
   };
 }
 
+/**
+ * 全局错误边界：捕获渲染期未处理异常，避免生产包直接闪退（强制关闭）。
+ * 同时把错误文本暴露出来，便于精准定位根因。
+ */
+class AppErrorBoundary extends Component<{ onReset: () => void; children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: unknown) {
+    // eslint-disable-next-line no-console
+    console.error("[AppErrorBoundary]", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      const stack = String(this.state.error.stack ?? "").split("\n").slice(0, 12).join("\n");
+      return (
+        <SafeAreaView style={styles.safe}>
+          <ScrollView contentContainerStyle={styles.scrollContent} style={styles.scroll}>
+            <View style={styles.errorCard}>
+              <CircleAlert size={28} color={colors.danger} />
+              <Text style={styles.errorTitle}>页面出现错误</Text>
+              <Text style={styles.errorCopy}>{this.state.error.message}</Text>
+              <Text style={styles.errorStack}>{stack}</Text>
+              <PrimaryButton
+                icon={Home}
+                label="返回首页"
+                onPress={() => {
+                  this.setState({ error: null });
+                  this.props.onReset();
+                }}
+                wide
+              />
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [authStatus, setAuthStatus] = useState<"loading" | "guest" | "authenticated">("loading");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -553,6 +602,7 @@ export default function App() {
   const [unlockedProfileId, setUnlockedProfileId] = useState<string | null>(null);
   const [recordEditorSections, setRecordEditorSections] = useState<EditableRecordSection[]>(getRecordEditorSections("来访者"));
   const [recordFormal, setRecordFormal] = useState(false);
+  const [activeRecordReport, setActiveRecordReport] = useState<Report | null>(null);
   const [recordDirty, setRecordDirty] = useState(true);
   const [activeRecordReportId, setActiveRecordReportId] = useState<string | null>(null);
   const [activeRecordLabel, setActiveRecordLabel] = useState("第 6 次咨询");
@@ -566,6 +616,8 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState("session-6");
   const [materialReturn, setMaterialReturn] = useState<QuickView>("profileDetail");
   const [filePreviewReturn, setFilePreviewReturn] = useState<QuickView>("sessionMaterials");
+  const [systemCalendarEnabled, setSystemCalendarEnabled] = useState(false);
+  const [privacyTitleMode, setPrivacyTitleMode] = useState(false);
   const [activeFile, setActiveFile] = useState<PreviewFile | null>(null);
   const [securityInitialSection, setSecurityInitialSection] = useState<SecuritySection>("profileAccess");
   const [legalAttachments, setLegalAttachments] = useState<ProfileAttachment[]>([]);
@@ -858,6 +910,7 @@ export default function App() {
     );
     const sections = sectionsFromReport(report, showFormal);
     setActiveRecordReportId(report.id);
+    setActiveRecordReport(report);
     setRecordEditorReturn(returnView);
     setRecordEditorSections(sections.length ? sections : emptyGeneratedRecordSections());
     setRecordFormal(showFormal);
@@ -895,6 +948,10 @@ export default function App() {
         return;
       }
       openReportEditor(report, sessionId, returnView);
+      // 同步会话卡片的“记录”状态，避免生成后卡片仍显示“待生成”
+      setSessionHistory((current) => current.map((session) => (
+        session.id === sessionId ? { ...session, record: report.formalSavedAt ? "正式版" : "草稿" } : session
+      )));
     } catch (error) {
       showNotice("记录加载失败", errorMessage(error));
     }
@@ -1182,6 +1239,53 @@ export default function App() {
     return () => clearTimeout(timeout);
   }, [notice]);
 
+  // 安卓系统返回键/侧滑返回：在应用内导航，而非直接退出 App（Q2）
+  const handleBackRef = useRef(handleBack);
+  handleBackRef.current = handleBack;
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const onBackPress = () => {
+      if (quickView === "overview") return false;
+      handleBackRef.current();
+      return true;
+    };
+    const subscription = BackHandler.addEventListener("hardwareBackPress", onBackPress);
+    return () => subscription.remove();
+  }, [quickView]);
+
+  // 加载日历同步开关（供新建记录时自动同步到系统日历，Q13）
+  useEffect(() => {
+    void calendarService.settings()
+      .then((settings) => {
+        setSystemCalendarEnabled(settings.systemCalendarEnabled);
+        setPrivacyTitleMode(settings.privacyTitleModeEnabled);
+      })
+      .catch(() => {});
+  }, []);
+
+  // 将后端“待同步”的日程事件写入系统日历（开启同步时调用，Q13）
+  const syncPendingCalendarEvents = useCallback(async () => {
+    if (!systemCalendarEnabled) return;
+    const driver = createExpoCalendarDriver();
+    await driver.ensureWritableCalendar();
+    const page = await calendarService.listEvents();
+    for (const event of page.items.filter((item) => item.status === "pending" || !item.systemCalendarEventId)) {
+      const systemEventId = await syncCalendarEvent(driver, {
+        title: event.title,
+        privacyTitle: event.privacyTitle,
+        startAt: event.startAt,
+        endAt: event.endAt,
+      }, {
+        privacyTitleMode,
+        existingSystemEventId: event.systemCalendarEventId,
+      });
+      await calendarService.updateEvent(event.id, {
+        syncToSystemCalendar: true,
+        systemCalendarEventId: systemEventId,
+      });
+    }
+  }, [systemCalendarEnabled, privacyTitleMode]);
+
   const title = useMemo(() => {
     if (quickView === "recording") return "录音";
     if (quickView === "recordingRecords") return "录音记录";
@@ -1262,8 +1366,9 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar style="dark" />
+    <AppErrorBoundary onReset={() => { setQuickView("overview"); setTab("home"); }}>
+      <SafeAreaView style={styles.safe}>
+        <StatusBar style="dark" />
       <View style={[styles.phoneShell, isCompact && styles.phoneShellCompact]}>
         <Header title={title} quickView={quickView} onBack={handleBack} onOpenSchedule={() => setQuickView("schedule")} />
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -1474,11 +1579,27 @@ export default function App() {
                   throw error;
                 }
               }}
+              onUpdateFrequency={async (frequency) => {
+                try {
+                  const updated = await profileService.update(activeProfileId, { frequency });
+                  setProfileItems((current) => current.map((item) => item.id === updated.id ? updated : item));
+                  selectProfile(updated);
+                  showNotice("咨询频率已更新", "档案卡片已同步。");
+                } catch (error) {
+                  showNotice("频率保存失败", errorMessage(error));
+                  throw error;
+                }
+              }}
               onCreateSession={async (input) => {
                 try {
                   const created = await sessionService.create(activeProfileId, input);
                   await loadProfileData(activeProfileId);
                   showNotice(`已新增第 ${created.sequence} 次记录`, "记录已保存到后端数据库。");
+                  if (systemCalendarEnabled) {
+                    void syncPendingCalendarEvents()
+                      .then(() => loadProfileData(activeProfileId))
+                      .catch((error) => showNotice("系统日历同步失败", errorMessage(error)));
+                  }
                 } catch (error) {
                   showNotice("记录创建失败", errorMessage(error));
                   throw error;
@@ -1488,6 +1609,11 @@ export default function App() {
                 try {
                   await sessionService.update(sessionId, patch);
                   await loadProfileData(activeProfileId);
+                  if (systemCalendarEnabled && patch.occurredAt) {
+                    void syncPendingCalendarEvents()
+                      .then(() => loadProfileData(activeProfileId))
+                      .catch((error) => showNotice("系统日历同步失败", errorMessage(error)));
+                  }
                 } catch (error) {
                   showNotice("记录更新失败", errorMessage(error));
                   throw error;
@@ -1525,7 +1651,24 @@ export default function App() {
                 }
               }}
               onOpenRecord={(sessionId) => void openSessionRecord(sessionId, "profileDetail")}
+              hasCaseReport={Boolean(activeCaseReportId)}
               onOpenCaseReport={() => {
+                if (activeCaseReportId) {
+                  void reportService.get(activeCaseReportId).then((report) => {
+                    const blocks = Array.isArray(report.draftContent?.blocks)
+                      ? report.draftContent.blocks as Array<{ title?: string; content?: string }>
+                      : [];
+                    setCaseReportSections(blocks.map((block) => ({
+                      title: block.title ?? "未命名章节",
+                      content: block.content ?? "",
+                    })));
+                    setCaseReportFormal(Boolean(report.formalSavedAt));
+                    setQuickView("caseReportEditor");
+                  }).catch((error) => {
+                    showNotice("个案报告加载失败", errorMessage(error));
+                  });
+                  return;
+                }
                 void reportService.generationSources({
                   reportType: "case_report",
                   profileId: activeProfileId,
@@ -1816,8 +1959,25 @@ export default function App() {
             sections={recordEditorSections}
             formal={recordFormal}
             dirty={recordDirty}
+            onBack={() => setQuickView(recordEditorReturn)}
             onSectionsChange={setRecordEditorSections}
-            onFormalChange={setRecordFormal}
+            onFormalChange={async (next: boolean) => {
+              if (next === recordFormal) return;
+              if (next && !activeRecordReport?.formalSavedAt) {
+                showNotice("尚无正式版", "请先保存草稿为正式版，再切换查看。");
+                return;
+              }
+              const source = next ? activeRecordReport?.formalContent : activeRecordReport?.draftContent;
+              if (source && Array.isArray((source as { blocks?: unknown[] }).blocks)) {
+                setRecordEditorSections(
+                  ((source as { blocks: Array<{ title?: string; content?: string }> }).blocks).map((block) => ({
+                    title: block.title ?? "未命名章节",
+                    content: block.content ?? "",
+                  })),
+                );
+              }
+              setRecordFormal(next);
+            }}
             onDirtyChange={setRecordDirty}
             onSaveFormal={async () => {
               if (!activeRecordReportId) throw new Error("记录尚未绑定后端报告。");
@@ -2030,7 +2190,8 @@ export default function App() {
         ) : null}
         {notice ? <ActionNotice notice={notice} onClose={() => setNotice(null)} /> : null}
       </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </AppErrorBoundary>
   );
 }
 
@@ -2310,6 +2471,7 @@ function RecordingScreen({
   onNotice: (title: string, detail: string) => void;
 }) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder);
   const controller = useMemo(
     () => createAudioRecordingController(createExpoAudioDriver(
       recorder,
@@ -2374,10 +2536,28 @@ function RecordingScreen({
                 ? "未开始"
               : recordingState === "paused"
                 ? "暂停中"
-                : recordingState === "saving"
+              : recordingState === "saving"
                   ? "正在保存"
                   : "录音中"}
           </Text>
+          {recordingState === "recording" ? (
+            <View style={styles.recorderMeter}>
+              <View
+                style={[
+                  styles.recorderMeterFill,
+                  {
+                    width: `${Math.max(
+                      3,
+                      Math.min(
+                        100,
+                        Math.round(((recorderState?.metering ?? -160) + 50) / 50 * 100),
+                      ),
+                    )}%`,
+                  },
+                ]}
+              />
+            </View>
+          ) : null}
         </View>
         <View style={styles.controlRow}>
           <TouchableOpacity style={[styles.cancelButton, confirmCancel && styles.cancelButtonDanger]} activeOpacity={0.75} onPress={() => {
@@ -2416,6 +2596,7 @@ function RecordingScreen({
               setRecordingState("saving");
               try {
                 await onSave(await controller.stop());
+                onNotice("录音已保存", "已写入云端归档队列，可在录音记录中查看并处理；若归档失败会在此提示。");
               } catch (error) {
                 setRecordingState("paused");
                 onNotice(
@@ -2454,7 +2635,7 @@ function RecordingScreen({
           </Text>
           <Text style={styles.listMeta}>
             {recordingState === "recording"
-              ? `已录 ${formatDuration(elapsedSeconds)}，计时持续增长表示正在录制。`
+              ? `已录 ${formatDuration(elapsedSeconds)}，音量条实时起伏表示麦克风正在收音；计时持续增长表示正在录制。`
               : recordingState === "paused"
                 ? `已录 ${formatDuration(elapsedSeconds)}，继续后会接着录制。`
                 : recordingState === "failed"
@@ -3548,17 +3729,27 @@ function ChoiceGroup({
   );
 }
 
+const FREQUENCY_CHOICES = [
+  { value: "未设置", label: "未设置" },
+  { value: "每周", label: "每周" },
+  { value: "双周", label: "双周" },
+  { value: "每月", label: "每月" },
+  { value: "自定义", label: "自定义" },
+];
+
 function ProfileDetailScreen({
   profile,
   sessions,
   legalAttachments,
   onUpdateNextSession,
+  onUpdateFrequency,
   onCreateSession,
   onUpdateSession,
   onDeleteSession,
   onUploadLegal,
   onOpenRecord,
   onOpenCaseReport,
+  hasCaseReport,
   onOpenMaterial,
   onPreviewLegal,
   onNotice,
@@ -3567,6 +3758,7 @@ function ProfileDetailScreen({
   sessions: SessionHistoryItem[];
   legalAttachments: ProfileAttachment[];
   onUpdateNextSession: (nextSessionAt: string | null) => Promise<void>;
+  onUpdateFrequency: (frequency: string) => Promise<void>;
   onCreateSession: (input: { sessionType: string; occurredAt: string; summary: string }) => Promise<void>;
   onUpdateSession: (
     sessionId: string,
@@ -3580,6 +3772,7 @@ function ProfileDetailScreen({
   ) => Promise<void>;
   onOpenRecord: (sessionId: string) => void;
   onOpenCaseReport: () => void;
+  hasCaseReport: boolean;
   onOpenMaterial: (category: MaterialCategory, sessionId: string) => void;
   onPreviewLegal: (attachment: ProfileAttachment) => void;
   onNotice: (title: string, detail: string) => void;
@@ -3587,6 +3780,9 @@ function ProfileDetailScreen({
   const [showCreateSession, setShowCreateSession] = useState(false);
   const [newSessionTime, setNewSessionTime] = useState(() => formatDateTimeInput(new Date()));
   const [editingNextSession, setEditingNextSession] = useState(false);
+  const [editingFrequency, setEditingFrequency] = useState(false);
+  const [frequencyDraft, setFrequencyDraft] = useState(profile.profileFrequency ?? "未设置");
+  const [savingFrequency, setSavingFrequency] = useState(false);
   const [nextSessionDraft, setNextSessionDraft] = useState(() => (
     profile.profileNextSessionAt ? formatDateTimeInput(profile.profileNextSessionAt) : formatDateTimeInput(new Date())
   ));
@@ -3642,7 +3838,14 @@ function ProfileDetailScreen({
         </View>
         <View style={styles.detailStats}>
           <MiniStat label="状态" value={profile.profileStatus ?? (hasRecords ? "处理中" : "新建")} />
-          <MiniStat label="频率" value={profile.profileFrequency ?? "未设置"} />
+          <MiniStat
+            label="频率"
+            value={profile.profileFrequency ?? "未设置"}
+            onPress={() => {
+              setFrequencyDraft(profile.profileFrequency ?? "未设置");
+              setEditingFrequency((current) => !current);
+            }}
+          />
         </View>
         <NextSessionStat
           label={nextStatLabel}
@@ -3682,6 +3885,37 @@ function ProfileDetailScreen({
                 setSavingNextSession(false);
               }
             }} disabled={savingNextSession} />
+          </View>
+        </View>
+      ) : null}
+
+      {editingFrequency ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>设置咨询频率</Text>
+          <ChoiceGroup
+            options={FREQUENCY_CHOICES}
+            value={frequencyDraft}
+            onChange={setFrequencyDraft}
+          />
+          <View style={styles.inlineActions}>
+            <GhostButton icon={X} label="取消" onPress={() => setEditingFrequency(false)} />
+            <PrimaryButton
+              icon={Save}
+              label={savingFrequency ? "保存中..." : "保存频率"}
+              onPress={async () => {
+                if (savingFrequency) return;
+                setSavingFrequency(true);
+                try {
+                  await onUpdateFrequency(frequencyDraft);
+                  setEditingFrequency(false);
+                } catch {
+                  // 父级已提示具体错误
+                } finally {
+                  setSavingFrequency(false);
+                }
+              }}
+              disabled={savingFrequency}
+            />
           </View>
         </View>
       ) : null}
@@ -3730,7 +3964,7 @@ function ProfileDetailScreen({
         />
       </View>
 
-      <SectionHeader title={`${sessionNoun}历程`} action={showCreateSession ? "收起" : "新增记录"} onAction={() => setShowCreateSession((current) => !current)} />
+      <SectionHeader title={`${sessionNoun}历程`} action={showCreateSession ? "收起" : "新增历程"} onAction={() => setShowCreateSession((current) => !current)} />
       {showCreateSession ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formPreviewTitle}>新增{sessionNoun}记录</Text>
@@ -3823,7 +4057,7 @@ function ProfileDetailScreen({
       {profile.kindLabel === "来访者" && sessions.length > 0 ? (
         <PrimaryButton
           icon={Sparkles}
-          label="生成个案报告"
+          label={hasCaseReport ? "查看个案报告" : "生成个案报告"}
           onPress={onOpenCaseReport}
           wide
         />
@@ -3858,7 +4092,6 @@ function RecordingDetailScreen({
   onOpenPrivacy: () => void;
 }) {
   const speakers = uniqueTranscriptSpeakers(turns);
-  const recordButtonLabel = recording.sessionId ? "进入记录草稿" : "归档后生成记录";
   const [confirmRegeneration, setConfirmRegeneration] = useState(false);
   const [exportReady, setExportReady] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
@@ -3883,7 +4116,23 @@ function RecordingDetailScreen({
       <View style={styles.summaryCard}>
         <View style={styles.summaryHeader}>
           <Text style={styles.summaryTitle}>录音纪要</Text>
-          <Badge label="可重新生成" tone="blue" />
+          <GhostButton
+            icon={RefreshCcw}
+            label={regenerating ? "正在生成..." : confirmRegeneration ? "确认覆盖" : "重新生成"}
+            onPress={() => {
+              if (regenerating) return;
+              const decision = decideRecordingRegeneration(hasManualEdits, confirmRegeneration);
+              if (decision.status === "confirm") {
+                setConfirmRegeneration(true);
+                return;
+              }
+              setConfirmRegeneration(false);
+              setRegenerating(true);
+              void onRegenerated().catch(() => {
+                setConfirmRegeneration(true);
+              }).finally(() => setRegenerating(false));
+            }}
+          />
         </View>
         <Text style={styles.summaryCopy}>{summary}</Text>
         {confirmRegeneration ? (
@@ -3892,22 +4141,6 @@ function RecordingDetailScreen({
             <Text style={styles.warningText}>{regenerationWarning}</Text>
           </View>
         ) : null}
-        <View style={styles.inlineActions}>
-          <GhostButton icon={RefreshCcw} label={regenerating ? "正在生成..." : confirmRegeneration ? "确认覆盖并重新生成" : "重新生成"} onPress={() => {
-            if (regenerating) return;
-            const decision = decideRecordingRegeneration(hasManualEdits, confirmRegeneration);
-            if (decision.status === "confirm") {
-              setConfirmRegeneration(true);
-              return;
-            }
-            setConfirmRegeneration(false);
-            setRegenerating(true);
-            void onRegenerated().catch(() => {
-              setConfirmRegeneration(true);
-            }).finally(() => setRegenerating(false));
-          }} />
-          <PrimaryButton icon={FileText} label={recordButtonLabel} onPress={onOpenRecord} disabled={regenerating} />
-        </View>
       </View>
 
       <SectionHeader title="章节速览" action="编辑" onAction={onOpenChapters} />
@@ -3940,18 +4173,22 @@ function RecordingDetailScreen({
       </View>
 
       <View style={styles.exportPanel}>
-        <DataRow icon={Download} title="下载录音纪要 PDF" value={exportReady ? "已下载 · 可重新下载" : "包含纪要、章节与完整转写"} onPress={() => {
+        <DataRow icon={Download} title="下载录音纪要 PDF" value={exportReady ? "已下载 · 可重新下载" : "包含纪要、章节与完整转写"} onPress={async () => {
           setExportReady(true);
-          scheduleDownload(buildDownloadArtifact({
-            title: `${recording.title} 录音纪要`,
-            fileType: "PDF",
-            sections: [
-              { title: "录音纪要", content: summary },
-              { title: "章节速览", content: chapters.map((chapter) => `${chapter.time} ${chapter.title}`).join("\n") },
-              { title: "完整转写", content: turns.map((turn) => `${turn.time} ${turn.speaker}\n${turn.text}`).join("\n\n") },
-            ],
-          }));
-          onNotice("下载已开始", "PDF 包含当前纪要、章节和完整转写，不包含原始录音。");
+          try {
+            const uri = await downloadSummaryPdf(buildDownloadArtifact({
+              title: `${recording.title} 录音纪要`,
+              fileType: "PDF",
+              sections: [
+                { title: "录音纪要", content: summary },
+                { title: "章节速览", content: chapters.map((chapter) => `${chapter.time} ${chapter.title}`).join("\n") },
+                { title: "完整转写", content: turns.map((turn) => `${turn.time} ${turn.speaker}\n${turn.text}`).join("\n\n") },
+              ],
+            }));
+            onNotice("下载已开始", `PDF 已生成，保存到本机“下载”目录并弹出分享（路径：${uri}）。`);
+          } catch (error) {
+            onNotice("下载失败", error instanceof Error ? error.message : "请稍后重试。");
+          }
         }} />
         <DataRow icon={ShieldCheck} title="长期保存授权" value="转写与纪要可授权，原始录音不可授权" onPress={onOpenPrivacy} />
       </View>
@@ -4136,7 +4373,7 @@ function SessionMaterialsScreen({
                 {material.category === "recording" ? <Mic size={20} color={colors.clayDark} /> : <FileText size={20} color={colors.clayDark} />}
               </View>
               <View style={styles.listBody}>
-                <Text style={styles.listTitle}>{material.title}</Text>
+                <Text style={styles.listTitle}>{truncateMiddle(material.title)}</Text>
                 <Text style={styles.listMeta}>{material.meta}</Text>
                 <View style={styles.badgeRow}>
                   <Badge label={material.preservable ? "可授权长期保存" : "不可长期保存"} tone={material.preservable ? "green" : "warm"} />
@@ -4157,6 +4394,15 @@ function SessionMaterialsScreen({
       {category !== "recording" && materials.length > 0 ? <GhostButton icon={ShieldCheck} label="选择资料长期保存" onPress={onAuthorize} /> : null}
     </View>
   );
+}
+
+function truncateMiddle(name: string, max = 22): string {
+  const text = name.trim();
+  if (text.length <= max) return text;
+  const keep = max - 1;
+  const head = Math.ceil(keep / 2);
+  const tail = Math.floor(keep / 2);
+  return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;
 }
 
 function FilePreviewScreen({
@@ -4217,13 +4463,16 @@ function FilePreviewScreen({
         <View style={styles.filePreviewIcon}>
           {fileType === "图片" ? <Eye size={30} color={colors.clayDark} /> : <FileText size={30} color={colors.clayDark} />}
         </View>
-        <Text style={styles.filePreviewTitle}>{file.title}</Text>
+        <Text style={styles.filePreviewTitle}>{truncateMiddle(file.title)}</Text>
         <Text style={styles.filePreviewMeta}>{file.meta}</Text>
+        {file.file?.filename && file.file.filename !== file.title ? (
+          <Text style={styles.filePreviewOriginal}>原名：{file.file.filename}</Text>
+        ) : null}
         <View style={styles.filePreviewFrame}>
           {previewLoading ? (
             <ActivityIndicator color={colors.clayDark} />
-          ) : previewUrl && Platform.OS === "web" && fileType === "图片" ? (
-            createElement("img", {
+          ) : previewUrl && fileType === "图片" ? (
+            Platform.OS === "web" ? createElement("img", {
               src: previewUrl,
               alt: file.title,
               style: {
@@ -4232,7 +4481,14 @@ function FilePreviewScreen({
                 objectFit: "contain",
                 borderRadius: 14,
               },
-            })
+            }) : (
+              <Image
+                source={{ uri: previewUrl }}
+                style={{ width: "100%", height: "100%", borderRadius: 14 }}
+                resizeMode="contain"
+                accessibilityLabel={file.title}
+              />
+            )
           ) : previewUrl && Platform.OS === "web" && fileType === "音频" ? (
             createElement("audio", {
               controls: true,
@@ -4252,6 +4508,11 @@ function FilePreviewScreen({
                 background: "#fff",
               },
             })
+          ) : previewUrl && fileType === "PDF" ? (
+            <TouchableOpacity style={styles.filePreviewOpenButton} activeOpacity={0.78} onPress={() => { void Linking.openURL(previewUrl); }}>
+              <FileText size={18} color={colors.clayDark} />
+              <Text style={styles.filePreviewOpenText}>用其他应用打开 PDF</Text>
+            </TouchableOpacity>
           ) : (
             <Text style={styles.filePreviewPlaceholder}>
               {previewError ?? (previewUrl ? "当前端暂不支持内嵌预览，可下载原文件查看。" : "暂不能预览此文件。")}
@@ -4369,6 +4630,7 @@ function RecordEditorScreen({
   onRegenerateDraft,
   onDownload,
   onOpenPrivacy,
+  onBack,
   onNotice,
 }: {
   profile: ArchiveResult;
@@ -4384,6 +4646,7 @@ function RecordEditorScreen({
   onRegenerateDraft: () => Promise<void>;
   onDownload: () => Promise<void>;
   onOpenPrivacy: () => void;
+  onBack: () => void;
   onNotice: (title: string, detail: string) => void;
 }) {
   const recordType = getRecordType(profile.kindLabel);
@@ -4395,7 +4658,12 @@ function RecordEditorScreen({
           <Text style={styles.editorEyebrow}>{recordType}{formal ? "正式版" : "草稿"}</Text>
           <Text style={styles.editorTitle}>{profile.profileName} · {recordLabel}</Text>
         </View>
-        <Badge label={formal ? "正式版" : "草稿"} tone={formal ? "green" : "warm"} />
+        <View style={styles.editorHeaderActions}>
+          <TouchableOpacity style={styles.textButton} activeOpacity={0.75} onPress={onBack}>
+            <Text style={styles.textButtonLabel}>返回</Text>
+          </TouchableOpacity>
+          <Badge label={formal ? "正式版" : "草稿"} tone={formal ? "green" : "warm"} />
+        </View>
       </View>
       <View style={styles.ruleCard}>
         <CircleAlert size={19} color={colors.clayDark} />
@@ -4403,8 +4671,14 @@ function RecordEditorScreen({
       </View>
 
       <View style={styles.editorToolbar}>
-        <GhostButton icon={History} label="草稿" onPress={() => onNotice("草稿状态", formal ? "当前正在查看正式版，需先复制为草稿才能继续编辑。" : "当前草稿可继续编辑，保存后会成为正式版。")} />
-        <GhostButton icon={FileText} label="正式版" onPress={() => onNotice("正式版状态", formal ? "当前正式版已保存，不可直接编辑。" : "当前还没有正式版，先确认草稿内容并保存。")} />
+        <View style={styles.editorSeg}>
+          <TouchableOpacity style={[styles.editorSegItem, !formal && styles.editorSegItemActive]} activeOpacity={0.78} onPress={() => onFormalChange(false)}>
+            <Text style={[styles.editorSegText, !formal && styles.editorSegTextActive]}>草稿</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.editorSegItem, formal && styles.editorSegItemActive]} activeOpacity={0.78} onPress={() => onFormalChange(true)}>
+            <Text style={[styles.editorSegText, formal && styles.editorSegTextActive]}>正式版</Text>
+          </TouchableOpacity>
+        </View>
         <GhostButton icon={RefreshCcw} label={pendingAction === "regenerate" ? "正在准备..." : "重新生成草稿"} onPress={() => {
           if (pendingAction) return;
           setPendingAction("regenerate");
@@ -4707,6 +4981,11 @@ function PrivacyCenterScreen({
   const [loading, setLoading] = useState(true);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showAllExpiring, setShowAllExpiring] = useState(false);
+  const [showAllLongTerm, setShowAllLongTerm] = useState(false);
+  const PRIVACY_PAGE_LIMIT = 4;
+  const visibleExpiring = showAllExpiring ? expiringResources : expiringResources.slice(0, PRIVACY_PAGE_LIMIT);
+  const visibleLongTerm = showAllLongTerm ? longTermResources : longTermResources.slice(0, PRIVACY_PAGE_LIMIT);
   const load = async () => {
     setLoading(true);
     try {
@@ -4757,7 +5036,7 @@ function PrivacyCenterScreen({
             <Text style={styles.emptySearchCopy}>当前没有 14 天内到期的敏感资料。</Text>
           </View>
         ) : null}
-        {expiringResources.map((item) => (
+        {visibleExpiring.map((item) => (
           <View key={item.id} style={styles.privacyResourceCard}>
             <View style={styles.privacyResourceMain}>
               <Clock3 size={18} color={item.canLongTermPreserve ? colors.clayDark : colors.danger} />
@@ -4826,12 +5105,19 @@ function PrivacyCenterScreen({
             ) : null}
           </View>
         ))}
+        {expiringResources.length > PRIVACY_PAGE_LIMIT ? (
+          <TouchableOpacity style={styles.listMoreRow} activeOpacity={0.78} onPress={() => setShowAllExpiring((current) => !current)}>
+            <Text style={styles.listMoreText}>
+              {showAllExpiring ? "收起" : `显示更多（共 ${expiringResources.length} 项）`}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       <SectionHeader title="已长期保存资料" action={`${longTermResources.length} 项`} />
       {longTermResources.length > 0 ? (
         <View style={styles.cardStack}>
-          {longTermResources.map((item) => (
+          {visibleLongTerm.map((item) => (
             <View key={item.id} style={styles.privacyResourceCard}>
               <View style={styles.privacyResourceMain}>
                 <CheckCircle2 size={18} color={colors.sageDark} />
@@ -4894,6 +5180,13 @@ function PrivacyCenterScreen({
               ) : null}
             </View>
           ))}
+          {longTermResources.length > PRIVACY_PAGE_LIMIT ? (
+            <TouchableOpacity style={styles.listMoreRow} activeOpacity={0.78} onPress={() => setShowAllLongTerm((current) => !current)}>
+              <Text style={styles.listMoreText}>
+                {showAllLongTerm ? "收起" : `显示更多（共 ${longTermResources.length} 项）`}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ) : (
         <View style={styles.emptySearchCard}>
@@ -5405,30 +5698,16 @@ function AccountScreen({
       ) : null}
       <SectionHeader title="数据与隐私" action="查看" onAction={onOpenPrivacy} />
       <View style={styles.cardStack}>
-        {privacySummary.map((item) => {
-          const remainingDays = Math.max(
-            0,
-            Math.ceil((new Date(item.expiresAt).getTime() - Date.now()) / 86_400_000),
-          );
-          return (
-          <TouchableOpacity key={item.id} style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
-            <Clock3 size={18} color={item.canLongTermPreserve ? colors.sageDark : colors.danger} />
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>{item.displayName}</Text>
-              <Text style={styles.listMeta}>{privacyResourceTypeLabel(item.resourceType)} · {remainingDays} 天后到期</Text>
-            </View>
-            <Badge label={item.canLongTermPreserve ? "可授权" : "不可长期"} tone={item.canLongTermPreserve ? "green" : "warm"} />
-          </TouchableOpacity>
-        )})}
-        {privacySummary.length === 0 ? (
-          <TouchableOpacity style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
-            <ShieldCheck size={18} color={colors.sageDark} />
-            <View style={styles.listBody}>
-              <Text style={styles.listTitle}>暂无近期到期资料</Text>
-              <Text style={styles.listMeta}>进入隐私中心查看长期保存与销毁记录</Text>
-            </View>
-          </TouchableOpacity>
-        ) : null}
+        <TouchableOpacity style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
+          <ShieldCheck size={18} color={colors.sageDark} />
+          <View style={styles.listBody}>
+            <Text style={styles.listTitle}>
+              {privacySummary.length === 0 ? "暂无近期到期资料" : `${privacySummary.length} 项资料即将到期`}
+            </Text>
+            <Text style={styles.listMeta}>点按进入隐私中心，管理长期保存与销毁记录</Text>
+          </View>
+          <Badge label={privacySummary.length === 0 ? "正常" : "需关注"} tone={privacySummary.length === 0 ? "green" : "warm"} />
+        </TouchableOpacity>
       </View>
       <SectionHeader title="安全" action="设置" onAction={() => onOpenSecurity("profileAccess")} />
       <View style={styles.settingsList}>
@@ -6367,7 +6646,7 @@ function SessionCard({
   const [deletingSession, setDeletingSession] = useState(false);
   const recordPending = session.record === "未生成" || session.record === "待生成";
   const recordActionLabel = recordPending
-    ? `生成${recordType}草稿`
+    ? `生成${recordType}`
     : session.record === "正式版"
       ? `查看${recordType}`
       : `查看/编辑${recordType}`;
@@ -6496,7 +6775,6 @@ function SessionCard({
 
       <View style={styles.sessionActionGrid}>
         <SessionAction icon={Mic} label="录音" status={session.recording} tone={session.recording.includes("剩余") ? "warm" : "muted"} onPress={() => onOpenMaterial("recording")} />
-        <SessionAction icon={Edit3} label="记录" status={session.record} tone={session.record === "草稿" ? "blue" : session.record === "正式版" ? "green" : "muted"} onPress={onOpenRecord} />
         <SessionAction icon={ChartNoAxesColumn} label="量表" status={session.scale} tone={session.scale === "未上传" ? "muted" : "green"} onPress={() => onOpenMaterial("scale")} />
         <SessionAction icon={ClipboardList} label="作业" status={session.homework} tone={session.homework.includes("已") ? "green" : "muted"} onPress={() => onOpenMaterial("homework")} />
         <SessionAction icon={Plus} label="其他" status={session.other} tone={session.other === "无" ? "muted" : "blue"} onPress={() => onOpenMaterial("other")} />
@@ -6824,6 +7102,32 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
   },
+  errorCard: {
+    marginTop: 64,
+    marginHorizontal: 20,
+    padding: 22,
+    borderRadius: 16,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 14,
+  },
+  errorTitle: {
+    color: colors.ink,
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  errorCopy: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  errorStack: {
+    color: colors.subtle,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", web: "monospace" }),
+  },
   authShell: {
     flex: 1,
     justifyContent: "center",
@@ -6848,7 +7152,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 30,
     lineHeight: 36,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   authCopy: {
     color: colors.muted,
@@ -6873,7 +7177,7 @@ const styles = StyleSheet.create({
   authSwitch: {
     color: colors.clayDark,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "700",
     textAlign: "center",
     paddingVertical: 4,
   },
@@ -6908,7 +7212,7 @@ const styles = StyleSheet.create({
   screenTitle: {
     color: colors.ink,
     fontSize: 28,
-    fontWeight: "800",
+    fontWeight: "700",
     lineHeight: 34,
   },
   roundButton: {
@@ -6932,7 +7236,7 @@ const styles = StyleSheet.create({
   textButtonLabel: {
     color: colors.clayDark,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   scroll: {
     flex: 1,
@@ -6964,7 +7268,7 @@ const styles = StyleSheet.create({
     color: "#FFF9F3",
     fontSize: 24,
     lineHeight: 30,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   heroCopy: {
     marginTop: 12,
@@ -6978,7 +7282,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   primaryButton: {
-    minHeight: 42,
+    minHeight: 46,
     paddingHorizontal: 15,
     borderRadius: radius.sm,
     backgroundColor: colors.clayDark,
@@ -6993,10 +7297,10 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: "#FFF9F3",
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   ghostButton: {
-    minHeight: 42,
+    minHeight: 46,
     paddingHorizontal: 14,
     borderRadius: radius.sm,
     backgroundColor: colors.surface,
@@ -7010,16 +7314,17 @@ const styles = StyleSheet.create({
   ghostButtonText: {
     color: colors.clayDark,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   quickGrid: {
     flexDirection: "row",
-    gap: 10,
+    gap: 12,
   },
   quickAction: {
+    ...shadow.card,
     flex: 1,
     minHeight: 104,
-    borderRadius: radius.sm,
+    borderRadius: radius.lg,
     padding: 12,
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -7029,7 +7334,7 @@ const styles = StyleSheet.create({
   quickLabel: {
     color: colors.ink,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   quickDetail: {
     color: colors.muted,
@@ -7045,26 +7350,27 @@ const styles = StyleSheet.create({
   sectionTitle: {
     color: colors.ink,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sectionAction: {
     color: colors.clayDark,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   sectionActionStatic: {
     color: colors.muted,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   metricRow: {
     flexDirection: "row",
-    gap: 10,
+    gap: 12,
   },
   metricCard: {
+    ...shadow.card,
     flex: 1,
     minHeight: 78,
-    borderRadius: radius.sm,
+    borderRadius: radius.lg,
     padding: 12,
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -7073,7 +7379,7 @@ const styles = StyleSheet.create({
   metricValue: {
     color: colors.ink,
     fontSize: 21,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   metricLabel: {
     marginTop: 5,
@@ -7082,11 +7388,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   cardStack: {
-    gap: 10,
+    gap: 14,
   },
   listCard: {
+    ...shadow.card,
     minHeight: 72,
-    borderRadius: radius.sm,
+    borderRadius: radius.lg,
     padding: 12,
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -7106,7 +7413,7 @@ const styles = StyleSheet.create({
   timePillText: {
     color: colors.clayDark,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   listBody: {
     flex: 1,
@@ -7116,7 +7423,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 15,
     lineHeight: 20,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   listMeta: {
     color: colors.muted,
@@ -7153,12 +7460,12 @@ const styles = StyleSheet.create({
   recorderTime: {
     color: colors.ink,
     fontSize: 34,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   recorderState: {
     color: colors.muted,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   controlRow: {
     width: "100%",
@@ -7176,7 +7483,7 @@ const styles = StyleSheet.create({
   },
   cancelButtonText: {
     color: colors.muted,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   cancelButtonDanger: {
     backgroundColor: "#F7E2DF",
@@ -7201,7 +7508,7 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontSize: 12,
     lineHeight: 18,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   pauseButton: {
     width: 58,
@@ -7227,7 +7534,7 @@ const styles = StyleSheet.create({
   },
   saveButtonText: {
     color: "#FFF9F3",
-    fontWeight: "900",
+    fontWeight: "700",
   },
   recordingCard: {
     borderRadius: radius.sm,
@@ -7258,7 +7565,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 4,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   badge_warm: {
     color: colors.clayDark,
@@ -7303,7 +7610,7 @@ const styles = StyleSheet.create({
   archiveKindTitle: {
     color: colors.ink,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   archiveKindTitleActive: {
     color: colors.clayDark,
@@ -7344,7 +7651,7 @@ const styles = StyleSheet.create({
   emptySearchTitle: {
     color: colors.ink,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   emptySearchCopy: {
     color: colors.muted,
@@ -7367,7 +7674,7 @@ const styles = StyleSheet.create({
   createInlineButtonText: {
     color: colors.clayDark,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   inlineCreateCard: {
     borderRadius: radius.sm,
@@ -7388,7 +7695,7 @@ const styles = StyleSheet.create({
   inlineCreateConfirmText: {
     color: "#FFF9F3",
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   inlineCreateConfirmDisabled: {
     backgroundColor: colors.subtle,
@@ -7413,6 +7720,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   datePickerTrigger: {
+    ...shadow.card,
     minHeight: 48,
     borderRadius: radius.sm,
     paddingHorizontal: 12,
@@ -7427,7 +7735,7 @@ const styles = StyleSheet.create({
     flex: 1,
     color: colors.ink,
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   datePickerPlaceholder: {
     color: colors.subtle,
@@ -7435,7 +7743,7 @@ const styles = StyleSheet.create({
   datePickerActionText: {
     color: colors.clayDark,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   datePickerPanel: {
     borderRadius: radius.md,
@@ -7475,12 +7783,12 @@ const styles = StyleSheet.create({
   datePickerSheetTitle: {
     color: colors.ink,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   datePickerSheetDone: {
     color: colors.clayDark,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
     paddingVertical: 6,
     paddingHorizontal: 10,
   },
@@ -7505,7 +7813,7 @@ const styles = StyleSheet.create({
   datePickerNativeLabel: {
     color: colors.muted,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   datePickerAndroidActions: {
     flexDirection: "row",
@@ -7533,7 +7841,7 @@ const styles = StyleSheet.create({
   datePickerNativeButtonText: {
     color: colors.clayDark,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   pendingPrimaryButton: {
     backgroundColor: colors.subtle,
@@ -7557,7 +7865,7 @@ const styles = StyleSheet.create({
   archiveSuccessTitle: {
     color: "#FFF9F3",
     fontSize: 22,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   archiveSuccessCopy: {
     color: "rgba(255,249,243,0.9)",
@@ -7588,7 +7896,7 @@ const styles = StyleSheet.create({
     marginTop: 13,
     color: colors.ink,
     fontSize: 19,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   processingHeroCopy: {
     marginTop: 7,
@@ -7636,7 +7944,7 @@ const styles = StyleSheet.create({
   audioPlayerTitle: {
     color: colors.ink,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   audioProgressTrack: {
     height: 5,
@@ -7710,13 +8018,13 @@ const styles = StyleSheet.create({
   archiveTargetLabel: {
     color: colors.muted,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   archiveTargetValue: {
     marginTop: 3,
     color: colors.ink,
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   archiveTargetValuePending: {
     color: colors.muted,
@@ -7739,7 +8047,7 @@ const styles = StyleSheet.create({
   privacyTitle: {
     color: colors.ink,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   privacyCopy: {
     marginTop: 7,
@@ -7788,7 +8096,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: colors.muted,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   segmentActive: {
     backgroundColor: colors.surface,
@@ -7818,7 +8126,7 @@ const styles = StyleSheet.create({
   createProfileButtonText: {
     color: "#FFF9F3",
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   identityPicker: {
     gap: 10,
@@ -7839,7 +8147,7 @@ const styles = StyleSheet.create({
   identityTitle: {
     color: colors.ink,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   identityTitleActive: {
     color: colors.clayDark,
@@ -7862,14 +8170,14 @@ const styles = StyleSheet.create({
   formPreviewTitle: {
     color: colors.ink,
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "700",
     marginBottom: 6,
   },
   formFieldLabel: {
     color: colors.muted,
     fontSize: 12,
     lineHeight: 16,
-    fontWeight: "800",
+    fontWeight: "700",
     marginTop: 6,
   },
   formFieldHeader: {
@@ -7883,7 +8191,7 @@ const styles = StyleSheet.create({
     color: colors.clayDark,
     fontSize: 12,
     lineHeight: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   formHint: {
     color: colors.subtle,
@@ -7914,7 +8222,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 13,
     lineHeight: 17,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   choicePillTextActive: {
     color: "#FFF9F3",
@@ -7952,7 +8260,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 22,
     lineHeight: 28,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   detailStats: {
     flexDirection: "row",
@@ -7970,12 +8278,12 @@ const styles = StyleSheet.create({
   miniStatLabel: {
     color: colors.muted,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   miniStatValue: {
     color: colors.ink,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   nextSessionStat: {
     flexDirection: "row",
@@ -8007,7 +8315,7 @@ const styles = StyleSheet.create({
   nextSessionDate: {
     color: colors.ink,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   nextSessionTime: {
     color: colors.muted,
@@ -8017,7 +8325,7 @@ const styles = StyleSheet.create({
   nextSessionEmpty: {
     color: colors.ink,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   nextSessionHint: {
     color: colors.subtle,
@@ -8033,7 +8341,7 @@ const styles = StyleSheet.create({
   nextSessionExpiredBadgeText: {
     color: colors.danger,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   inlineActions: {
     flexDirection: "row",
@@ -8089,7 +8397,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     color: colors.ink,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   emptyProfileCopy: {
     marginTop: 5,
@@ -8133,7 +8441,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#E4EFE9",
     color: colors.sageDark,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   missingSessionIndex: {
     backgroundColor: "#EFE6DE",
@@ -8143,7 +8451,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sessionSummary: {
     marginTop: 6,
@@ -8182,7 +8490,7 @@ const styles = StyleSheet.create({
   sessionToolText: {
     color: colors.clayDark,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sessionToolTextDanger: {
     color: colors.danger,
@@ -8211,7 +8519,7 @@ const styles = StyleSheet.create({
   editableTagText: {
     color: colors.clayDark,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   tagAddRow: {
     flexDirection: "row",
@@ -8229,7 +8537,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceSoft,
     color: colors.clayDark,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sessionActionGrid: {
     borderTopWidth: 1,
@@ -8266,7 +8574,7 @@ const styles = StyleSheet.create({
   sessionActionLabel: {
     color: colors.ink,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sessionActionStatus: {
     color: colors.muted,
@@ -8298,7 +8606,7 @@ const styles = StyleSheet.create({
   sessionGenerateText: {
     color: colors.clayDark,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   dataRow: {
     minHeight: 62,
@@ -8326,7 +8634,7 @@ const styles = StyleSheet.create({
   summaryTitle: {
     color: colors.ink,
     fontSize: 20,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   summaryCopy: {
     color: colors.muted,
@@ -8352,7 +8660,7 @@ const styles = StyleSheet.create({
     width: 58,
     color: colors.clayDark,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   transcriptTools: {
     borderRadius: radius.sm,
@@ -8371,7 +8679,7 @@ const styles = StyleSheet.create({
   transcriptToolTitle: {
     color: colors.ink,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   speakerRow: {
     flexDirection: "row",
@@ -8386,13 +8694,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     color: colors.clayDark,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   speakerKeyLabel: {
     width: 72,
     color: colors.muted,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   transcriptSpeakerLabel: {
     flex: 1,
@@ -8405,7 +8713,7 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     color: colors.clayDark,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   transcriptToolCopy: {
     color: colors.muted,
@@ -8427,7 +8735,7 @@ const styles = StyleSheet.create({
   transcriptSpeaker: {
     color: colors.clayDark,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   transcriptText: {
     color: colors.ink,
@@ -8441,6 +8749,69 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     overflow: "hidden",
+  },
+  recorderMeter: {
+    width: "100%",
+    height: 10,
+    marginTop: 14,
+    borderRadius: 5,
+    backgroundColor: colors.surfaceSoft,
+    overflow: "hidden",
+  },
+  recorderMeterFill: {
+    height: "100%",
+    borderRadius: 5,
+    backgroundColor: colors.sageDark,
+  },
+  filePreviewOpenButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "center",
+    gap: 8,
+    marginTop: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  filePreviewOpenText: {
+    color: colors.ink,
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  filePreviewOriginal: {
+    marginTop: 4,
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+  },
+  editorSeg: {
+    flexDirection: "row",
+    alignSelf: "flex-start",
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 10,
+    padding: 3,
+  },
+  editorSegItem: {
+    paddingVertical: 7,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  editorSegItemActive: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  editorSegText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  editorSegTextActive: {
+    color: colors.ink,
   },
   filePreviewCanvas: {
     minHeight: 320,
@@ -8467,7 +8838,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 26,
     textAlign: "center",
-    fontWeight: "900",
+    fontWeight: "700",
   },
   filePreviewMeta: {
     color: colors.muted,
@@ -8486,11 +8857,12 @@ const styles = StyleSheet.create({
     textAlign: "center",
     textAlignVertical: "center",
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   filePreviewFrame: {
     marginTop: 14,
     width: "100%",
+    height: 300,
     minHeight: 180,
     borderRadius: radius.sm,
     backgroundColor: colors.surfaceSoft,
@@ -8516,14 +8888,19 @@ const styles = StyleSheet.create({
   editorEyebrow: {
     color: "rgba(255,249,243,0.82)",
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "700",
+  },
+  editorHeaderActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
   editorTitle: {
     marginTop: 4,
     color: "#FFF9F3",
     fontSize: 21,
     lineHeight: 27,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   ruleCard: {
     borderRadius: radius.sm,
@@ -8566,7 +8943,7 @@ const styles = StyleSheet.create({
   editSectionTitle: {
     color: colors.ink,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   editSectionInput: {
     minHeight: 86,
@@ -8611,7 +8988,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 22,
     lineHeight: 28,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   consentCopy: {
     color: colors.muted,
@@ -8677,7 +9054,7 @@ const styles = StyleSheet.create({
     color: colors.sageDark,
     fontSize: 12,
     lineHeight: 19,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   consentFooter: {
     flexDirection: "row",
@@ -8694,7 +9071,7 @@ const styles = StyleSheet.create({
   secondaryWideText: {
     color: colors.clayDark,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   disabledWideButton: {
     flex: 1,
@@ -8710,7 +9087,7 @@ const styles = StyleSheet.create({
   disabledWideText: {
     color: colors.muted,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   enabledWideText: {
     color: "#FFF9F3",
@@ -8743,19 +9120,19 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 20,
     lineHeight: 26,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   confirmCopy: {
     color: colors.muted,
     fontSize: 13,
     lineHeight: 20,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   confirmMeta: {
     color: colors.clayDark,
     fontSize: 13,
     lineHeight: 19,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   confirmSourceScroll: {
     maxHeight: 180,
@@ -8771,7 +9148,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     lineHeight: 18,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   confirmActions: {
     flexDirection: "row",
@@ -8788,7 +9165,7 @@ const styles = StyleSheet.create({
   confirmCancelText: {
     color: colors.muted,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   confirmPrimaryButton: {
     flex: 1,
@@ -8804,7 +9181,7 @@ const styles = StyleSheet.create({
   confirmPrimaryText: {
     color: "#FFF9F3",
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   noticeToast: {
     position: "absolute",
@@ -8824,7 +9201,7 @@ const styles = StyleSheet.create({
   noticeToastTitle: {
     color: colors.ink,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   noticeToastDetail: {
     color: colors.muted,
@@ -8851,7 +9228,7 @@ const styles = StyleSheet.create({
   avatarText: {
     color: colors.clayDark,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   aiPanel: {
     borderRadius: radius.sm,
@@ -8864,7 +9241,7 @@ const styles = StyleSheet.create({
   aiTitle: {
     color: colors.ink,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   aiCopy: {
     color: colors.muted,
@@ -8961,7 +9338,7 @@ const styles = StyleSheet.create({
   citationTitle: {
     color: colors.sageDark,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   citationText: {
     color: colors.muted,
@@ -8992,7 +9369,7 @@ const styles = StyleSheet.create({
   stopButtonText: {
     color: colors.danger,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   poster: {
     borderRadius: radius.sm,
@@ -9007,7 +9384,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 22,
     lineHeight: 28,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   posterCopy: {
     color: colors.muted,
@@ -9031,7 +9408,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 15,
     lineHeight: 20,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   articleHero: {
     borderRadius: radius.sm,
@@ -9045,7 +9422,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 25,
     lineHeight: 32,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   articleLead: {
     color: colors.muted,
@@ -9073,7 +9450,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 28,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   articlePointText: {
     flex: 1,
@@ -9092,13 +9469,13 @@ const styles = StyleSheet.create({
   metricSummaryLabel: {
     color: "rgba(255,249,243,0.82)",
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   metricSummaryValue: {
     marginTop: 8,
     color: "#FFF9F3",
     fontSize: 38,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   metricSummaryCopy: {
     marginTop: 4,
@@ -9109,7 +9486,7 @@ const styles = StyleSheet.create({
   statValue: {
     color: colors.clayDark,
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   segmentedScroll: {
     flexDirection: "row",
@@ -9142,12 +9519,12 @@ const styles = StyleSheet.create({
     color: colors.clayDark,
     fontSize: 24,
     lineHeight: 26,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   calendarTitle: {
     color: colors.ink,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   calendarWeekRow: {
     flexDirection: "row",
@@ -9157,7 +9534,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     textAlign: "center",
-    fontWeight: "900",
+    fontWeight: "700",
   },
   calendarGrid: {
     flexDirection: "row",
@@ -9186,7 +9563,7 @@ const styles = StyleSheet.create({
   calendarDayText: {
     color: colors.ink,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   calendarDayTextMuted: {
     color: colors.subtle,
@@ -9207,7 +9584,7 @@ const styles = StyleSheet.create({
     color: colors.sageDark,
     fontSize: 9,
     lineHeight: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   calendarEventCountActive: {
     color: colors.clayDark,
@@ -9232,7 +9609,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     textAlign: "center",
-    fontWeight: "800",
+    fontWeight: "700",
   },
   dayButtonTextActive: {
     color: colors.clayDark,
@@ -9262,7 +9639,7 @@ const styles = StyleSheet.create({
   securityTabText: {
     color: colors.muted,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   securityTabTextActive: {
     color: colors.clayDark,
@@ -9281,7 +9658,7 @@ const styles = StyleSheet.create({
   smallActionText: {
     color: colors.clayDark,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   accountCard: {
     borderRadius: radius.sm,
@@ -9304,12 +9681,12 @@ const styles = StyleSheet.create({
   avatarLargeText: {
     color: colors.clayDark,
     fontSize: 22,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   accountName: {
     color: colors.ink,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   privacyResource: {
     minHeight: 66,
@@ -9344,6 +9721,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
+  },
+  listMoreRow: {
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  listMoreText: {
+    color: colors.clayDark,
+    fontSize: 13,
+    fontWeight: "700",
   },
   privacyDeleteConfirm: {
     borderRadius: radius.sm,
@@ -9436,7 +9822,7 @@ const styles = StyleSheet.create({
   dangerTitle: {
     color: colors.danger,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   dangerCopy: {
     color: colors.muted,
@@ -9461,7 +9847,7 @@ const styles = StyleSheet.create({
   dangerCancelButtonText: {
     color: colors.muted,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   dangerButton: {
     minHeight: 40,
@@ -9483,7 +9869,7 @@ const styles = StyleSheet.create({
   dangerButtonText: {
     color: colors.danger,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   tabBar: {
     position: "absolute",
@@ -9510,7 +9896,7 @@ const styles = StyleSheet.create({
   tabLabel: {
     color: colors.subtle,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   tabLabelActive: {
     color: colors.clayDark,

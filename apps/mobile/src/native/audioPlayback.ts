@@ -60,19 +60,16 @@ export async function toggleAudioPlayback({
   return { sourceLoaded: true };
 }
 
-export function safelyPauseAudioPlayer(player: Pick<AudioPlaybackPlayer, "pause">): void {
+export function safelyPauseAudioPlayer(
+  player: { playing?: boolean; pause?: () => void } | null | undefined,
+): void {
+  // 卸载或原生对象失效时为 best-effort：绝不让 pause 抛错导致闪退。
   try {
-    player.pause();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (
-      message.includes("NativeSharedObjectNotFoundException")
-      || message.includes("native shared object")
-      || message.includes("Calling the 'pause' function has failed")
-    ) {
-      return;
+    if (player && typeof player.pause === "function" && player.playing) {
+      player.pause();
     }
-    throw error;
+  } catch {
+    // 吞掉所有异常（含 NativeSharedObjectNotFoundException / 已销毁的 AudioPlayer）
   }
 }
 

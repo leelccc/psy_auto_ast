@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     bailian_timeout_seconds: float = 120
     bailian_poll_interval_seconds: float = 1
     bailian_max_poll_attempts: int = 120
+    # 报告生成（咨询记录/督导/个案报告）使用的 AI Provider；未配置百炼密钥时回退 deterministic。
+    report_ai_provider: Literal["deterministic", "bailian"] = "deterministic"
+    bailian_report_model: str = "qwen-plus"
     # 微信开放平台登录。Web 扫码与原生 SDK 用不同的应用（AppID/Secret 各自独立）。
     wechat_web_app_id: str = ""
     wechat_web_app_secret: str = ""

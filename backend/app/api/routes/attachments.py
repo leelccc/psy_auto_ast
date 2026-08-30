@@ -250,7 +250,9 @@ def create_attachments_router(storage: Storage) -> APIRouter:
             raw_grant=x_profile_access_grant,
         )
         if not attachment.replace_group_key:
-            raise ApiError(409, "attachment_not_replaceable", "该附件不属于覆盖型附件。")
+            # 人性化：会话材料等未划分覆盖分组的附件，也允许用户就地替换自己上传的文件，
+            # 而不是硬性报错。用附件自身 id 作为唯一覆盖分组，避免与其它附件或新建冲突。
+            attachment.replace_group_key = f"attachment:{attachment.id}"
         if not payload.confirm_replace:
             raise ApiError(409, "attachment_replace_confirmation_required", "替换附件前需要确认。")
         replacement = require_uploaded_file(database, payload.file_id, user_id)

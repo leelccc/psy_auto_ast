@@ -20,8 +20,10 @@ from app.models import (
     SessionRecord,
     StoredFile,
 )
-from app.services.ai import DeterministicAIProvider
-from app.services.ai.report_prompts import ReportPromptSource, build_report_prompt
+from app.services.ai.report_prompts import (
+    ReportPromptSource,
+    get_report_prompt_spec,
+)
 from app.services.auth import utc_now
 from app.services.exports import render_docx, render_pdf
 from app.services.jobs import complete_job, create_job
@@ -245,13 +247,70 @@ def validate_selected_sources(
     for source in selected:
         item = available_map.get((source.resource_type, source.resource_id))
         if item is None:
-            raise ApiError(422, "report_source_unavailable", "所选资料不存在或不可用于生成。")
+            # 资料可能在打开选择弹窗后失效（录音超 14 天被销毁、附件被删除等）。
+            # 过去直接 422 拒绝，用户只看到报错且无法继续；改为跳过失效项、保留可用项。
+            continue
         result.append({
             "resource_type": source.resource_type,
             "resource_id": source.resource_id,
             "label": str(item["label"]),
         })
     return result
+
+
+def build_skeleton_report_blocks(
+    *,
+    database: Session,
+    report: Report,
+    selected: list[dict[str, str]],
+) -> dict[str, object]:
+    """生成「只填系统事实、专业内容留白」的草稿骨架。
+
+    咨询师反馈：段落里预填大量代写或指令式文字没有价值，还要逐段删改。
+    因此草稿只自动填入系统已确切掌握的信息（档案、次数、时间、形式、资料来源），
+    其余需要专业判断的段落一律留空，由咨询师本人填写。
+    """
+    profile = database.scalar(select(Profile).where(Profile.id == report.profile_id))
+    session = (
+        database.scalar(select(SessionRecord).where(SessionRecord.id == report.session_id))
+        if report.session_id
+        else None
+    )
+    spec = get_report_prompt_spec(report.report_type)
+    occurred = session.occurred_at if session is not None else None
+    if occurred is not None:
+        local_occurred = occurred.astimezone() if occurred.tzinfo else occurred
+        occurred_text = local_occurred.strftime("%Y-%m-%d %H:%M")
+    else:
+        occurred_text = "未设置"
+    mode_text = "未填写"
+    if session is not None:
+        mode_text = {"online": "线上", "offline": "线下"}.get(
+            (session.mode or "").lower(), session.mode or "未填写"
+        )
+    source_text = "、".join(str(item["label"]) for item in selected) or "本次所选资料"
+    facts = [
+        f"档案：{profile.name if profile else '未填写'}"
+        + (f"（编号 {profile.code}）" if profile and getattr(profile, "code", None) else ""),
+        f"次数：第 {session.sequence_no} 次" if session is not None else "次数：未关联咨询",
+        f"时间：{occurred_text}",
+        f"形式：{mode_text}",
+        f"记录类型：{spec.display_name}",
+        f"本次资料来源：{source_text}",
+    ]
+    blocks = [
+        {
+            "title": section.title,
+            "content": "\n".join(facts) if index == 0 else "",
+        }
+        for index, section in enumerate(spec.sections)
+    ]
+    return {
+        "blocks": blocks,
+        "title": report.title,
+        "generated_by": "system-skeleton",
+        "prompt_version": spec.version if hasattr(spec, "version") else None,
+    }
 
 
 def compact_json_content(value: Any) -> str:
@@ -492,6 +551,7 @@ def create_reports_router(storage: Storage) -> APIRouter:
         database: Annotated[Session, Depends(get_db)],
         profile_id: str | None = None,
         session_id: str | None = None,
+        exclude_report_id: str | None = None,
         x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
         if report_type not in REPORT_TYPES:
@@ -503,6 +563,8 @@ def create_reports_router(storage: Storage) -> APIRouter:
             user_id=user_id,
             raw_grant=x_profile_access_grant,
         )
+        # 重新生成时前端需传 exclude_report_id，保证这里返回的清单
+        # 与后端 regenerate 校验时使用的清单完全一致，避免选到自身导致 422。
         return {
             "items": list_sources(
                 database,
@@ -510,6 +572,7 @@ def create_reports_router(storage: Storage) -> APIRouter:
                 profile_id=profile_id,
                 session_id=session_id,
                 exclude_report_types={"case_report"} if report_type == "case_report" else None,
+                exclude_report_id=exclude_report_id,
             )
         }
 
@@ -565,18 +628,6 @@ def create_reports_router(storage: Storage) -> APIRouter:
             else None
         )
         title = report_title(payload.report_type, profile, session)
-        prompt = build_report_prompt(
-            report_type=payload.report_type,
-            title=title,
-            sources=prompt_sources(database, user_id=user_id, selected=selected),
-        )
-        provider = DeterministicAIProvider()
-        content = provider.generate_report(
-            report_type=payload.report_type,
-            title=title,
-            source_labels=[item["label"] for item in selected],
-            prompt=prompt,
-        )
         now = utc_now()
         report = existing or Report(
             id=str(uuid4()),
@@ -599,7 +650,12 @@ def create_reports_router(storage: Storage) -> APIRouter:
         if existing is None:
             database.add(report)
         report.title = title
-        report.draft_content = content
+        # 草稿只填系统事实、专业段落留白，避免预填大量代写或指令式文字。
+        report.draft_content = build_skeleton_report_blocks(
+            database=database,
+            report=report,
+            selected=selected,
+        )
         report.selected_sources = selected
         report.generation_status = "completed"
         report.updated_at = now
@@ -736,17 +792,17 @@ def create_reports_router(storage: Storage) -> APIRouter:
         )
         selected = validate_selected_sources(available, payload.selected_sources)
         if not selected:
-            raise ApiError(422, "report_sources_required", "请至少选择一项可用资料。")
-        prompt = build_report_prompt(
-            report_type=report.report_type,
-            title=report.title,
-            sources=prompt_sources(database, user_id=user_id, selected=selected),
-        )
-        report.draft_content = DeterministicAIProvider().generate_report(
-            report_type=report.report_type,
-            title=report.title,
-            source_labels=[item["label"] for item in selected],
-            prompt=prompt,
+            raise ApiError(
+                422,
+                "report_sources_required",
+                "所选资料已全部不可用（可能已超过 14 天保存期或被删除）。请在资料中选择其他可用项后重试。",
+            )
+        # 草稿只填系统事实、专业段落留白（与 /generate 保持一致）。
+        # 此前这里硬编码 DeterministicAIProvider，产出的是「请核对…」指令式文字。
+        report.draft_content = build_skeleton_report_blocks(
+            database=database,
+            report=report,
+            selected=selected,
         )
         report.selected_sources = selected
         report.updated_at = utc_now()

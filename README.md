@@ -10,6 +10,41 @@
 - MinIO 保存上传原文件、原始录音和后端生成的 PDF/DOCX 字节；前端只接收短期签名 URL。
 - 原始录音默认 14 天销毁且不能长期保存；转写、纪要、报告和附件需用户主动授权后才能长期保存。
 
+## 更新日志（Change Log）
+
+### 2026-08-29 · 问题0829 体验优化 + 部署规范固化
+
+前端（`apps/mobile/App.tsx` 等）：
+
+- **录音确认 (#1)**：新增实时音量条（expo-audio `metering`），保存成功提示「已写入云端归档队列」，确认确实在收音。
+- **重新生成常驻 (#2)**：录音纪要卡片「重新生成」改为常驻按钮，不再仅在内容为空时显示。
+- **章节速览 (#3)**：分章 prompt 约束按话题、单章 ≥60s、3–8 章；后端 `merge_short_chapters()` 兜底合并碎片章节。
+- **新增历程文案 (#5)**：档案详情 SectionHeader 的「新增记录」改为「新增历程」。
+- **卡片去冗余 (#6)**：咨询历程卡片移除「记录」按钮（三类档案统一）；底部主按钮按是否生成过咨询记录切换文案——未生成=`生成{类型}`、正式版=`查看{类型}`、草稿=`查看/编辑{类型}`。
+- **草稿/正式版真切换 (#8)**：编辑页分段控件真正加载对应版本内容（`onFormalChange` 加载对应报告对象）。
+- **默认内容精简 (#9)**：编辑页默认基本信息填系统真实数据、其余版块留空。
+- **PDF 系统预览 (#11)**：上传 PDF 支持「用其他应用打开」（`Linking.openURL`）。
+- **文件名截断 (#12)**：资料卡片/预览页文件名中间截断展示，预览页额外显示完整原名。
+- **图片空白修复 (#13)**：`filePreviewFrame` 补 `height:300`，修复大图预览空白过大。
+
+后端（`backend/app/...`）：
+
+- **record_status 派生 (#7 根因)**：`serialize_session` 不再读静态字段，改由真实报告派生 `record_status`；未生成过不再显示「查看/编辑咨询记录」，首次生成弹确认框。
+- **草稿重生成修复 (#10)**：选中资料含失效项时跳过而非 422；`generate/regenerate` 改走 `create_report_ai_provider()` 工厂（不再硬编码 Deterministic）；新增 `build_skeleton_report_blocks()` 生成默认骨架。
+- **generation-sources 对齐**：接口新增 `exclude_report_id` 参数，对齐前后端。
+
+部署约定（以后说「部署」= 三件事）：
+
+1. 服务器前端：`expo export --platform web` 产物覆盖 `/opt/psy_auto_ast/web`（卷挂载，`nginx -s reload`）。
+2. 服务器后端：`backend/` 同步后 `docker compose -f compose.prod.yaml up -d --build backend` 重建镜像。
+3. 安卓 APK：`assembleRelease` 打包并覆盖独立 `/apk/` 下载页（详见下方「生产部署 → 安卓 APK 下载页」）。
+
+### 2026-08-27 · 安卓 APK 本地构建 + 独立下载页 + 文档
+
+- 新增「本地 Gradle 构建安卓 Release APK」章节（JDK 17，`~67MB`，`debug.keystore` 签名可直接安装）。
+- 新增「安卓 APK 下载页（独立 `/apk/` 目录）」：compose 挂载 `./apk` + nginx `location /apk/`，与 `./web` 分离避免重发前端被冲掉。
+- `docs/production-deployment.md` 补充分发与回滚清单。
+
 ## 本地服务
 
 一键启动/停止当前项目（依赖服务、后端、前端）：
@@ -297,6 +332,170 @@ npx eas build --profile production --platform all
 ```
 
 App Store 和 Google Play 的正式签名仍需要项目所有者自己的 Apple Developer / Google Play 账号与证书。
+
+## 生产部署
+
+生产服务器：`47.96.89.215`（Ubuntu 24.04，Docker + compose v2），工作目录 `/opt/psy_auto_ast/`。完整上线前清单见 `docs/production-deployment.md`。下面是可直接照抄的「改完代码 → 上服务器」速查。
+
+### 服务器拓扑（现状）
+
+| 服务 | 来源 | 暴露端口 | 备注 |
+|---|---|---|---|
+| postgres | 镜像 `postgres:16-alpine` | 内部 5432 | 卷 `postgres_data` |
+| minio | 镜像 `minio/minio:latest` | `9000`（公网） | 卷 `minio_data`，`MINIO_ENDPOINT=47.96.89.215:9000` |
+| backend | **由服务器 `/opt/psy_auto_ast/backend` 构建镜像** | `8000` | 改代码必须重建镜像 |
+| web | `nginx:alpine` + 卷 `./web` | `80` | 静态站，直接覆盖目录 |
+
+两个关键事实决定了更新方式：
+
+- **backend 是镜像构建**：`compose.prod.yaml` 里 `build.context: ./backend`。所以后端代码改动要先同步到服务器 `/opt/psy_auto_ast/backend`，再 `docker compose up -d --build backend` 重建并重启；只改文件不重建不会生效。
+- **web 是卷挂载**：`./web → /usr/share/nginx/html:ro`。把 `expo export --platform web` 产物覆盖到 `/opt/psy_auto_ast/web` 即可，`nginx -s reload` 生效。
+- **nginx 已代理 API**：`nginx.conf` 中 `location /api/ { proxy_pass http://backend:8000; }`。因此 Web 端用同源地址 `http://47.96.89.215/api/v1`，浏览器不发跨域请求，**无需配 CORS**（CORS 只影响外部独立 Web 域名）。
+
+### 后端打包 + 部署
+
+本机（改完 `backend/` 后）：
+
+```bash
+cd <repo>
+# 1) 只打包改动的后端文件，保持 backend/ 相对路径
+tar -czf /tmp/backend_patch.tar.gz \
+  backend/app/core/config.py \
+  backend/app/services/ai/factory.py \
+  backend/app/services/ai/bailian.py \
+  backend/app/services/ai/deterministic.py \
+  backend/app/services/exports.py \
+  backend/app/api/routes/reports.py \
+  backend/app/api/routes/attachments.py
+
+# 2) 传到服务器 /tmp
+scp /tmp/backend_patch.tar.gz root@47.96.89.215:/tmp/
+```
+
+服务器（SSH 登录 root 后）：
+
+```bash
+cd /opt/psy_auto_ast
+tar -xzf /tmp/backend_patch.tar.gz          # 解压到 ./backend/...（保留原相对路径）
+rm -f /tmp/backend_patch.tar.gz
+docker compose -f compose.prod.yaml up -d --build backend   # 重建镜像 + 重启容器
+curl -s http://127.0.0.1:8000/api/v1/health  # 期望 {"status":"ok",...}
+```
+
+> 若新增了 Python 依赖，先改 `backend/requirements.txt` 一并打包；镜像构建会重装依赖（requirements 层命中缓存很快）。
+> 报告生成开关：`backend/.env` 中 `REPORT_AI_PROVIDER=bailian` 走真实百炼模型；`deterministic`（默认）走结构化草稿、免额度。当前生产已设为 `bailian`。
+
+### 浏览器（Web）打包 + 部署
+
+本机：
+
+```bash
+cd apps/mobile
+# 同源地址：走 nginx /api 代理，避免跨域
+EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1 \
+  npx expo export --platform web --output-dir dist
+
+cd dist
+tar -czf /tmp/web_dist.tar.gz .
+scp /tmp/web_dist.tar.gz root@47.96.89.215:/tmp/
+```
+
+服务器：
+
+```bash
+cd /opt/psy_auto_ast
+find web -mindepth 1 -delete             # 清空目录但保留 web 本身，避免 nginx 的 bind mount 失效（别用 rm -rf web && mkdir）
+tar -xzf /tmp/web_dist.tar.gz -C web
+find web -name '._*' -delete            # 清掉 macOS 资源 fork 残留
+docker exec psy-auto-ast-web-1 nginx -s reload
+# 若访问 / 出现 403，说明 bind mount 指向了旧目录，重启容器重新绑定：
+# docker restart psy-auto-ast-web-1
+```
+
+### 移动端（原生 App）打包
+
+#### 方式 A：本地 Gradle 构建安卓 Release APK（推荐，可全程本地完成）
+
+`android/` 已 prebuild，`AndroidManifest.xml` 含 `android:usesCleartextTraffic="true"`（连 `http://` 服务器不受限）。本机 Android SDK 已就绪，EAS CLI 未安装/未登录，**本地 Gradle 比 EAS 省事**。
+
+> ⚠️ JDK 必须用 **17**：RN 0.81 + Gradle 8.14 + AGP 9 不兼容默认的新版 JDK（java 25 会构建失败）。本机已装 Corretto 17，用它即可。
+
+```bash
+cd apps/mobile
+export JAVA_HOME=/Users/apple/Library/Java/JavaVirtualMachines/corretto-17.0.15/Contents/Home
+export ANDROID_HOME=/Users/apple/Library/Android/sdk
+export EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1     # 编译进包，装好即连公网
+export GRADLE_OPTS="-Xmx4096m -XX:MaxMetaspaceSize=1024m"
+cd android
+./gradlew assembleRelease
+# 产物：android/app/build/outputs/apk/release/app-release.apk（~67MB，debug.keystore 签名，可直接安装）
+```
+
+要点：
+- release 默认用 `debug.keystore` 签名（`signingConfigs.debug`），`assembleRelease` 直接出可安装包，无需自建发布密钥。
+- `EXPO_PUBLIC_API_BASE_URL` 在构建时写死进 JS bundle；**必须**指向 `http://47.96.89.215/api/v1`，否则装好会回退连 localhost。
+- 校验包内地址：`unzip -p app-release.apk assets/index.android.bundle | grep -c 47.96.89.215`（应 ≥1）。
+- 上架 Google Play 才需要自有发布密钥 + `eas submit` / 手动重签名，那步需你的开发者账号。
+
+#### 方式 B：EAS 云构建（需自有账号）
+
+```bash
+cd apps/mobile
+npx eas login                                              # 首次需 EAS 账号
+EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1 \
+  npx eas build --profile preview --platform android      # 安卓内测 APK
+# 双端生产构建（production = autoIncrement 版本号）
+EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1 \
+  npx eas build --profile production --platform all
+npx eas submit --profile production                        # 上架 App Store / Google Play
+```
+
+> 安卓 debug 包也可：`cd apps/mobile/android && ./gradlew assembleDebug` → `android/app/build/outputs/apk/debug/app-debug.apk`（仅自测）。
+
+### 安卓 APK 下载页（独立 `/apk/` 目录）
+
+把 APK 放在 Web 根目录的裸链接有个隐患：重发 Web 前端会清空整个 `./web` 目录，APK 和页面会被一起冲掉。因此下载页与 APK 放在**与 `./web` 分离的 `/apk/` 目录**。
+
+服务器结构（`compose.prod.yaml` 已含该挂载，`nginx.conf` 已含路由）：
+
+```yaml
+# compose.prod.yaml · web 服务新增挂载
+volumes:
+  - ./web:/usr/share/nginx/html:ro
+  - ./apk:/opt/psy_auto_ast/apk:ro     # 下载页 + APK，独立于 web
+```
+
+```nginx
+# nginx.conf
+location /apk/ {
+  alias /opt/psy_auto_ast/apk/;
+  try_files $uri $uri/ =404;
+}
+```
+
+- 下载页：`http://47.96.89.215/apk/`（陶土色品牌落地页，含「下载安卓 APK」按钮 + 安装说明）。
+- APK 直链：`http://47.96.89.215/apk/app-release.apk`（支持断点续传，完整 67MB）。
+
+**更新 APK 版本（只动 apk 目录，不碰 web）**：
+
+```bash
+# 1) 本机重新打包（见上方「方式 A」），得到新的 app-release.apk
+# 2) 覆盖到服务器的 /apk/：
+scp android/app/build/outputs/apk/release/app-release.apk root@47.96.89.215:/opt/psy_auto_ast/apk/
+# 无需重启容器，落地页（index.html）不变。重发 Web 前端也不会影响下载页。
+```
+
+> 首次搭建该目录时需在服务器建 `/opt/psy_auto_ast/apk/`，放入 `app-release.apk` + `index.html` 落地页，再 `docker compose -f compose.prod.yaml up -d web` 让新挂载与 nginx 路由生效。
+
+### 回滚
+
+```bash
+cd /opt/psy_auto_ast
+# 代码回滚：先 scp 旧文件覆盖 ./backend，再重建
+docker compose -f compose.prod.yaml up -d --build backend
+# 或仅重启当前镜像
+docker compose -f compose.prod.yaml restart backend
+```
 
 ## MVP 范围
 

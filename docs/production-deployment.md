@@ -3,6 +3,8 @@
 > 适用范围：当前仓库的 `backend/`（FastAPI + PostgreSQL + 私有 MinIO）与 `apps/mobile/`（Expo iOS / Android / Web）。
 > 目标：把 MVP 从本机开发态推进到可对外服务的生产态。
 > 文档基于仓库现状编写，凡涉及改代码的位置都标注了文件路径。
+>
+> 📌 **改完代码怎么上服务器（可照抄的命令）**：见仓库根 `README.md` 的「生产部署」章节。本文件侧重上线前清单、架构与配置约定；README 的「生产部署」是实际操作手册，二者以 README 为准。当前生产服务器 `47.96.89.215` 已落地：backend 走镜像构建、web 走 nginx 卷挂载、nginx 已代理 `/api` → backend。
 
 ---
 
@@ -137,8 +139,12 @@ BAILIAN_TIMEOUT_SECONDS=120
 BAILIAN_POLL_INTERVAL_SECONDS=1
 BAILIAN_MAX_POLL_ATTEMPTS=120
 
-# CORS（仅 Web 端需要）
+# CORS（仅 Web 端需要；本服务器 Web 走 nginx 同源代理，实际不需要放通）
 CORS_ALLOW_ORIGINS=https://web.yourdomain.com
+
+# 报告生成（Q6 修复）：bailian=真实百炼模型；deterministic=结构化草稿（默认，免额度）
+REPORT_AI_PROVIDER=bailian
+BAILIAN_REPORT_MODEL=qwen-plus
 ```
 
 > 注意大小写：`config.py` 字段为 `database_url` / `jwt_secret_key` / `minio_secure`，但 pydantic-settings 大小写不敏感，`DATABASE_URL` / `JWT_SECRET_KEY` / `MINIO_SECURE` 均可正确映射。
@@ -184,6 +190,9 @@ cd apps/mobile
 export EXPO_PUBLIC_API_BASE_URL=https://api.yourdomain.com/api/v1
 ```
 
+> 当前服务器 `47.96.89.215` 用 nginx 把 `/api/` 反代到 backend，Web 端与 API **同源**，所以 Web 构建直接填：
+> `EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1`（无需 HTTPS 域名、不触发 CORS）。移动端原生 App 同样填这个地址即可连上后端。
+
 ### 3.2 EAS 生产构建
 `apps/mobile/eas.json` 已有 `production` / `preview` profile：
 
@@ -216,6 +225,7 @@ EXPO_PUBLIC_API_BASE_URL=https://api.yourdomain.com/api/v1 \
 # 把 dist/ 部署到静态托管 / 反向代理的 / 路径
 ```
 > Web 端才受 CORS 限制，务必保证 §2.1 的 `CORS_ALLOW_ORIGINS` 包含 Web 域名。
+> **本服务器特例**：nginx 已 `location /api/ { proxy_pass http://backend:8000; }`，Web 用同源 `http://47.96.89.215/api/v1` 时浏览器不发跨域请求，故不需要在 `CORS_ALLOW_ORIGINS` 加 Web 域名。仅当 Web 改用独立域名（如 `https://web.yourdomain.com`）时才需放通 CORS 并重建 backend。
 
 ---
 
@@ -245,10 +255,10 @@ EXPO_PUBLIC_API_BASE_URL=https://api.yourdomain.com/api/v1 \
 
 | 风险 | 说明 | 建议 |
 |---|---|---|
-| CORS 硬编码 | `main.py` 仅放通开发域名，Web 生产会被拦 | §2.1 改为环境变量（阻塞 Web 上线） |
-| 无多 worker | 仅 `uvicorn`，单进程 | §2.3 加 `gunicorn` |
-| 后端无容器 | compose 只有 DB/MinIO | §2.3 Dockerfile + compose 服务 |
-| MinIO 公网 | `minio_url` 模式需能被阿里云拉取 | 配公网 HTTPS + `minio_secure=true` |
+| CORS 硬编码 | 已改为读取 `CORS_ALLOW_ORIGINS` 环境变量（§2.1 已落地） | ✅ 已解决；本服务器 Web 走 nginx 同源代理，生产无需额外放通 |
+| 无多 worker | 已用 `gunicorn -w 2`（compose `command`）/ `-w 4`（Dockerfile `CMD`） | ✅ 已解决 |
+| 后端无容器 | 已有 `backend/Dockerfile` + compose `backend` 服务（镜像构建自 `./backend`） | ✅ 已解决 |
+| MinIO 公网 | 当前服务器用 `RECORDING_AUDIO_INPUT_MODE=base64`（后端读 MinIO 字节转 base64 送 ASR），MinIO 只需后端容器可达，不强制公网 HTTPS；仅切 `minio_url`（长录音异步 fun-asr）才需公网 HTTPS + `minio_secure=true` | 现状可用；长录音异步化时再配公网 HTTPS |
 | 长录音阻塞请求 | 请求内完成 ASR/纪要 | 后续抽独立 Worker + 队列 |
 | Android 仅模拟器验证 | 此前未打 APK（Google Maven TLS 失败） | EAS 云端构建规避本机 Gradle 问题 |
 | 演示账号弱密码 | 开发默认 `123456` | 上线前改/删 |

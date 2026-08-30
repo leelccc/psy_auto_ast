@@ -8,6 +8,7 @@ export type DownloadArtifact = {
   mimeType: string;
   content: string;
   title: string;
+  sections?: DownloadSection[];
 };
 
 const fileTypes: Record<string, { extension: string; mimeType: string }> = {
@@ -40,6 +41,7 @@ export function buildDownloadArtifact(input: {
     mimeType: type.mimeType,
     content,
     title: input.title,
+    sections: input.sections,
   };
 }
 
@@ -129,4 +131,77 @@ export function scheduleDownload(artifact: DownloadArtifact): void {
       // Some embedded browsers intentionally block downloads; the UI remains usable.
     }
   }, 0);
+}
+
+/**
+ * 录音纪要 PDF 下载（跨平台）。
+ * - Web：沿用已有 jspdf + canvas 流程。
+ * - 原生：用 jspdf 文本 API 生成真实 PDF 并保存到本机“下载”目录（弹出系统分享）；
+ *   若 jspdf 在原生端不可用，则兜底保存为带格式的 .txt，保证下载真正发生。
+ */
+export async function downloadSummaryPdf(artifact: DownloadArtifact): Promise<string> {
+  if (typeof document !== "undefined" && typeof Blob !== "undefined") {
+    await triggerDownload(artifact);
+    return artifact.filename;
+  }
+
+  const baseName = artifact.filename.replace(/\.pdf$/i, "");
+  const sections = artifact.sections ?? [];
+  let payload: Uint8Array | string = sections.length > 0
+    ? sections.map((section) => `${section.title}\n${"-".repeat(section.title.length)}\n${section.content}`).join("\n\n")
+    : artifact.content;
+  let mimeType = "text/plain;charset=utf-8";
+  let extension = "txt";
+
+  try {
+    const { jsPDF } = await import("jspdf");
+    const pdf = new jsPDF({ unit: "pt", format: "a4" });
+    const margin = 48;
+    const maxWidth = pdf.internal.pageSize.getWidth() - margin * 2;
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    let y = margin;
+    pdf.setFontSize(15);
+    pdf.text(artifact.title, margin, y);
+    y += 24;
+    pdf.setFontSize(11);
+    for (const section of sections) {
+      if (y > pageHeight - margin) {
+        pdf.addPage();
+        y = margin;
+      }
+      pdf.text(section.title, margin, y);
+      y += 16;
+      const lines = pdf.splitTextToSize(section.content, maxWidth) as unknown as string[];
+      for (const line of lines) {
+        if (y > pageHeight - margin) {
+          pdf.addPage();
+          y = margin;
+        }
+        pdf.text(line, margin, y);
+        y += 14;
+      }
+      y += 8;
+    }
+    payload = new Uint8Array(pdf.output("arraybuffer") as ArrayBuffer);
+    mimeType = "application/pdf";
+    extension = "pdf";
+  } catch {
+    // 原生端 jspdf 不可用时，保持文本兜底
+  }
+
+  const [{ Directory, File, Paths }, sharing] = await Promise.all([
+    import("expo-file-system"),
+    import("expo-sharing"),
+  ]);
+  const downloads = new Directory(Paths.document, "downloads");
+  downloads.create({ idempotent: true, intermediates: true });
+  const destination = new File(downloads, `${baseName}.${extension}`);
+  destination.write(payload);
+  if (await sharing.isAvailableAsync()) {
+    await sharing.shareAsync(destination.uri, {
+      mimeType,
+      dialogTitle: `分享 ${artifact.title}`,
+    });
+  }
+  return destination.uri;
 }

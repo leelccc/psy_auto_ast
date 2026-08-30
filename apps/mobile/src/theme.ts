@@ -16,10 +16,10 @@ export const colors = {
 };
 
 export const radius = {
-  sm: 8,
-  md: 12,
-  lg: 18,
-  xl: 24,
+  sm: 12,
+  md: 16,
+  lg: 22,
+  xl: 30,
   pill: 999,
 };
 
@@ -37,5 +37,12 @@ export const shadow = {
     shadowRadius: 24,
     shadowOffset: { width: 0, height: -6 },
     elevation: 12,
+  },
+  card: {
+    shadowColor: "rgba(99, 71, 50, 0.10)",
+    shadowOpacity: 0.10,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
 };
