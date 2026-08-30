@@ -171,7 +171,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0830-5";
+const BUILD_TAG = "0830-6";
 
 type QuickView =
   | "overview"
@@ -7450,8 +7450,6 @@ function SessionCard({
           activeOpacity={0.8}
           style={styles.sessionGenerateButton}
           onPress={() => {
-            // 诊断探针：点击先弹 toast，用于区分「触摸没送达」与「跳转失败」
-            onNotice("已触发生成", `即将打开「${recordActionLabel}」页（构建 0830-5）`);
             if (opening) return;
             setOpening(true);
             onOpenRecord();
