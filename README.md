@@ -12,6 +12,14 @@
 
 ## 更新日志（Change Log）
 
+### 2026-08-30 · 问题0830-1 安卓首次生成咨询记录不弹确认框
+
+前端（`apps/mobile/App.tsx`）：
+
+- **确认框置顶修复**：首次生成咨询记录的确认框（`ReportGenerationConfirm`）原先用 `absoluteFillObject + zIndex` 覆盖层渲染——浏览器端正常，但 Android 端因层级/安全区裁剪未置顶显示，表现为「点了生成咨询记录没弹框」。改为 RN 官方 `<Modal transparent animationType="fade">` 包裹（含 `onRequestClose` 处理返回键取消），Android/iOS/web 均可靠置顶弹出。整条调用链（`SessionCard → openSessionRecord → reportService.list → setPendingReportGeneration`）平台无关，APK 已含修复代码，根因是渲染层级而非逻辑。
+
+部署：web 重新 `expo export` 覆盖 `/opt/psy_auto_ast/web`；APK 重新 `assembleRelease` 覆盖 `/opt/psy_auto_ast/apk/`，用户重装后验证。
+
 ### 2026-08-29 · 问题0829 体验优化 + 部署规范固化
 
 前端（`apps/mobile/App.tsx` 等）：

@@ -2178,16 +2178,25 @@ export default function App() {
             }}
           />
         ) : null}
-        {pendingReportGeneration ? (
-          <ReportGenerationConfirm
-            pending={pendingReportGeneration}
-            busy={reportGenerationBusy}
-            onCancel={() => {
-              if (!reportGenerationBusy) setPendingReportGeneration(null);
-            }}
-            onConfirm={() => void confirmReportGeneration()}
-          />
-        ) : null}
+        <Modal
+          transparent
+          visible={pendingReportGeneration !== null}
+          animationType="fade"
+          onRequestClose={() => {
+            if (!reportGenerationBusy) setPendingReportGeneration(null);
+          }}
+        >
+          {pendingReportGeneration ? (
+            <ReportGenerationConfirm
+              pending={pendingReportGeneration}
+              busy={reportGenerationBusy}
+              onCancel={() => {
+                if (!reportGenerationBusy) setPendingReportGeneration(null);
+              }}
+              onConfirm={() => void confirmReportGeneration()}
+            />
+          ) : null}
+        </Modal>
         {notice ? <ActionNotice notice={notice} onClose={() => setNotice(null)} /> : null}
       </View>
       </SafeAreaView>
