@@ -189,6 +189,7 @@ type QuickView =
   | "caseReportEditor"
   | "privacyCenter"
   | "profilePrivacy"
+  | "reportGeneration"
   | "articleDetail"
   | "statistics"
   | "schedule"
@@ -203,6 +204,7 @@ type PendingReportGeneration = {
   reportId?: string;
   recordType: string;
   sources: ReportSource[];
+  loading?: boolean;
 };
 type ArchiveResult = ReturnType<typeof buildArchiveResult> & {
   profileStatus?: string;
@@ -936,42 +938,23 @@ export default function App() {
   };
   const openSessionRecord = async (sessionId: string, returnView: QuickView) => {
     const reportType = getReportType(activeProfile.kindLabel);
-    try {
-      setActiveSessionId(sessionId);
-      const session = sessionHistory.find((item) => item.id === sessionId);
-      const recordType = getRecordType(activeProfile.kindLabel);
-      setActiveRecordLabel(session ? `第 ${session.sequence} 次${recordType}` : activeProfile.recordLabel);
-      setRecordEditorReturn(returnView);
-      const report = (await reportService.list({ sessionId, reportType }))[0];
-      if (!report) {
-        const sources = await reportService.generationSources({
-          reportType,
-          profileId: activeProfileId,
-          sessionId,
-        });
-        const selected = defaultReportSources(sources);
-        if (selected.length === 0) {
-          showNotice("暂无可用资料", "请先上传或生成录音、量表、作业等资料后再生成记录草稿。");
-          return;
-        }
-        setPendingReportGeneration({
-          mode: "create",
-          sessionId,
-          returnView,
-          reportType,
-          recordType,
-          sources: selected,
-        });
-        return;
-      }
-      openReportEditor(report, sessionId, returnView);
-      // 同步会话卡片的“记录”状态，避免生成后卡片仍显示“待生成”
-      setSessionHistory((current) => current.map((session) => (
-        session.id === sessionId ? { ...session, record: report.formalSavedAt ? "正式版" : "草稿" } : session
-      )));
-    } catch (error) {
-      showNotice("记录加载失败", errorMessage(error));
-    }
+    const session = sessionHistory.find((item) => item.id === sessionId);
+    const recordType = getRecordType(activeProfile.kindLabel);
+    setActiveSessionId(sessionId);
+    setActiveRecordLabel(session ? `第 ${session.sequence} 次${recordType}` : activeProfile.recordLabel);
+    setRecordEditorReturn(returnView);
+    // 立即进入生成页，请求在页面内完成（页面显示「正在读取可用资料」）。
+    // 过去要先 await 两个请求才决定是否弹层，网络慢时表现为「点了没反应」。
+    setPendingReportGeneration({
+      mode: "create",
+      sessionId,
+      returnView,
+      reportType,
+      recordType,
+      sources: [],
+      loading: true,
+    });
+    setQuickView("reportGeneration");
   };
   const confirmReportGeneration = async () => {
     if (!pendingReportGeneration || reportGenerationBusy) return;
@@ -1013,6 +996,56 @@ export default function App() {
       setReportGenerationBusy(false);
     }
   };
+  // 生成页的资料在页面内加载：点击「生成咨询记录」后立刻跳转，
+  // 由页面展示「正在读取可用资料」，避免等待请求时看起来没反应。
+  useEffect(() => {
+    if (quickView !== "reportGeneration" || !pendingReportGeneration?.loading) return;
+    let active = true;
+    const pending = pendingReportGeneration;
+    void (async () => {
+      try {
+        if (pending.mode === "create") {
+          const report = (await reportService.list({
+            sessionId: pending.sessionId,
+            reportType: pending.reportType,
+          }))[0];
+          if (!active) return;
+          if (report) {
+            setPendingReportGeneration(null);
+            openReportEditor(report, pending.sessionId, pending.returnView);
+            // 同步会话卡片的“记录”状态，避免生成后卡片仍显示“待生成”
+            setSessionHistory((current) => current.map((session) => (
+              session.id === pending.sessionId
+                ? { ...session, record: report.formalSavedAt ? "正式版" : "草稿" }
+                : session
+            )));
+            return;
+          }
+        }
+        const sources = await reportService.generationSources({
+          reportType: pending.reportType,
+          profileId: activeProfileId,
+          sessionId: pending.sessionId,
+        });
+        if (!active) return;
+        const selected = defaultReportSources(sources, pending.reportId);
+        setPendingReportGeneration((current) => (
+          current && current.sessionId === pending.sessionId && current.mode === pending.mode
+            ? { ...current, sources: selected, loading: false }
+            : current
+        ));
+      } catch (error) {
+        if (!active) return;
+        showNotice("资料读取失败", errorMessage(error));
+        setPendingReportGeneration(null);
+        setQuickView(pending.returnView);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [activeProfileId, pendingReportGeneration, quickView]);
+
   const openPrivacy = (returnView: QuickView) => {
     setPrivacyReturn({ quickView: returnView, tab });
     setQuickView("privacyCenter");
@@ -1090,6 +1123,13 @@ export default function App() {
     return { picked, stored: completed };
   };
   const handleBack = () => {
+    if (quickView === "reportGeneration") {
+      if (reportGenerationBusy) return;
+      const returnView = pendingReportGeneration?.returnView ?? "profileDetail";
+      setPendingReportGeneration(null);
+      setQuickView(returnView);
+      return;
+    }
     if (quickView === "recordEditor") {
       setQuickView(recordEditorReturn);
       return;
@@ -1323,6 +1363,9 @@ export default function App() {
     if (quickView === "caseReportEditor") return "个案报告编辑";
     if (quickView === "privacyCenter") return "数据与隐私";
     if (quickView === "profilePrivacy") return "档案隐私";
+    if (quickView === "reportGeneration") {
+      return pendingReportGeneration?.mode === "regenerate" ? "重新生成草稿" : "生成记录草稿";
+    }
     if (quickView === "articleDetail") return "资讯详情";
     if (quickView === "statistics") return "累计统计";
     if (quickView === "schedule") return "日程";
@@ -1331,7 +1374,7 @@ export default function App() {
     if (tab === "recordings") return "资讯";
     if (tab === "account") return "我的";
     return "今天要做什么";
-  }, [activeMaterialCategory, activeProfile.kindLabel, quickView, tab]);
+  }, [activeMaterialCategory, activeProfile.kindLabel, pendingReportGeneration?.mode, quickView, tab]);
   const hideBottomTabs = [
     "recording",
     "archive",
@@ -1348,6 +1391,7 @@ export default function App() {
     "caseReportEditor",
     "privacyCenter",
     "profilePrivacy",
+    "reportGeneration",
     "articleDetail",
     "statistics",
     "schedule",
@@ -2056,16 +2100,6 @@ export default function App() {
             onRegenerateDraft={async () => {
               if (!activeRecordReportId || !activeSessionId) return;
               const reportType = getReportType(activeProfile.kindLabel);
-              const sources = await reportService.generationSources({
-                reportType,
-                profileId: activeProfileId,
-                sessionId: activeSessionId,
-              });
-              const selected = defaultReportSources(sources, activeRecordReportId);
-              if (selected.length === 0) {
-                showNotice("暂无可用资料", "请先上传或生成录音、量表、作业等资料后再重新生成。");
-                return;
-              }
               setPendingReportGeneration({
                 mode: "regenerate",
                 sessionId: activeSessionId,
@@ -2073,8 +2107,10 @@ export default function App() {
                 reportType,
                 reportId: activeRecordReportId,
                 recordType: getRecordType(activeProfile.kindLabel),
-                sources: selected,
+                sources: [],
+                loading: true,
               });
+              setQuickView("reportGeneration");
             }}
             onDownload={async () => {
               if (!activeRecordReportId) return;
@@ -2170,6 +2206,19 @@ export default function App() {
               onNotice={showNotice}
             />
           ) : null}
+          {quickView === "reportGeneration" && pendingReportGeneration ? (
+            <ReportGenerationScreen
+              pending={pendingReportGeneration}
+              busy={reportGenerationBusy}
+              onCancel={() => {
+                if (reportGenerationBusy) return;
+                const returnView = pendingReportGeneration.returnView;
+                setPendingReportGeneration(null);
+                setQuickView(returnView);
+              }}
+              onConfirm={() => void confirmReportGeneration()}
+            />
+          ) : null}
           {quickView === "articleDetail" ? <ArticleDetailScreen article={activeArticle} /> : null}
           {quickView === "statistics" ? <StatisticsScreen durationStats={recordingDurationStats} /> : null}
           {quickView === "schedule" ? <ScheduleScreen onStartRecording={() => setQuickView("recording")} onNotice={showNotice} /> : null}
@@ -2253,25 +2302,6 @@ export default function App() {
             }}
           />
         ) : null}
-        <Modal
-          transparent
-          visible={pendingReportGeneration !== null}
-          animationType="fade"
-          onRequestClose={() => {
-            if (!reportGenerationBusy) setPendingReportGeneration(null);
-          }}
-        >
-          {pendingReportGeneration ? (
-            <ReportGenerationConfirm
-              pending={pendingReportGeneration}
-              busy={reportGenerationBusy}
-              onCancel={() => {
-                if (!reportGenerationBusy) setPendingReportGeneration(null);
-              }}
-              onConfirm={() => void confirmReportGeneration()}
-            />
-          ) : null}
-        </Modal>
         {notice ? <ActionNotice notice={notice} onClose={() => setNotice(null)} /> : null}
       </View>
       </SafeAreaView>
@@ -7060,7 +7090,7 @@ function QuickAction({ icon: Icon, label, detail, onPress }: { icon: typeof Mic;
   );
 }
 
-function ReportGenerationConfirm({
+function ReportGenerationScreen({
   pending,
   busy,
   onCancel,
@@ -7075,33 +7105,67 @@ function ReportGenerationConfirm({
   const title = pending.mode === "create"
     ? `生成${pending.recordType}草稿`
     : `重新生成${pending.recordType}草稿`;
-  return (
-    <View style={styles.confirmOverlay}>
-      <View style={styles.confirmCard}>
-        <View style={styles.confirmHeader}>
-          <FileText size={20} color={colors.clayDark} />
-          <Text style={styles.confirmTitle}>{title}</Text>
-        </View>
-        <Text style={styles.confirmCopy}>
-          将根据以下资料生成草稿{pending.mode === "regenerate" ? "，并覆盖当前草稿；正式版不会被覆盖。" : "。"}
-        </Text>
-        <Text style={styles.confirmMeta}>资料类型：{groups.join("、")}</Text>
-        <ScrollView style={styles.confirmSourceScroll} contentContainerStyle={styles.confirmSourceList}>
-          {pending.sources.map((source) => (
-            <Text key={`${source.resourceType}:${source.resourceId}`} style={styles.confirmSourceItem}>
-              {source.label}
-            </Text>
-          ))}
-        </ScrollView>
-        <View style={styles.confirmActions}>
-          <TouchableOpacity style={styles.confirmCancelButton} activeOpacity={0.75} onPress={onCancel} disabled={busy}>
-            <Text style={styles.confirmCancelText}>取消</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.confirmPrimaryButton, busy && styles.confirmPrimaryButtonDisabled]} activeOpacity={0.75} onPress={onConfirm} disabled={busy}>
-            <Text style={styles.confirmPrimaryText}>{busy ? "正在生成..." : "确认生成"}</Text>
-          </TouchableOpacity>
+  const hasSources = pending.sources.length > 0;
+  if (pending.loading) {
+    return (
+      <View style={styles.stack}>
+        <View style={styles.emptySearchCard}>
+          <Clock3 size={20} color={colors.subtle} />
+          <Text style={styles.emptySearchTitle}>正在读取可用资料</Text>
+          <Text style={styles.emptySearchCopy}>正在确认本次历程可用于生成的录音、纪要、量表与作业。</Text>
         </View>
       </View>
+    );
+  }
+  return (
+    <View style={styles.stack}>
+      <View style={styles.noticeCard}>
+        <FileText size={23} color={colors.clayDark} />
+        <View style={styles.listBody}>
+          <Text style={styles.listTitle}>{title}</Text>
+          <Text style={styles.listMeta}>
+            {pending.mode === "regenerate"
+              ? "将覆盖当前草稿；已保存的正式版不会被覆盖。"
+              : "生成后可在编辑页修改并保存为正式版。"}
+          </Text>
+        </View>
+      </View>
+
+      {hasSources ? (
+        <>
+          <SectionHeader title="将依据以下资料" action={`${pending.sources.length} 项`} />
+          <Text style={styles.confirmMeta}>资料类型：{groups.join("、")}</Text>
+          <View style={styles.cardStack}>
+            {pending.sources.map((source) => (
+              <View key={`${source.resourceType}:${source.resourceId}`} style={styles.recordingCard}>
+                <View style={styles.recordingIcon}>
+                  <FileText size={20} color={colors.clayDark} />
+                </View>
+                <View style={styles.listBody}>
+                  <Text style={styles.listTitle}>{truncateMiddle(source.label)}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+          <PrimaryButton
+            icon={Sparkles}
+            label={busy ? "正在生成..." : "确认生成"}
+            onPress={onConfirm}
+            wide
+            disabled={busy}
+          />
+        </>
+      ) : (
+        <View style={styles.emptySearchCard}>
+          <CircleAlert size={20} color={colors.danger} />
+          <Text style={styles.emptySearchTitle}>暂无可用资料</Text>
+          <Text style={styles.emptySearchCopy}>
+            生成{pending.recordType}需要录音转写、纪要、量表、作业等资料。请先在本次历程中归档录音或上传资料，再回来生成。
+          </Text>
+        </View>
+      )}
+
+      <GhostButton icon={X} label={hasSources ? "取消" : "返回"} onPress={onCancel} />
     </View>
   );
 }
