@@ -86,7 +86,14 @@ import { createProfileService } from "./src/api/profileService";
 import { createRecordingService, type Recording, type RecordingDurationStatistics } from "./src/api/recordingService";
 import { createJobService, type AIJob } from "./src/api/jobService";
 import { createReportService, type Report, type ReportSource } from "./src/api/reportService";
-import { createPrivacyService, type SensitiveResource } from "./src/api/privacyService";
+import {
+  createPrivacyService,
+  type ExpiringByProfileItem,
+  type PrivacyCategoryKey,
+  type PrivacyResourceItem,
+  type ProfilePrivacyPage,
+  type SensitiveResource,
+} from "./src/api/privacyService";
 import { createCalendarService, type CalendarEvent } from "./src/api/calendarService";
 import { createSupervisionService, type SupervisionConversation } from "./src/api/supervisionService";
 import { createSessionService } from "./src/api/sessionService";
@@ -181,6 +188,7 @@ type QuickView =
   | "caseReportSelect"
   | "caseReportEditor"
   | "privacyCenter"
+  | "profilePrivacy"
   | "articleDetail"
   | "statistics"
   | "schedule"
@@ -205,6 +213,11 @@ type ArchiveResult = ReturnType<typeof buildArchiveResult> & {
   sessionCount?: number;
   initialSessionCount?: number;
   latestSequence?: number;
+  recordingId?: string;
+  sessionId?: string;
+  profileId?: string;
+  profileCode?: string;
+  profileNotes?: string;
 };
 type ProfileCreateInput = {
   kind: ArchiveKind;
@@ -595,6 +608,7 @@ export default function App() {
   const profileDataRequestId = useRef(0);
   const recordingDetailRequestId = useRef(0);
   const [pendingProfile, setPendingProfile] = useState<ProfileListItem | null>(null);
+  const [pendingProfileDestination, setPendingProfileDestination] = useState<QuickView>("profileDetail");
   const [pendingRecordingAfterUnlock, setPendingRecordingAfterUnlock] = useState<RecordingItem | null>(null);
   const [pendingRecordingReturn, setPendingRecordingReturn] = useState<QuickView>("recordingRecords");
   const [profilePasswordSet, setProfilePasswordSet] = useState(false);
@@ -793,6 +807,8 @@ export default function App() {
       sessionCount: profile.sessionCount,
       initialSessionCount: profile.initialSessionCount,
       latestSequence: profile.latestSequence,
+      profileCode: profile.displayCode,
+      profileNotes: profile.notes,
     });
     void loadProfileData(profile.id);
   };
@@ -858,17 +874,18 @@ export default function App() {
       showNotice("录音内容加载失败", errorMessage(error));
     }
   };
-  const openProfile = async (profile: ProfileListItem) => {
+  const openProfile = async (profile: ProfileListItem, destination: QuickView = "profileDetail") => {
     try {
       const kind = archiveKindForProfile(profile);
       if (profileAccessService.hasActiveGrant(kind)) {
         setUnlockedProfileId(profile.id);
         selectProfile(profile);
-        setQuickView("profileDetail");
+        setQuickView(destination);
         return;
       }
       const statuses = await profileAccessService.statuses();
       setPendingProfile(profile);
+      setPendingProfileDestination(destination);
       setPendingRecordingAfterUnlock(null);
       setProfilePasswordSet(statuses.items.find((item) => item.profile_type === kind)?.is_set ?? false);
       setProfileAccessGrantMinutes(statuses.grantMinutes);
@@ -1305,6 +1322,7 @@ export default function App() {
     if (quickView === "caseReportSelect") return "生成个案报告";
     if (quickView === "caseReportEditor") return "个案报告编辑";
     if (quickView === "privacyCenter") return "数据与隐私";
+    if (quickView === "profilePrivacy") return "档案隐私";
     if (quickView === "articleDetail") return "资讯详情";
     if (quickView === "statistics") return "累计统计";
     if (quickView === "schedule") return "日程";
@@ -1329,6 +1347,7 @@ export default function App() {
     "caseReportSelect",
     "caseReportEditor",
     "privacyCenter",
+    "profilePrivacy",
     "articleDetail",
     "statistics",
     "schedule",
@@ -1491,7 +1510,10 @@ export default function App() {
                   createSession: { summary: input.note },
                 },
               );
-              await runRecordingProcessing(archiveRecordingId, false);
+              // 转写与纪要在后端异步处理，这里刻意不 await：
+              // 过去要等整条 AI 流水线跑完才跳转，点击「归档到 XXX」要卡几十秒。
+              // 归档完成页会轮询真实状态，处理进度对用户仍然可见。
+              void runRecordingProcessing(archiveRecordingId, false).catch(() => undefined);
               await loadProfiles();
               const profileName = input.newProfileName
                 ?? profileItems.find((item) => item.id === archived.profile_id)?.name
@@ -1510,6 +1532,9 @@ export default function App() {
                 profileName,
                 kindLabel,
                 recordLabel: `第 ${archived.sequence_no} 次${recordNoun}`,
+                recordingId: archiveRecordingId,
+                sessionId: archived.session_id,
+                profileId: archived.profile_id,
               };
             }}
             onComplete={(result) => {
@@ -1555,7 +1580,7 @@ export default function App() {
                     setQuickView("recordingDetail");
                   } else {
                     setPendingProfile(null);
-                    setQuickView("profileDetail");
+                    setQuickView(pendingProfileDestination);
                   }
                 } catch (error) {
                   showNotice("档案验证失败", errorMessage(error));
@@ -1587,6 +1612,17 @@ export default function App() {
                   showNotice("咨询频率已更新", "档案卡片已同步。");
                 } catch (error) {
                   showNotice("频率保存失败", errorMessage(error));
+                  throw error;
+                }
+              }}
+              onUpdateDetails={async (patch) => {
+                try {
+                  const updated = await profileService.update(activeProfileId, patch);
+                  setProfileItems((current) => current.map((item) => item.id === updated.id ? updated : item));
+                  selectProfile(updated);
+                  showNotice("基本信息已更新", "档案详情与档案卡片已同步。");
+                } catch (error) {
+                  showNotice("基本信息保存失败", errorMessage(error));
                   throw error;
                 }
               }}
@@ -1690,6 +1726,7 @@ export default function App() {
                 source: "legal",
                 file: attachment.file,
               }, "profileDetail")}
+              onOpenPrivacy={() => setQuickView("profilePrivacy")}
               onNotice={showNotice}
             />
           ) : null}
@@ -1875,6 +1912,29 @@ export default function App() {
                   showNotice("资料上传失败", errorMessage(error));
                 }
               }}
+              onSelectUnarchived={async (recordingId) => {
+                try {
+                  await recordingService.archive(recordingId, {
+                    profileType: archiveKindForLabel(activeProfile.kindLabel),
+                    profileId: activeProfileId,
+                    sessionId: activeSessionId,
+                  });
+                  void recordingService.process(recordingId, "archived_context").catch(() => undefined);
+                  const response = await recordingService.list({ pageSize: 100 });
+                  const recordingRows = response.items.map(mapRecordingItem);
+                  setRecordingItems(recordingRows);
+                  await loadProfileData(activeProfileId, recordingRows);
+                  showNotice("录音已归入本次记录", "转写和纪要正在后台生成，可在录音记录中查看进度。");
+                  const archivedRecording = recordingRows.find((item) => item.id === recordingId);
+                  if (archivedRecording) {
+                    await openRecording(archivedRecording);
+                  }
+                } catch (error) {
+                  showNotice("录音归档失败", errorMessage(error));
+                  throw error;
+                }
+              }}
+              onStartRecording={() => setQuickView("recording")}
               onAuthorize={() => openPrivacy("sessionMaterials")}
             />
           ) : null}
@@ -1959,7 +2019,6 @@ export default function App() {
             sections={recordEditorSections}
             formal={recordFormal}
             dirty={recordDirty}
-            onBack={() => setQuickView(recordEditorReturn)}
             onSectionsChange={setRecordEditorSections}
             onFormalChange={async (next: boolean) => {
               if (next === recordFormal) return;
@@ -2103,6 +2162,14 @@ export default function App() {
               onNotice={showNotice}
             />
           ) : null}
+          {quickView === "profilePrivacy" && activeProfileId ? (
+            <ProfilePrivacyScreen
+              profileId={activeProfileId}
+              profileName={activeProfile.profileName}
+              profileType={activeProfile.kindLabel}
+              onNotice={showNotice}
+            />
+          ) : null}
           {quickView === "articleDetail" ? <ArticleDetailScreen article={activeArticle} /> : null}
           {quickView === "statistics" ? <StatisticsScreen durationStats={recordingDurationStats} /> : null}
           {quickView === "schedule" ? <ScheduleScreen onStartRecording={() => setQuickView("recording")} onNotice={showNotice} /> : null}
@@ -2143,6 +2210,14 @@ export default function App() {
             <AccountScreen
               user={currentUser}
               onOpenPrivacy={() => openPrivacy("overview")}
+              onOpenProfilePrivacy={(profileId) => {
+                const target = profileItems.find((item) => item.id === profileId);
+                if (!target) {
+                  showNotice("档案不可用", "请从档案库进入该档案后管理隐私。");
+                  return;
+                }
+                void openProfile(target, "profilePrivacy");
+              }}
               onOpenSecurity={(section = "profileAccess") => {
                 setSecurityInitialSection(section);
                 setQuickView("securitySettings");
@@ -3286,6 +3361,55 @@ function ArchiveCompleteScreen({
   onOpenRecords: () => void;
 }) {
   const recordMaterialTitle = result.kindLabel === "来访者" ? "咨询记录材料" : result.kindLabel === "督导师" ? "受督记录材料" : "督导记录材料";
+  const recordingId = result.recordingId;
+  const [progress, setProgress] = useState<{
+    aiStatus: string;
+    audioReady: boolean;
+    transcriptReady: boolean;
+    summaryReady: boolean;
+    processingError: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!recordingId) return;
+    let active = true;
+    const load = async () => {
+      try {
+        const value = await recordingService.status(recordingId);
+        if (!active) return;
+        setProgress({
+          aiStatus: value.aiStatus,
+          audioReady: value.audioReady,
+          transcriptReady: value.transcriptReady,
+          summaryReady: value.summaryReady,
+          processingError: value.processingError,
+        });
+      } catch {
+        // 轮询失败时保留上一次状态，下个周期自动重试。
+      }
+    };
+    void load();
+    const timer = setInterval(() => {
+      void load();
+    }, 3000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [recordingId]);
+
+  const aiFailed = progress?.aiStatus === "failed";
+  const stageStatus = (ready: boolean | undefined) => {
+    if (ready) return { status: "完成", complete: true, failed: false };
+    if (aiFailed) return { status: "失败", complete: false, failed: true };
+    if (progress?.aiStatus === "processing") return { status: "处理中", complete: false, failed: false };
+    return { status: "等待中", complete: false, failed: false };
+  };
+  const audioStage = stageStatus(progress?.audioReady);
+  const transcriptStage = stageStatus(progress?.transcriptReady);
+  const summaryStage = stageStatus(progress?.summaryReady);
+  const allDone = Boolean(progress?.transcriptReady && progress?.summaryReady);
+
   return (
     <View style={styles.stack}>
       <View style={styles.archiveSuccessHero}>
@@ -3298,13 +3422,20 @@ function ArchiveCompleteScreen({
         </Text>
       </View>
 
-      <SectionHeader title="后台处理中" action="自动更新" />
+      <SectionHeader title={allDone ? "后台处理已完成" : "后台处理中"} action="自动更新" />
       <View style={styles.processingList}>
-        <ProcessingRow title="原始录音" detail="已保存，13 天后自动销毁" status="完成" complete />
-        <ProcessingRow title="完整转写" detail="识别发言人与时间戳" status="处理中" />
-        <ProcessingRow title="录音纪要" detail="生成摘要与章节速览" status="等待中" />
+        <ProcessingRow title="原始录音" detail="已保存，13 天后自动销毁" status={audioStage.status} complete={audioStage.complete} />
+        <ProcessingRow title="完整转写" detail="识别发言人与时间戳" status={transcriptStage.status} complete={transcriptStage.complete} failed={transcriptStage.failed} />
+        <ProcessingRow title="录音纪要" detail="生成摘要与章节速览" status={summaryStage.status} complete={summaryStage.complete} failed={summaryStage.failed} />
         <ProcessingRow title={recordMaterialTitle} detail="将合并量表、作业和其他资料" status="待补充" />
       </View>
+
+      {progress?.processingError ? (
+        <View style={styles.ruleCard}>
+          <CircleAlert size={19} color={colors.danger} />
+          <Text style={styles.warningText}>{progress.processingError}</Text>
+        </View>
+      ) : null}
 
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>归档后仍可补充资料</Text>
@@ -3746,12 +3877,26 @@ const FREQUENCY_CHOICES = [
   { value: "自定义", label: "自定义" },
 ];
 
+const PROFILE_STATUS_CHOICES = [
+  { value: "进行中", label: "进行中" },
+  { value: "暂停", label: "暂停" },
+  { value: "已结束", label: "已结束" },
+];
+
+// 后端 status 存的是英文枚举，界面用中文展示，提交前需要映射回去。
+const PROFILE_STATUS_TO_BACKEND: Record<string, string> = {
+  进行中: "active",
+  暂停: "paused",
+  已结束: "closed",
+};
+
 function ProfileDetailScreen({
   profile,
   sessions,
   legalAttachments,
   onUpdateNextSession,
   onUpdateFrequency,
+  onUpdateDetails,
   onCreateSession,
   onUpdateSession,
   onDeleteSession,
@@ -3761,6 +3906,7 @@ function ProfileDetailScreen({
   hasCaseReport,
   onOpenMaterial,
   onPreviewLegal,
+  onOpenPrivacy,
   onNotice,
 }: {
   profile: ArchiveResult;
@@ -3768,6 +3914,14 @@ function ProfileDetailScreen({
   legalAttachments: ProfileAttachment[];
   onUpdateNextSession: (nextSessionAt: string | null) => Promise<void>;
   onUpdateFrequency: (frequency: string) => Promise<void>;
+  onUpdateDetails: (patch: {
+    name?: string;
+    code?: string | null;
+    status?: string;
+    frequency?: string;
+    initialSessionCount?: number;
+    notes?: string;
+  }) => Promise<void>;
   onCreateSession: (input: { sessionType: string; occurredAt: string; summary: string }) => Promise<void>;
   onUpdateSession: (
     sessionId: string,
@@ -3784,6 +3938,7 @@ function ProfileDetailScreen({
   hasCaseReport: boolean;
   onOpenMaterial: (category: MaterialCategory, sessionId: string) => void;
   onPreviewLegal: (attachment: ProfileAttachment) => void;
+  onOpenPrivacy: () => void;
   onNotice: (title: string, detail: string) => void;
 }) {
   const [showCreateSession, setShowCreateSession] = useState(false);
@@ -3792,6 +3947,21 @@ function ProfileDetailScreen({
   const [editingFrequency, setEditingFrequency] = useState(false);
   const [frequencyDraft, setFrequencyDraft] = useState(profile.profileFrequency ?? "未设置");
   const [savingFrequency, setSavingFrequency] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [nameDraft, setNameDraft] = useState(profile.profileName);
+  const [codeDraft, setCodeDraft] = useState(profile.profileCode ?? "");
+  const [statusDraft, setStatusDraft] = useState(profile.profileStatus ?? "进行中");
+  const [initialCountDraft, setInitialCountDraft] = useState(String(profile.initialSessionCount ?? 0));
+  const [notesDraft, setNotesDraft] = useState(profile.profileNotes ?? "");
+  const [savingProfile, setSavingProfile] = useState(false);
+  useEffect(() => {
+    setNameDraft(profile.profileName);
+    setCodeDraft(profile.profileCode ?? "");
+    setStatusDraft(profile.profileStatus ?? "进行中");
+    setInitialCountDraft(String(profile.initialSessionCount ?? 0));
+    setNotesDraft(profile.profileNotes ?? "");
+    setFrequencyDraft(profile.profileFrequency ?? "未设置");
+  }, [profile]);
   const [nextSessionDraft, setNextSessionDraft] = useState(() => (
     profile.profileNextSessionAt ? formatDateTimeInput(profile.profileNextSessionAt) : formatDateTimeInput(new Date())
   ));
@@ -3852,6 +4022,7 @@ function ProfileDetailScreen({
             value={profile.profileFrequency ?? "未设置"}
             onPress={() => {
               setFrequencyDraft(profile.profileFrequency ?? "未设置");
+              setEditingProfile(false);
               setEditingFrequency((current) => !current);
             }}
           />
@@ -3862,7 +4033,94 @@ function ProfileDetailScreen({
           nextAt={profile.profileNextSessionAt}
           onPress={() => setEditingNextSession((current) => !current)}
         />
+        <TouchableOpacity
+          style={styles.smallActionButton}
+          activeOpacity={0.78}
+          onPress={() => {
+            setEditingFrequency(false);
+            setEditingProfile((current) => !current);
+          }}
+        >
+          <Edit3 size={15} color={colors.clayDark} />
+          <Text style={styles.smallActionText}>{editingProfile ? "收起基本信息" : "编辑基本信息"}</Text>
+        </TouchableOpacity>
       </View>
+
+      {editingProfile ? (
+        <View style={styles.inlineCreateCard}>
+          <Text style={styles.formPreviewTitle}>编辑基本信息</Text>
+          <Text style={styles.formFieldLabel}>姓名 / 称呼</Text>
+          <TextInput
+            value={nameDraft}
+            onChangeText={setNameDraft}
+            placeholder="例如：陈雨"
+            placeholderTextColor={colors.subtle}
+            style={styles.archiveTextInput}
+          />
+          <Text style={styles.formFieldLabel}>档案编号</Text>
+          <TextInput
+            value={codeDraft}
+            onChangeText={setCodeDraft}
+            placeholder="留空则由系统生成"
+            placeholderTextColor={colors.subtle}
+            autoCapitalize="characters"
+            style={styles.archiveTextInput}
+          />
+          <Text style={styles.formFieldLabel}>档案状态</Text>
+          <ChoiceGroup options={PROFILE_STATUS_CHOICES} value={statusDraft} onChange={setStatusDraft} />
+          <Text style={styles.formFieldLabel}>咨询频率</Text>
+          <ChoiceGroup options={FREQUENCY_CHOICES} value={frequencyDraft} onChange={setFrequencyDraft} />
+          <Text style={styles.formFieldLabel}>既往咨询次数</Text>
+          <TextInput
+            value={initialCountDraft}
+            onChangeText={(value) => setInitialCountDraft(value.replace(/[^0-9]/g, ""))}
+            placeholder="0"
+            placeholderTextColor={colors.subtle}
+            keyboardType="numeric"
+            style={styles.archiveTextInput}
+          />
+          <Text style={styles.formFieldLabel}>备注</Text>
+          <TextInput
+            value={notesDraft}
+            onChangeText={setNotesDraft}
+            placeholder="仅自己可见的背景说明"
+            placeholderTextColor={colors.subtle}
+            style={[styles.archiveTextInput, styles.archiveTextArea]}
+            multiline
+          />
+          <View style={styles.inlineActions}>
+            <GhostButton icon={X} label="取消" onPress={() => setEditingProfile(false)} />
+            <PrimaryButton
+              icon={Save}
+              label={savingProfile ? "保存中..." : "保存基本信息"}
+              onPress={async () => {
+                if (savingProfile) return;
+                if (!nameDraft.trim()) {
+                  onNotice("请填写姓名", "档案至少需要姓名或称呼。");
+                  return;
+                }
+                setSavingProfile(true);
+                try {
+                  await onUpdateDetails({
+                    name: nameDraft.trim(),
+                    code: codeDraft.trim() || null,
+                    status: PROFILE_STATUS_TO_BACKEND[statusDraft] ?? statusDraft,
+                    frequency: frequencyDraft,
+                    initialSessionCount: Number(initialCountDraft) || 0,
+                    notes: notesDraft.trim(),
+                  });
+                  setEditingProfile(false);
+                } catch {
+                  // 父级已提示具体错误
+                } finally {
+                  setSavingProfile(false);
+                }
+              }}
+              disabled={savingProfile}
+            />
+          </View>
+        </View>
+      ) : null}
 
       {editingNextSession ? (
         <View style={styles.inlineCreateCard}>
@@ -4062,6 +4320,8 @@ function ProfileDetailScreen({
         <Text style={styles.privacyTitle}>保存规则会跟随每次记录</Text>
         <Text style={styles.privacyCopy}>录音只能临时保存 14 天；记录、量表、作业和其他附件可在对应卡片内主动授权长期保存。草稿保存为正式版后，正式版不可直接编辑。</Text>
       </View>
+
+      <GhostButton icon={ShieldCheck} label="管理本档案的隐私与授权" onPress={onOpenPrivacy} />
 
       {profile.kindLabel === "来访者" && sessions.length > 0 ? (
         <PrimaryButton
@@ -4329,6 +4589,8 @@ function SessionMaterialsScreen({
   onPreview,
   onAdd,
   onAuthorize,
+  onSelectUnarchived,
+  onStartRecording,
 }: {
   category: MaterialCategory;
   materials: SessionMaterial[];
@@ -4336,10 +4598,41 @@ function SessionMaterialsScreen({
   onPreview: (material: SessionMaterial) => void;
   onAdd: (fileType: string) => Promise<void>;
   onAuthorize: () => void;
+  onSelectUnarchived: (recordingId: string) => Promise<void>;
+  onStartRecording: () => void;
 }) {
   const [showUpload, setShowUpload] = useState(false);
   const [fileType, setFileType] = useState(category === "recording" ? "音频" : category === "homework" || category === "other" ? "PDF" : "图片");
   const copy = materialCategoryCopy[category];
+  const isRecording = category === "recording";
+  const [unarchived, setUnarchived] = useState<Array<{ id: string; title: string; meta: string }>>([]);
+  const [loadingUnarchived, setLoadingUnarchived] = useState(false);
+  const [selectingId, setSelectingId] = useState<string | null>(null);
+
+  const loadUnarchived = useCallback(async () => {
+    if (!isRecording) return;
+    setLoadingUnarchived(true);
+    try {
+      const response = await recordingService.list({ archiveStatus: "unarchived", pageSize: 50 });
+      setUnarchived(
+        response.items
+          .filter((item) => Boolean(item.audioFileId))
+          .map((item) => ({
+            id: item.id,
+            title: item.title,
+            meta: `${item.sourceType === "uploaded_audio" ? "上传音频" : "应用内录音"} · ${formatDuration(item.durationSeconds ?? 0)}`,
+          })),
+      );
+    } catch {
+      // 列表读取失败时不阻塞页面，用户仍可通过下方入口上传。
+    } finally {
+      setLoadingUnarchived(false);
+    }
+  }, [isRecording]);
+
+  useEffect(() => {
+    void loadUnarchived();
+  }, [loadUnarchived]);
 
   return (
     <View style={styles.stack}>
@@ -4349,7 +4642,50 @@ function SessionMaterialsScreen({
         <Text style={styles.posterCopy}>{category === "recording" ? "原始录音仅临时保存 14 天；转写与纪要可单独授权。" : "新增资料会参与下一次生成本次记录，但不会自动覆盖已有草稿或正式版。"}</Text>
       </View>
 
-      <SectionHeader title={`当前资料 · ${materials.length} 项`} action={showUpload ? "收起" : copy.uploadLabel} onAction={() => setShowUpload((current) => !current)} />
+      {isRecording ? (
+        <View style={styles.cardStack}>
+          <Text style={styles.formFieldLabel}>选择未归档录音归入本次记录</Text>
+          {loadingUnarchived ? <Text style={styles.listMeta}>正在读取未归档录音...</Text> : null}
+          {!loadingUnarchived && unarchived.length === 0 ? (
+            <View style={styles.emptySearchCard}>
+              <Mic size={20} color={colors.subtle} />
+              <Text style={styles.emptySearchTitle}>没有未归档录音</Text>
+              <Text style={styles.emptySearchCopy}>可以直接开始录音，或从本地上传音频文件。</Text>
+            </View>
+          ) : null}
+          {unarchived.map((item) => (
+            <TouchableOpacity
+              key={item.id}
+              style={styles.recordingCard}
+              activeOpacity={0.78}
+              disabled={selectingId !== null}
+              onPress={async () => {
+                if (selectingId) return;
+                setSelectingId(item.id);
+                try {
+                  await onSelectUnarchived(item.id);
+                  await loadUnarchived();
+                } catch {
+                  // 父级已提示具体失败原因。
+                } finally {
+                  setSelectingId(null);
+                }
+              }}
+            >
+              <View style={styles.recordingIcon}>
+                <Mic size={20} color={colors.clayDark} />
+              </View>
+              <View style={styles.listBody}>
+                <Text style={styles.listTitle}>{truncateMiddle(item.title)}</Text>
+                <Text style={styles.listMeta}>{item.meta}</Text>
+              </View>
+              {selectingId === item.id ? <Clock3 size={18} color={colors.clayDark} /> : <ChevronRight size={18} color={colors.subtle} />}
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+
+      <SectionHeader title={`当前资料 · ${materials.length} 项`} action={showUpload ? "收起" : isRecording ? "上传本地音频" : copy.uploadLabel} onAction={() => setShowUpload((current) => !current)} />
       {showUpload ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formHelp}>点击后将打开系统文件选择器，文件名和类型以真实文件为准。</Text>
@@ -4401,6 +4737,7 @@ function SessionMaterialsScreen({
       )}
 
       {category !== "recording" && materials.length > 0 ? <GhostButton icon={ShieldCheck} label="选择资料长期保存" onPress={onAuthorize} /> : null}
+      {category === "recording" ? <GhostButton icon={Mic} label="开始新录音" onPress={onStartRecording} /> : null}
     </View>
   );
 }
@@ -4639,7 +4976,6 @@ function RecordEditorScreen({
   onRegenerateDraft,
   onDownload,
   onOpenPrivacy,
-  onBack,
   onNotice,
 }: {
   profile: ArchiveResult;
@@ -4655,7 +4991,6 @@ function RecordEditorScreen({
   onRegenerateDraft: () => Promise<void>;
   onDownload: () => Promise<void>;
   onOpenPrivacy: () => void;
-  onBack: () => void;
   onNotice: (title: string, detail: string) => void;
 }) {
   const recordType = getRecordType(profile.kindLabel);
@@ -4668,9 +5003,6 @@ function RecordEditorScreen({
           <Text style={styles.editorTitle}>{profile.profileName} · {recordLabel}</Text>
         </View>
         <View style={styles.editorHeaderActions}>
-          <TouchableOpacity style={styles.textButton} activeOpacity={0.75} onPress={onBack}>
-            <Text style={styles.textButtonLabel}>返回</Text>
-          </TouchableOpacity>
           <Badge label={formal ? "正式版" : "草稿"} tone={formal ? "green" : "warm"} />
         </View>
       </View>
@@ -4688,15 +5020,17 @@ function RecordEditorScreen({
             <Text style={[styles.editorSegText, formal && styles.editorSegTextActive]}>正式版</Text>
           </TouchableOpacity>
         </View>
-        <GhostButton icon={RefreshCcw} label={pendingAction === "regenerate" ? "正在准备..." : "重新生成草稿"} onPress={() => {
-          if (pendingAction) return;
-          setPendingAction("regenerate");
-          void onRegenerateDraft().then(() => {
-            onFormalChange(false);
-            onDirtyChange(false);
-          }).catch((error) => onNotice("重新生成失败", error instanceof Error ? error.message : "请稍后重试。"))
-            .finally(() => setPendingAction(null));
-        }} />
+        {!formal ? (
+          <GhostButton icon={RefreshCcw} label={pendingAction === "regenerate" ? "正在准备..." : "重新生成草稿"} onPress={() => {
+            if (pendingAction) return;
+            setPendingAction("regenerate");
+            void onRegenerateDraft().then(() => {
+              onFormalChange(false);
+              onDirtyChange(false);
+            }).catch((error) => onNotice("重新生成失败", error instanceof Error ? error.message : "请稍后重试。"))
+              .finally(() => setPendingAction(null));
+          }} />
+        ) : null}
       </View>
 
       <View style={styles.editorStatusGrid}>
@@ -4771,17 +5105,20 @@ function CaseReportMaterialScreen({
   onNotice: (title: string, detail: string) => void;
 }) {
   const selectable = sources.filter((source) => source.analysisStatus === "available");
-  const [selected, setSelected] = useState(
-    selectable.filter((source) => source.defaultSelected)
-      .map((source) => `${source.resourceType}:${source.resourceId}`),
-  );
+  // 个案报告按咨询师要求只依据「档案基本信息 + 每一次咨询记录」。
+  // 量表、作业、附件等默认不勾选，避免无关资料稀释分析重点；仍可手动加选。
+  const pickDefaultKeys = () => {
+    const core = selectable.filter(
+      (source) => source.resourceType === "profile" || source.resourceType === "report",
+    );
+    const chosen = core.length > 0 ? core : selectable.filter((source) => source.defaultSelected);
+    return chosen.map((source) => `${source.resourceType}:${source.resourceId}`);
+  };
+  const [selected, setSelected] = useState<string[]>(pickDefaultKeys);
   const [generating, setGenerating] = useState(false);
   const [overwriteRequired, setOverwriteRequired] = useState(false);
   useEffect(() => {
-    setSelected(
-      selectable.filter((source) => source.defaultSelected)
-        .map((source) => `${source.resourceType}:${source.resourceId}`),
-    );
+    setSelected(pickDefaultKeys());
     setOverwriteRequired(false);
   }, [sources]);
   const toggle = (key: string) => {
@@ -4801,7 +5138,7 @@ function CaseReportMaterialScreen({
       </View>
       <View style={styles.privacyPanel}>
         <Text style={styles.privacyTitle}>选择纳入分析的资料</Text>
-        <Text style={styles.privacyCopy}>默认勾选所有仍可用的咨询记录、量表、作业和附件。已销毁资料不能参与分析。</Text>
+        <Text style={styles.privacyCopy}>默认勾选档案基本信息与每一次咨询记录。量表、作业、附件等如需纳入可手动勾选；已销毁资料不能参与分析。</Text>
       </View>
       {overwriteRequired ? (
         <View style={styles.warningPanel}>
@@ -5213,6 +5550,211 @@ function PrivacyCenterScreen({
   );
 }
 
+const PRIVACY_CATEGORY_TABS: Array<{ key: PrivacyCategoryKey; label: string }> = [
+  { key: "recording", label: "录音" },
+  { key: "transcript", label: "转写" },
+  { key: "summary", label: "纪要" },
+  { key: "scale", label: "量表" },
+  { key: "homework", label: "作业" },
+  { key: "other", label: "其他" },
+  { key: "session_record", label: "咨询记录" },
+  { key: "case_report", label: "个案报告" },
+];
+
+function profilePrivacyExpiry(item: PrivacyResourceItem): string {
+  if (item.authorized) return "已授权长期保留";
+  if (!item.expiresAt) return "随档案保留";
+  const date = new Date(item.expiresAt);
+  if (Number.isNaN(date.getTime())) return "到期时间未知";
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day} 到期`;
+}
+
+function ProfilePrivacyRow({
+  item,
+  pending,
+  onAuthorize,
+  onRevoke,
+}: {
+  item: PrivacyResourceItem;
+  pending: boolean;
+  onAuthorize: () => void;
+  onRevoke: () => void;
+}) {
+  return (
+    <View style={styles.privacyResourceCard}>
+      <View style={styles.privacyResourceMain}>
+        {item.authorized
+          ? <CheckCircle2 size={18} color={colors.sageDark} />
+          : <Clock3 size={18} color={item.expiringSoon ? colors.danger : colors.clayDark} />}
+        <View style={styles.listBody}>
+          <Text style={styles.listTitle}>{truncateMiddle(item.title)}</Text>
+          <Text style={styles.listMeta}>{item.source} · {profilePrivacyExpiry(item)}</Text>
+        </View>
+      </View>
+      <View style={styles.privacyResourceFooter}>
+        {!item.preservable ? (
+          <Badge label={item.kind === "attachment" ? "随档案保留" : "不可授权"} tone="blue" />
+        ) : item.authorized ? (
+          <TouchableOpacity style={styles.smallActionButton} activeOpacity={0.75} onPress={onRevoke} disabled={pending}>
+            <X size={14} color={colors.clayDark} />
+            <Text style={styles.smallActionText}>{pending ? "处理中..." : "撤回授权"}</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={styles.smallActionButton} activeOpacity={0.75} onPress={onAuthorize} disabled={pending}>
+            <ShieldCheck size={15} color={colors.clayDark} />
+            <Text style={styles.smallActionText}>{pending ? "处理中..." : "长期保存"}</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function ProfilePrivacyScreen({
+  profileId,
+  profileName,
+  profileType,
+  onNotice,
+}: {
+  profileId: string;
+  profileName: string;
+  profileType: string;
+  onNotice: (title: string, detail: string) => void;
+}) {
+  const [category, setCategory] = useState<PrivacyCategoryKey>("summary");
+  const [page, setPage] = useState<ProfilePrivacyPage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setPage(await privacyService.profileResources(profileId, category));
+    } catch (error) {
+      onNotice("隐私资料加载失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setLoading(false);
+    }
+  }, [category, onNotice, profileId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const authorize = async (item: PrivacyResourceItem) => {
+    setPendingId(item.id);
+    try {
+      await privacyService.authorize(item.id);
+      await load();
+      onNotice("已授权长期保存", `“${item.title}”会保留在已长期保存资料中。`);
+    } catch (error) {
+      onNotice("授权失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const revoke = async (item: PrivacyResourceItem) => {
+    setPendingId(item.id);
+    try {
+      await privacyService.revoke(item.id);
+      await load();
+      onNotice("已撤回长期保存", "若原临时期限已结束，后端会立即销毁资料。");
+    } catch (error) {
+      onNotice("撤回失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const items = page?.items ?? [];
+  const authorized = items.filter((item) => item.authorized);
+  const unauthorized = items.filter((item) => !item.authorized);
+  const currentLabel = PRIVACY_CATEGORY_TABS.find((tab) => tab.key === category)?.label ?? "";
+
+  return (
+    <View style={styles.stack}>
+      <View style={styles.poster}>
+        <ShieldCheck size={25} color={colors.sageDark} />
+        <Text style={styles.posterTitle}>{profileName} · {profileType}档案</Text>
+        <Text style={styles.posterCopy}>按分类管理这个档案的敏感资料。原始录音到期自动销毁且不能长期保存；其他资料需逐项主动授权。</Text>
+      </View>
+
+      <View style={styles.editorStatusGrid}>
+        <MiniStat label="当前分类" value={currentLabel} />
+        <MiniStat label="已授权" value={`${page?.summary.authorized ?? 0} 项`} />
+        <MiniStat label="即将到期" value={`${page?.summary.expiringSoon ?? 0} 项`} />
+      </View>
+
+      <View style={styles.categoryTabs}>
+        {PRIVACY_CATEGORY_TABS.map((tab) => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.choicePill, category === tab.key && styles.choicePillActive]}
+            activeOpacity={0.75}
+            onPress={() => setCategory(tab.key)}
+          >
+            <Text style={[styles.choicePillText, category === tab.key && styles.choicePillTextActive]}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {loading ? <Text style={styles.listMeta}>正在读取隐私资料...</Text> : null}
+
+      {!loading && items.length === 0 ? (
+        <View style={styles.emptySearchCard}>
+          <ShieldCheck size={20} color={colors.subtle} />
+          <Text style={styles.emptySearchTitle}>该分类暂无资料</Text>
+          <Text style={styles.emptySearchCopy}>切换到其他分类，或先归档录音、生成记录后再来管理。</Text>
+        </View>
+      ) : null}
+
+      {unauthorized.length > 0 ? (
+        <>
+          <SectionHeader title={`未授权 · 到期后销毁`} action={`${unauthorized.length} 项`} />
+          <View style={styles.cardStack}>
+            {unauthorized.map((item) => (
+              <ProfilePrivacyRow
+                key={item.id}
+                item={item}
+                pending={pendingId === item.id}
+                onAuthorize={() => void authorize(item)}
+                onRevoke={() => void revoke(item)}
+              />
+            ))}
+          </View>
+        </>
+      ) : null}
+
+      {authorized.length > 0 ? (
+        <>
+          <SectionHeader title={`已授权长期保存`} action={`${authorized.length} 项`} />
+          <View style={styles.cardStack}>
+            {authorized.map((item) => (
+              <ProfilePrivacyRow
+                key={item.id}
+                item={item}
+                pending={pendingId === item.id}
+                onAuthorize={() => void authorize(item)}
+                onRevoke={() => void revoke(item)}
+              />
+            ))}
+          </View>
+        </>
+      ) : null}
+
+      <View style={styles.privacyPanel}>
+        <Text style={styles.privacyTitle}>关于量表、作业与其他附件</Text>
+        <Text style={styles.privacyCopy}>这类资料随档案保留，不进入 14 天自动销毁，也不需要单独授权；删除请在对应咨询历程的资料页操作。</Text>
+      </View>
+    </View>
+  );
+}
+
 function SupervisionScreen({
   profiles,
   onNotice,
@@ -5601,9 +6143,16 @@ function ContentScreen({ onOpen }: { onOpen: (article: (typeof articles)[number]
   );
 }
 
+const PROFILE_KIND_LABELS: Record<string, string> = {
+  client: "来访者",
+  supervisor: "督导师",
+  supervisee: "受督者",
+};
+
 function AccountScreen({
   user,
   onOpenPrivacy,
+  onOpenProfilePrivacy,
   onOpenSecurity,
   onNotice,
   onUpdateProfile,
@@ -5611,13 +6160,14 @@ function AccountScreen({
 }: {
   user: CurrentUser | null;
   onOpenPrivacy: () => void;
+  onOpenProfilePrivacy: (profileId: string) => void;
   onOpenSecurity: (section?: SecuritySection) => void;
   onNotice: (title: string, detail: string) => void;
   onUpdateProfile: (displayName: string) => Promise<void>;
   onLogout: () => Promise<void>;
 }) {
   const displayName = user?.display_name || "咨询师";
-  const [privacySummary, setPrivacySummary] = useState<SensitiveResource[]>([]);
+  const [privacyAlerts, setPrivacyAlerts] = useState<ExpiringByProfileItem[]>([]);
   const [calendarSummary, setCalendarSummary] = useState(
     calendarSettingSummary({
       systemCalendarEnabled: false,
@@ -5631,9 +6181,9 @@ function AccountScreen({
     setDisplayNameDraft(displayName);
   }, [displayName]);
   useEffect(() => {
-    void privacyService.expiring(14, 1, 3)
-      .then((response) => setPrivacySummary(response.items))
-      .catch(() => setPrivacySummary([]));
+    void privacyService.expiringByProfile(14)
+      .then((response) => setPrivacyAlerts(response.items))
+      .catch(() => setPrivacyAlerts([]));
     void calendarService.settings()
       .then((settings) => setCalendarSummary(calendarSettingSummary(settings)))
       .catch(() => setCalendarSummary(calendarSettingSummary({
@@ -5706,18 +6256,46 @@ function AccountScreen({
         </View>
       ) : null}
       <SectionHeader title="数据与隐私" action="查看" onAction={onOpenPrivacy} />
-      <View style={styles.cardStack}>
-        <TouchableOpacity style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
-          <ShieldCheck size={18} color={colors.sageDark} />
-          <View style={styles.listBody}>
-            <Text style={styles.listTitle}>
-              {privacySummary.length === 0 ? "暂无近期到期资料" : `${privacySummary.length} 项资料即将到期`}
-            </Text>
-            <Text style={styles.listMeta}>点按进入隐私中心，管理长期保存与销毁记录</Text>
-          </View>
-          <Badge label={privacySummary.length === 0 ? "正常" : "需关注"} tone={privacySummary.length === 0 ? "green" : "warm"} />
-        </TouchableOpacity>
-      </View>
+      {privacyAlerts.length === 0 ? (
+        <View style={styles.cardStack}>
+          <TouchableOpacity style={styles.privacyResource} activeOpacity={0.78} onPress={onOpenPrivacy}>
+            <ShieldCheck size={18} color={colors.sageDark} />
+            <View style={styles.listBody}>
+              <Text style={styles.listTitle}>暂无需要关注的资料</Text>
+              <Text style={styles.listMeta}>未来 14 天内没有即将销毁的敏感资料</Text>
+            </View>
+            <Badge label="正常" tone="green" />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.cardStack}>
+          {privacyAlerts.map((alert) => {
+            const nearest = alert.nearestExpiresAt ? new Date(alert.nearestExpiresAt) : null;
+            const nearestText = nearest && !Number.isNaN(nearest.getTime())
+              ? ` · 最近 ${nearest.getMonth() + 1}月${nearest.getDate()}日`
+              : "";
+            return (
+              <TouchableOpacity
+                key={alert.profile.id}
+                style={styles.profileCard}
+                activeOpacity={0.78}
+                onPress={() => onOpenProfilePrivacy(alert.profile.id)}
+              >
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{alert.profile.name.slice(0, 1)}</Text>
+                </View>
+                <View style={styles.listBody}>
+                  <Text style={styles.listTitle}>
+                    {alert.profile.name} · {PROFILE_KIND_LABELS[alert.profile.type] ?? alert.profile.type}档案
+                  </Text>
+                  <Text style={styles.listMeta}>{alert.expiringCount} 项资料即将到期{nearestText}</Text>
+                </View>
+                <Badge label="需关注" tone="warm" />
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
       <SectionHeader title="安全" action="设置" onAction={() => onOpenSecurity("profileAccess")} />
       <View style={styles.settingsList}>
         <SettingsRow icon={LockKeyhole} title="档案访问密码" value="三类档案独立 6 位数字密码" onPress={() => onOpenSecurity("profileAccess")} />
@@ -7025,17 +7603,17 @@ function NextSessionStat({
   );
 }
 
-function ProcessingRow({ title, detail, status, complete }: { title: string; detail: string; status: string; complete?: boolean }) {
+function ProcessingRow({ title, detail, status, complete, failed }: { title: string; detail: string; status: string; complete?: boolean; failed?: boolean }) {
   return (
     <View style={styles.processingRow}>
       <View style={[styles.processingDot, complete && styles.processingDotComplete]}>
-        {complete ? <CheckCircle2 size={15} color="#FFF9F3" /> : <Clock3 size={14} color={colors.clayDark} />}
+        {complete ? <CheckCircle2 size={15} color="#FFF9F3" /> : failed ? <CircleAlert size={14} color={colors.danger} /> : <Clock3 size={14} color={colors.clayDark} />}
       </View>
       <View style={styles.listBody}>
         <Text style={styles.listTitle}>{title}</Text>
         <Text style={styles.listMeta}>{detail}</Text>
       </View>
-      <Badge label={status} tone={complete ? "green" : "blue"} />
+      <Badge label={status} tone={complete ? "green" : failed ? "warm" : "blue"} />
     </View>
   );
 }
@@ -8212,6 +8790,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
+  },
+  categoryTabs: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 4,
   },
   choicePill: {
     minHeight: 34,

@@ -48,6 +48,44 @@ function mapResource(item: BackendSensitiveResource): SensitiveResource {
   };
 }
 
+export type PrivacyCategoryKey =
+  | "recording"
+  | "transcript"
+  | "summary"
+  | "scale"
+  | "homework"
+  | "other"
+  | "session_record"
+  | "case_report";
+
+export type PrivacyResourceItem = {
+  id: string;
+  kind: "resource" | "attachment";
+  category: PrivacyCategoryKey;
+  title: string;
+  source: string;
+  resourceType: string;
+  resourceId: string;
+  originAt: string;
+  expiresAt: string | null;
+  authorized: boolean;
+  authorizedAt: string | null;
+  preservable: boolean;
+  expiringSoon: boolean;
+};
+
+export type ProfilePrivacyPage = {
+  profile: { id: string; name: string; type: string };
+  items: PrivacyResourceItem[];
+  summary: { total: number; authorized: number; expiringSoon: number };
+};
+
+export type ExpiringByProfileItem = {
+  profile: { id: string; name: string; type: string };
+  expiringCount: number;
+  nearestExpiresAt: string | null;
+};
+
 export function createPrivacyService(client: ApiClient) {
   const mapPage = async (request: Promise<{ items: BackendSensitiveResource[]; total: number }>) => {
     const response = await request;
@@ -83,6 +121,17 @@ export function createPrivacyService(client: ApiClient) {
     },
     cleanup() {
       return client.post<{ destroyed_count: number }>("/privacy/cleanup");
+    },
+    async profileResources(profileId: string, category?: PrivacyCategoryKey): Promise<ProfilePrivacyPage> {
+      const query = category ? `&category=${encodeURIComponent(category)}` : "";
+      return client.get<ProfilePrivacyPage>(
+        `/privacy/profile-resources?profile_id=${encodeURIComponent(profileId)}${query}`,
+      );
+    },
+    async expiringByProfile(days = 14): Promise<{ items: ExpiringByProfileItem[]; days: number }> {
+      return client.get<{ items: ExpiringByProfileItem[]; days: number }>(
+        `/privacy/expiring-by-profile?days=${days}`,
+      );
     },
   };
 }

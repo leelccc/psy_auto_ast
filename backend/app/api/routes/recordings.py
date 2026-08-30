@@ -526,6 +526,41 @@ def create_recordings_router(
             "total": total,
         }
 
+    @router.get("/recordings/{recording_id}/status")
+    def get_recording_status(
+        recording_id: str,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[Session, Depends(get_db)],
+    ) -> dict[str, object]:
+        """归档完成页轮询用的轻量状态。
+
+        只返回状态字段，不返回转写正文与纪要内容，
+        避免前端几秒一次轮询时拉取整张转写表。
+        """
+        recording = get_recording(database, recording_id, user_id)
+        transcript = database.scalar(
+            select(RecordingTranscript).where(
+                RecordingTranscript.recording_id == recording.id,
+                RecordingTranscript.destroyed_at.is_(None),
+            )
+        )
+        summary = database.scalar(
+            select(RecordingSummary).where(
+                RecordingSummary.recording_id == recording.id,
+                RecordingSummary.destroyed_at.is_(None),
+            )
+        )
+        return {
+            "recording_id": recording.id,
+            "archive_status": recording.archive_status,
+            "ai_status": recording.ai_status,
+            "processing_error": recording.processing_error,
+            "audio_ready": bool(recording.audio_file_id) and recording.audio_destroyed_at is None,
+            "transcript_ready": transcript is not None,
+            "summary_ready": summary is not None,
+            "updated_at": recording.updated_at.isoformat(),
+        }
+
     @router.post("/recordings", status_code=201)
     def create_recording(
         payload: CreateRecordingRequest,

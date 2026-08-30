@@ -66,6 +66,7 @@ export function mapBackendProfile(profile: BackendProfile): ProfileListItem {
     next: formatNextSession(profile.next_session_at),
   };
   if (profile.next_session_at) mapped.nextSessionAt = profile.next_session_at;
+  if (profile.notes) mapped.notes = profile.notes;
   const frequency = formatFrequency(profile.metadata);
   if (frequency) mapped.frequency = frequency;
   return mapped;
@@ -104,10 +105,22 @@ export function createProfileService(client: ApiClient) {
     async update(profileId: string, input: {
       nextSessionAt?: string | null;
       frequency?: string;
+      name?: string;
+      code?: string | null;
+      status?: string;
+      initialSessionCount?: number;
+      notes?: string;
     }): Promise<ProfileListItem> {
       const body: Record<string, unknown> = {};
       if (input.nextSessionAt !== undefined) body.next_session_at = input.nextSessionAt;
       if (input.frequency !== undefined) body.metadata = { frequency: input.frequency };
+      if (input.name !== undefined) body.name = input.name;
+      if (input.code !== undefined) body.code = input.code;
+      if (input.status !== undefined) body.status = input.status;
+      if (input.initialSessionCount !== undefined) {
+        body.initial_session_count = input.initialSessionCount;
+      }
+      if (input.notes !== undefined) body.notes = input.notes;
       const profile = await client.patch<BackendProfile>(`/profiles/${profileId}`, body);
       return mapBackendProfile(profile);
     },

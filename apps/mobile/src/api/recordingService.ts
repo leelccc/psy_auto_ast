@@ -117,6 +117,32 @@ export function createRecordingService(client: ApiClient) {
       }>(`/recordings${query}`);
       return { items: response.items.map(mapRecording), total: response.total };
     },
+    async status(recordingId: string): Promise<{
+      archiveStatus: string;
+      aiStatus: string;
+      processingError: string | null;
+      audioReady: boolean;
+      transcriptReady: boolean;
+      summaryReady: boolean;
+    }> {
+      const value = await client.get<{
+        recording_id: string;
+        archive_status: string;
+        ai_status: string;
+        processing_error: string | null;
+        audio_ready: boolean;
+        transcript_ready: boolean;
+        summary_ready: boolean;
+      }>(`/recordings/${recordingId}/status`);
+      return {
+        archiveStatus: value.archive_status,
+        aiStatus: value.ai_status,
+        processingError: value.processing_error,
+        audioReady: value.audio_ready,
+        transcriptReady: value.transcript_ready,
+        summaryReady: value.summary_ready,
+      };
+    },
     async create(title: string, sourceType: Recording["sourceType"]): Promise<Recording> {
       return mapRecording(await client.post<BackendRecording>("/recordings", {
         title,

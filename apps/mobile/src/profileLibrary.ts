@@ -18,6 +18,7 @@ export type ProfileListItem = {
   next: string;
   nextSessionAt?: string | null;
   frequency?: string;
+  notes?: string;
 };
 
 const kindLabels: Record<ArchiveKind, ProfileTypeLabel> = {
