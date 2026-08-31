@@ -12,6 +12,30 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-01 · HTTPS 域名落地与 Web Mixed Content 修复
+
+- **域名与证书**：`maxpeking.top`（阿里云注册）NS 切到阿里云 DNS 后，服务器用 Let's Encrypt `certbot certonly --standalone` 签发证书，已配 `systemd timer` + pre/post hook 自动续期。`https://maxpeking.top/` 可正常访问，证书到期 2026-11-29。
+- **nginx 策略**：`http://maxpeking.top` 自动 301 跳转 `https`；`http://47.96.89.215`（IP 直连）继续走 http，兼容旧 APK；`/apk/` 下载页同样走 https。
+- **Web Mixed Content 修复（问题 0901-1）**：浏览器通过 `https://maxpeking.top/` 访问时，前端仍请求 `http://47.96.89.215/api/v1/auth/login`，被浏览器拦截。已重新执行 `EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1 npx expo export --platform web` 并覆盖服务器 `/opt/psy_auto_ast/web`，线上 bundle 已改为 https 域名。
+- **待收口**：APK 的 `EXPO_PUBLIC_API_BASE_URL` 改为 `https://maxpeking.top/api/v1` 重打 release；MinIO `MINIO_ENDPOINT` 改 `https://maxpeking.top`；新包普及后关闭 IP 直连 http。
+
+### 2026-09-01 · 本地 Android APK 打包（0831-5）
+
+- **本地 APK 已构建**：按用户明确要求执行 Android release 打包，产物为 `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`，大小 `70,723,550 bytes`（约 67MB），MD5 `1359477fafac1f1d4d0b12d1205c5845`。
+- **包内校验**：APK 内 JS bundle 已确认包含 `BUILD_TAG=0831-5` 与生产样 API 地址 `http://47.96.89.215/api/v1`；AndroidManifest 包名为 `com.psyautoast.counselor`，`versionName=0.1.0`，并保留 `usesCleartextTraffic=true` 以支持当前 HTTP 服务器。
+- **分发状态**：本次只完成本地打包，未上传或覆盖服务器 `/apk/` 下载页；如需手机从服务器下载新版 APK，需要单独执行 APK 上传/分发步骤。
+
+### 2026-08-31 · 问题0831-5 生成资料口径 + 档案基本信息编辑
+
+- **单次记录草稿资料源修复**：`生成咨询记录/受督记录/督导记录` 现在只依据当前历程的摘要、转写、录音纪要和本次附件；后端 `/reports/generation-sources` 与 `/reports/generate` 在非 `case_report` 时不再混入全档案报告、其他历程记录或个案报告。个案报告仍保留全档案资料选择口径。
+- **基本信息次数语义修正**：档案里的咨询/受督/督导次数改为“约定次数/基本信息次数”，可编辑，但不再参与真实历程序号。新增历程和归档录音的记录编号只按实际 session 顺延。
+- **三类档案编辑弹窗**：档案详情的「编辑基本信息」改为 RN `<Modal>` 弹窗，不再在当前页面内展开；三类档案都可改姓名/编号/状态/性别/频率/约定次数/备注，来访者额外可改首访时主诉和危机评估，督导师/受督者可改督导形式。
+- **新增档案入口调整**：新增档案页顶部从三张纵向身份卡片改为 tab/分段切换，避免“新增来访者/督导师/受督者”一条条占满页面。
+- **metadata 更新保护**：后端 `PATCH /profiles/{id}` 对 `metadata` 改为局部合并，避免只改频率时把性别、首访主诉或督导形式清掉。
+- **源码标识**：`BUILD_TAG` 升至 `0831-5`，便于后续打包后核对安装版本；本轮部署时未默认打 APK，2026-09-01 已按用户明确要求另行完成本地 APK 打包。
+- **部署**：已部署到服务器 `47.96.89.215`：Web dist 覆盖 `/opt/psy_auto_ast/web`，后端补丁覆盖 `/opt/psy_auto_ast/backend` 并执行 `docker compose -f compose.prod.yaml up -d --build backend`。部署前备份位于 `/opt/psy_auto_ast/backups/deploy_0831_5_20260831_235832/`。
+- **验证**：`cd apps/mobile && npm run typecheck` 通过；`cd apps/mobile && node --import tsx --test src/__tests__/*.test.ts`：`98 passed`；`cd backend && ../venv/bin/python -m compileall app` 通过；`git diff --check` 通过。线上 `http://47.96.89.215/` 返回 200，`/api/v1/health` 返回 `api/database/object_storage` 全 ok，公网 bundle 含 `0831-5` 与 `47.96.89.215/api/v1`。本地后端 pytest 需要 Docker PostgreSQL，当前 Docker daemon 未运行，未执行。
+
 ### 2026-08-31 · 总根因闭环：Android 请求 query string 丢失（构建 0831-4）
 
 - **实锤证据**（nginx 访问日志 + 生产库直查 + API 重放）：Android（okhttp）发出的 `GET /api/v1/reports` **完全没有 query string**，返回该用户全部报告的第一条（8-30 的正式版）→ 生成页判定「已有报告」→ 直接跳编辑页。Web（Chrome）的同一请求带 `?session_id=...&report_type=...` → 空列表 → 正常进生成页。**四天来 Android/Web 一切行为差异的总根因**。
@@ -83,7 +107,7 @@
 - **编辑页去冗余 (#3)**：删除咨询记录编辑页顶部卡片里语义不明的「返回」按钮（导航栏本身已有返回）；同步清理不再使用的 `onBack` 传参。
 - **正式版隐藏重新生成 (#4)**：编辑页在正式版视图下不再显示「重新生成草稿」按钮（重新生成只作用于草稿）。
 - **个案报告默认资料 (#5)**：生成个案报告时默认只勾选「档案基本信息 + 每一次咨询记录」，量表/作业/附件默认不选，仍可手动加选。
-- **档案基本信息可编辑 (#6)**：档案详情新增「编辑基本信息」入口，支持修改姓名、档案编号、咨询频率、档案状态、既往咨询次数、备注（`PATCH /profiles/{id}` 本就支持这些字段）。
+- **档案基本信息可编辑 (#6)**：档案详情新增「编辑基本信息」入口，支持修改姓名、档案编号、咨询频率、档案状态、约定/基本信息咨询次数、备注（`PATCH /profiles/{id}` 本就支持这些字段）。
 - **档案内隐私管理 (#7)**：档案详情新增「管理本档案的隐私与授权」入口，进入档案隐私页——按录音/转写/纪要/量表/作业/其他/咨询记录/个案报告分类切换，每个分类下分「未授权 · 到期后销毁」与「已授权长期保存」两栏，可就地授权与撤回。
 - **我的页隐私改为提醒 (#7)**：「数据与隐私」不再罗列无上下文的资料名，改为**按档案聚合**的到期提醒（XX 档案 N 项资料即将到期 + 最近到期日），点击直达该档案隐私页（仍走访问密码解锁流程，不绕过权限）。
 
