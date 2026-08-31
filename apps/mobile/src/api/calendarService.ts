@@ -93,8 +93,11 @@ export function createCalendarService(client: ApiClient) {
       const params = new URLSearchParams();
       if (range.from) params.set("from", range.from);
       if (range.to) params.set("to", range.to);
+      // 注意：不能用 params.size 判断——Hermes 原生 URLSearchParams 没有 size getter，
+      // Android 上恒为 undefined，query 会被整体丢弃（日程范围过滤失效）。
+      const query = params.toString() ? `?${params}` : "";
       const response = await client.get<{ items: BackendCalendarEvent[] }>(
-        `/calendar/events${params.size ? `?${params}` : ""}`,
+        `/calendar/events${query}`,
       );
       return { items: response.items.map(mapEvent) };
     },

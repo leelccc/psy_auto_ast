@@ -1,5 +1,43 @@
 # Backend Specification Findings
 
+## 2026-08-31 WorkBuddy Reconciliation
+
+### Correction: Android Report Generation Was Not Fixed
+
+- The user's 2026-08-31 Android retest supersedes WorkBuddy's `0830-6` conclusion: tapping `生成咨询记录` still does not visibly reach the generation page.
+- The current navigation code sets `pendingReportGeneration` and `quickView` synchronously, but the page-loading effect catches any `reports` or `generation-sources` failure by clearing pending state and returning to the prior view.
+- Because React Native may not paint the intermediate loading state before a fast rejection, Android can look exactly as if the press did nothing. The previous touch-delivery diagnosis did not account for this state rollback.
+- The robust rule is that navigation must survive data-load failure: keep the destination mounted, display the error in-page, and let the user retry or explicitly return.
+
+### Current Delivery State
+
+- The project has moved beyond local MVP verification into a deployed production-like environment on `47.96.89.215` with PostgreSQL, MinIO, FastAPI/Gunicorn, Nginx-hosted Expo Web, and an Android APK download page.
+- The reconciled WorkBuddy baseline was `BUILD_TAG = "0830-6"`; the corrected local implementation is now `0831-3` and has not been committed or deployed.
+- WorkBuddy's claim that the Android consultation-record action was fully explained by touch delivery was incomplete. Touch safeguards remain useful, but the confirmed code-level failure path was an immediate state rollback after report/source API errors.
+- The local `main` branch is three commits ahead of `origin/main`: `29c97e0`, `22e82f0`, and `f845820`. The first two are diagnostic iterations retained in history; the final commit removes the diagnostic toast and keeps the real fix.
+- The latest server/APK version recorded before the local-only fixes is `0830-3`. The local APK is newer (`0831-3`) and should not be assumed deployed unless the user explicitly requests APK packaging/upload.
+
+### Product and Architecture Additions
+
+- Production deployment and operational recovery are documented in `README.md` and `docs/production-deployment.md`.
+- Web WeChat OAuth is implemented; native WeChat login still requires SDK/prebuild work and real credentials.
+- A single cross-platform `DateTimePickerField` drives the app: iOS bottom sheet, Android native picker, and Web `react-datepicker` through platform-specific files.
+- Profile-scoped privacy APIs and UI now group expiring/authorizable resources by profile. Session attachments intentionally remain outside the 14-day sensitive-resource lifecycle to avoid accidental cleanup.
+- Recording processing starts asynchronously after archive and is polled through a lightweight status endpoint.
+- Report generation now uses a full-page loading/empty/selection flow, real provider selection, skeleton report blocks, and source validation that tolerates stale selections.
+- Frontend domain logic remains concentrated in the very large `apps/mobile/App.tsx`; changes must account for broad shared-state and navigation effects.
+
+### Operating Requirements Adopted from WorkBuddy
+
+- Every completed change batch must update the README change log before commit and push. Never commit `.env`, credentials, build output, or `.workbuddy`.
+- Default release behavior is Web-only. Do not build or upload an APK unless the user explicitly requests APK/build/upload or the full deployment bundle.
+- Mobile acceptance requires an Android release build and user/device verification; Web behavior and TypeScript success alone are insufficient for Android-sensitive interactions.
+- Prefer full-page `quickView` flows for consequential async actions. Navigate immediately, show an in-page loading/empty/error state, and avoid waiting for requests before giving visible feedback.
+- For Android overlays that are genuinely needed, use React Native `Modal`; do not use `absoluteFillObject + zIndex` as a global overlay.
+- For Android buttons apparently doing nothing, first determine whether touch reached the handler. Check `keyboardShouldPersistTaps`, competing layers, and component choice before changing navigation or modal rendering.
+- Preserve the production safety backlog: replace default account passwords, add domain/TLS, restrict security groups and MinIO exposure, remove sensitive backups, and use a release signing key before store distribution.
+- Production secrets appearing in historical `.workbuddy` notes are sensitive operational data. Do not repeat, commit, or expose them in future output; recommend rotation where exposure may have occurred.
+
 ## Source Documents
 
 - `docs/prd/2026-06-05-counselor-assistant-app-prd.md`

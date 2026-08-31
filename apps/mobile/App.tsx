@@ -131,6 +131,10 @@ import {
 } from "./src/fileService";
 import { decideRecordingRegeneration, updateAtIndex } from "./src/recordingEditorFlow";
 import { dateFromDateTimeInput, formatDateTimeInput, normalizeSessionDate } from "./src/dateTimeInput";
+import {
+  keepReportGenerationLoadError,
+  retryReportGenerationLoad,
+} from "./src/reportGenerationFlow";
 import WebDatePicker from "./src/WebDatePicker";
 import {
   getMaterialUpdateMessage,
@@ -142,6 +146,7 @@ import {
 import {
   addSessionTag,
   applySessionResourceStatuses,
+  applySessionReportStatuses,
   formatSessionTime,
   type SessionHistoryItem,
 } from "./src/sessionHistory";
@@ -171,7 +176,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0830-6";
+const BUILD_TAG = "0831-4";
 
 type QuickView =
   | "overview"
@@ -210,6 +215,7 @@ type PendingReportGeneration = {
   recordType: string;
   sources: ReportSource[];
   loading?: boolean;
+  loadError?: string;
 };
 type ArchiveResult = ReturnType<typeof buildArchiveResult> & {
   profileStatus?: string;
@@ -749,16 +755,18 @@ export default function App() {
   const loadProfileData = async (profileId: string, recordingsForStatus = recordingItems) => {
     const requestId = ++profileDataRequestId.current;
     try {
-      const [sessions, profileAttachments] = await Promise.all([
+      const [sessions, profileAttachments, profileReports] = await Promise.all([
         sessionService.list(profileId),
         attachmentService.listProfile(profileId),
+        reportService.list({ profileId }),
       ]);
       if (profileDataRequestId.current !== requestId) return;
       setLegalAttachments(profileAttachments);
       const materials = (await Promise.all(
         sessions.map((session) => attachmentService.listSession(session.id)),
       )).flat();
-      setSessionHistory(applySessionResourceStatuses(sessions, materials, recordingsForStatus));
+      const sessionsWithReports = applySessionReportStatuses(sessions, profileReports);
+      setSessionHistory(applySessionResourceStatuses(sessionsWithReports, materials, recordingsForStatus));
       setSessionMaterials(materials);
       setProfileItems((current) => current.map((item) => {
         if (item.id !== profileId) return item;
@@ -959,6 +967,7 @@ export default function App() {
         recordType,
         sources: [],
         loading: true,
+        loadError: undefined,
       });
       setQuickView("reportGeneration");
     } catch (error) {
@@ -1022,12 +1031,19 @@ export default function App() {
           if (report) {
             setPendingReportGeneration(null);
             openReportEditor(report, pending.sessionId, pending.returnView);
-            // 同步会话卡片的“记录”状态，避免生成后卡片仍显示“待生成”
             setSessionHistory((current) => current.map((session) => (
               session.id === pending.sessionId
                 ? { ...session, record: report.formalSavedAt ? "正式版" : "草稿" }
                 : session
             )));
+            // 明确告知为什么直接进了编辑器：该次咨询已存在草稿/正式版记录。
+            // 过去静默重定向，用户以为「点了生成却进了编辑页」是 bug。
+            showNotice(
+              report.formalSavedAt ? `已打开该次${pending.recordType}正式版` : `已找到该次${pending.recordType}草稿`,
+              report.formalSavedAt
+                ? "该次咨询已生成过正式版记录，已直接打开查看（编辑页可切换草稿/正式版）。"
+                : "该次咨询已生成过草稿，已直接打开继续编辑；如需重写可在编辑页重新生成草稿。",
+            );
             return;
           }
         }
@@ -1040,20 +1056,54 @@ export default function App() {
         const selected = defaultReportSources(sources, pending.reportId);
         setPendingReportGeneration((current) => (
           current && current.sessionId === pending.sessionId && current.mode === pending.mode
-            ? { ...current, sources: selected, loading: false }
+            ? { ...current, sources: selected, loading: false, loadError: undefined }
             : current
         ));
       } catch (error) {
         if (!active) return;
-        showNotice("资料读取失败", errorMessage(error));
-        setPendingReportGeneration(null);
-        setQuickView(pending.returnView);
+        const loadError = errorMessage(error);
+        setPendingReportGeneration((current) => keepReportGenerationLoadError(current, pending, loadError));
       }
     })();
     return () => {
       active = false;
     };
   }, [activeProfileId, pendingReportGeneration, quickView]);
+
+  // 轻量刷新「每次咨询的记录状态」（未生成/草稿/正式版），不带附件 N+1 请求。
+  // 用于从编辑器/生成页返回档案详情时校正按钮文案：
+  // 过去 sessionHistory 是进入档案时的快照，若记录在其他端（web）生成过，
+  // 按钮仍显示「生成咨询记录」，点击后被服务端实时状态重定向到编辑页，用户感知为 bug。
+  const sessionStatusRequestId = useRef(0);
+  const refreshSessionStatuses = async () => {
+    if (!activeProfileId) return;
+    const requestId = ++sessionStatusRequestId.current;
+    try {
+      const [sessions, profileReports] = await Promise.all([
+        sessionService.list(activeProfileId),
+        reportService.list({ profileId: activeProfileId }),
+      ]);
+      if (sessionStatusRequestId.current !== requestId) return;
+      const nextById = new Map(applySessionReportStatuses(sessions, profileReports)
+        .map((session) => [session.id, session]));
+      setSessionHistory((current) => current.map((session) => {
+        const next = nextById.get(session.id);
+        return next ? { ...next, recording: session.recording, scale: session.scale, homework: session.homework, other: session.other } : session;
+      }));
+    } catch {
+      // 静默失败：保留现有展示，不打断用户。
+    }
+  };
+  const prevQuickViewRef = useRef<QuickView | null>(null);
+  useEffect(() => {
+    const from = prevQuickViewRef.current;
+    if (from === quickView) return;
+    prevQuickViewRef.current = quickView;
+    // 返回档案详情页时刷新记录状态（首次挂载 from=null 不刷，初始加载已覆盖）。
+    if (quickView === "profileDetail" && from && from !== "profileDetail") {
+      void refreshSessionStatuses();
+    }
+  }, [quickView, activeProfileId]);
 
   const openPrivacy = (returnView: QuickView) => {
     setPrivacyReturn({ quickView: returnView, tab });
@@ -2226,6 +2276,9 @@ export default function App() {
                 setQuickView(returnView);
               }}
               onConfirm={() => void confirmReportGeneration()}
+              onRetry={() => {
+                setPendingReportGeneration(retryReportGenerationLoad);
+              }}
             />
           ) : null}
           {quickView === "articleDetail" ? <ArticleDetailScreen article={activeArticle} /> : null}
@@ -7107,11 +7160,13 @@ function ReportGenerationScreen({
   busy,
   onCancel,
   onConfirm,
+  onRetry,
 }: {
   pending: PendingReportGeneration;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  onRetry: () => void;
 }) {
   const groups = reportSourceGroups(pending.sources);
   const title = pending.mode === "create"
@@ -7126,6 +7181,20 @@ function ReportGenerationScreen({
           <Text style={styles.emptySearchTitle}>正在读取可用资料</Text>
           <Text style={styles.emptySearchCopy}>正在确认本次历程可用于生成的录音、纪要、量表与作业。</Text>
         </View>
+      </View>
+    );
+  }
+  if (pending.loadError) {
+    return (
+      <View style={styles.stack}>
+        <View style={styles.emptySearchCard}>
+          <CircleAlert size={20} color={colors.danger} />
+          <Text style={styles.emptySearchTitle}>资料读取失败</Text>
+          <Text style={styles.emptySearchCopy}>{pending.loadError}</Text>
+          <Text style={styles.emptySearchCopy}>页面已保留，你可以检查网络或档案访问状态后重试。</Text>
+        </View>
+        <PrimaryButton icon={RefreshCcw} label="重新读取资料" onPress={onRetry} wide />
+        <GhostButton icon={X} label="返回本次历程" onPress={onCancel} />
       </View>
     );
   }
@@ -7183,17 +7252,27 @@ function ReportGenerationScreen({
 }
 
 function ActionNotice({ notice, onClose }: { notice: Notice; onClose: () => void }) {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 4500);
+    return () => clearTimeout(timer);
+  }, [notice.title, notice.detail, onClose]);
+  // Android 兼容红线：提示层必须用官方 <Modal>，不能用 absolute 自绘覆盖层
+  // （Android 上不置顶、完全不可见——曾导致多轮「提示隐形」误判）。
   return (
-    <View style={styles.noticeToast}>
-      <CheckCircle2 size={19} color={colors.sageDark} />
-      <View style={styles.listBody}>
-        <Text style={styles.noticeToastTitle}>{notice.title}</Text>
-        <Text style={styles.noticeToastDetail}>{notice.detail}</Text>
-      </View>
-      <TouchableOpacity style={styles.noticeToastClose} activeOpacity={0.75} onPress={onClose}>
-        <X size={16} color={colors.muted} />
+    <Modal transparent animationType="fade" visible onRequestClose={onClose}>
+      <TouchableOpacity style={styles.noticeToastBackdrop} activeOpacity={1} onPress={onClose}>
+        <View style={styles.noticeToast}>
+          <CheckCircle2 size={19} color={colors.sageDark} />
+          <View style={styles.listBody}>
+            <Text style={styles.noticeToastTitle}>{notice.title}</Text>
+            <Text style={styles.noticeToastDetail}>{notice.detail}</Text>
+          </View>
+          <TouchableOpacity style={styles.noticeToastClose} activeOpacity={0.75} onPress={onClose}>
+            <X size={16} color={colors.muted} />
+          </TouchableOpacity>
+        </View>
       </TouchableOpacity>
-    </View>
+    </Modal>
   );
 }
 
@@ -7301,7 +7380,6 @@ function SessionCard({
   onNotice: (title: string, detail: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [opening, setOpening] = useState(false);
   const [timeDraft, setTimeDraft] = useState(() => formatDateTimeInput(session.occurredAt));
   const [summaryDraft, setSummaryDraft] = useState(session.summary);
   const [tagDraft, setTagDraft] = useState("");
@@ -7449,15 +7527,10 @@ function SessionCard({
         <TouchableOpacity
           activeOpacity={0.8}
           style={styles.sessionGenerateButton}
-          onPress={() => {
-            if (opening) return;
-            setOpening(true);
-            onOpenRecord();
-            setTimeout(() => setOpening(false), 2500);
-          }}
+          onPress={onOpenRecord}
         >
           {recordPending ? <FileText size={16} color={colors.clayDark} /> : <Eye size={16} color={colors.clayDark} />}
-          <Text style={styles.sessionGenerateText}>{opening ? "正在打开…" : recordActionLabel}</Text>
+          <Text style={styles.sessionGenerateText}>{recordActionLabel}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -9871,11 +9944,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
   },
+  noticeToastBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "flex-start",
+    paddingTop: 76,
+    backgroundColor: "rgba(28,25,23,0.2)",
+  },
   noticeToast: {
-    position: "absolute",
-    left: 14,
-    right: 14,
-    top: 76,
+    marginHorizontal: 14,
     borderRadius: radius.sm,
     padding: 12,
     backgroundColor: "rgba(255,253,249,0.98)",

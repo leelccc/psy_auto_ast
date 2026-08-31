@@ -110,7 +110,9 @@ export function createRecordingService(client: ApiClient) {
       if (filters.keyword) params.set("keyword", filters.keyword);
       if (filters.page) params.set("page", String(filters.page));
       if (filters.pageSize) params.set("page_size", String(filters.pageSize));
-      const query = params.size ? `?${params}` : "";
+      // 注意：不能用 params.size 判断——Hermes 原生 URLSearchParams 没有 size getter，
+      // Android 上恒为 undefined，query 会被整体丢弃（列表过滤全部失效）。
+      const query = params.toString() ? `?${params}` : "";
       const response = await client.get<{
         items: BackendRecording[];
         total: number;

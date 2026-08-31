@@ -294,3 +294,25 @@ PDF 如果能提取文本，可参与 AI 分析。
 - `npm run android` 已成功构建、安装并打开包名 `com.psyautoast.counselor`。
 - Android 构建需使用 Android Studio 自带 JBR Java 21：`/Applications/Android Studio.app/Contents/jbr/Contents/Home`。不要使用当前系统 Java 25。
 - README 已记录 Android、后端、Metro、模拟器的启动和停止命令。
+
+## 2026-08-31 WorkBuddy 对齐后的接续状态
+
+- 项目已从本地 MVP 进入移动端优先的生产化打磨：生产样环境包含 FastAPI/Gunicorn、PostgreSQL、MinIO、Nginx Web 与独立 APK 下载页。
+- WorkBuddy 对齐时的本地构建为 `0830-6`、HEAD 为 `f845820`；用户随后确认 Android 端报告按钮状态仍不正确。当前修正版构建标识为 `0831-3`，尚未提交或部署。
+- `0830-6` 的触摸问题结论不完整。保留 `keyboardShouldPersistTaps="handled"` 和 `TouchableOpacity` 防护，但本轮确认的代码级问题是资料接口失败后立即清空生成页并自动返回，Android 因而表现为没有跳转。
+- 已有报告自动打开编辑页是正确行为。`0831-3` 修复的是 Android 卡片仍显示「生成咨询记录」的状态不一致：档案加载时以真实报告列表校准草稿/正式版状态。
+- 报告首次生成/重新生成已改为全屏页面：点击立即跳转，页面内展示加载、无资料、资料选择和错误状态，避免先等待请求再给反馈。
+- 录音归档后异步触发 AI 处理，并通过轻量状态接口轮询；档案隐私页已支持按档案聚合和分类管理。
+- Web 微信 OAuth 核心已接入；原生微信登录仍需 SDK/prebuild 与正式凭据。
+- 全 App 共用一个时间选择组件：iOS 底部弹层、Android 原生对话框、Web `react-datepicker`。
+
+### 后续工作要求
+
+- 每批完成后先更新 README 顶部更新日志，再提交、推送；不得提交 `.env`、密钥、构建产物或 `.workbuddy`。
+- 默认发布只更新 Web。除非用户明确要求 APK、打包、上传 APK 或部署三件套，否则不构建/上传 APK。
+- 移动端交互验收以 Android release APK 真机/模拟器结果为准；TypeScript 和 Web 正常不能替代 Android 验收。
+- 有网络请求的关键操作应立即进入页面并显示页面级加载/空态/错误态；不要把关键结果只放在 toast 中。
+- Android 真需要弹层时使用 RN 官方 `Modal`；能做全屏 quickView 的关键流程优先做全屏页。
+- 遇到 Android 按钮无响应，先用可视探针确认 handler 是否收到触摸，再查 `keyboardShouldPersistTaps`、遮挡层和触摸组件。
+- 本地 Android 开发/模拟器构建沿用 Android Studio JBR Java 21；生产 release APK 的已验证 Gradle 流程使用 Corretto JDK 17。两条流程不要混用。
+- 安全遗留仍包括：修改默认账号密码、域名与 HTTPS、安全组和 MinIO 暴露收口、清理敏感备份、正式 release key 签名。

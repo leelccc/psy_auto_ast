@@ -1,5 +1,36 @@
 # Progress Log
 
+## 2026-08-31 Android 生成记录页面重新排查
+
+- User confirmed that Android still does not reach the report-generation draft page; invalidated the previous WorkBuddy “touch issue fixed” conclusion.
+- Traced the current path from `SessionCard` through `openSessionRecord` into `reportGeneration`.
+- Found that the generation-source loading effect clears `pendingReportGeneration` and immediately navigates back on any API error, leaving only a transient toast. On Android this is indistinguishable from a failed button press.
+- Started Phase 37 to keep navigation visible and expose load failure/retry as a page-level state.
+- Updated the generation state with `loadError`; report/source load failures now keep `reportGeneration` mounted and expose retry/return actions.
+- Removed the session card's misleading 2.5-second local opening state; page state now owns all loading feedback.
+- Added `reportGenerationFlow.ts` and two regression tests covering retained load errors, retry, and stale-request protection.
+- Fixed an unrelated calendar-sensitive profile test that had become stale after its fixed July date passed.
+- Verification passed: TypeScript typecheck, `96/96` frontend tests, Expo Web production export, and Android `assembleRelease`.
+- Built local APK `apps/mobile/android/app/build/outputs/apk/release/app-release.apk` (67 MB), MD5 `ace70880c6fc8c2d052fca0e69421b4d`; verified bundle tag `0831-1`, package `com.psyautoast.counselor`, and `usesCleartextTraffic=true`.
+- Completed Phase 37. APK remains local and was not uploaded or deployed.
+- User clarified that automatically entering the editor for an existing report is correct. The actual Android defect is the stale「生成咨询记录」button label/status before that correct navigation.
+- Reverted the incorrect `0831-2` existing-report navigation change.
+- Added report-list reconciliation during profile loading so real draft/formal reports correct stale session `record_status` values; added a regression test for stale pending → draft/formal correction.
+- Frontend verification remains `97/97` tests with TypeScript passing; Android `0831-3` rebuild is pending.
+
+## 2026-08-31 Codex / WorkBuddy Context Reconciliation
+
+- Started reconciling `.workbuddy` history with the existing Codex planning records at the user's request.
+- Restored the existing project state: Phase 35 remains active, with durable PostgreSQL/MinIO persistence, real backend APIs, iOS and Android simulator verification, and ongoing browser/mobile edge-case auditing.
+- Added Phase 36 to track the context reconciliation without replacing the active product-audit phase.
+- Read all dated `.workbuddy` memories from 2026-06-26 through 2026-08-30 plus durable `MEMORY.md`.
+- Reconciled the major post-Phase-35 work: production deployment, Web hosting, APK distribution, WeChat OAuth groundwork, cross-platform date picker, mobile race-condition guards, privacy grouping, report-generation redesign, recording polling, and Android-specific interaction debugging.
+- Established the current continuation point as local build `0830-6` at commit `f845820`.
+- Confirmed Git divergence: local `main` is three commits ahead of `origin/main` (`29c97e0`, `22e82f0`, `f845820`). No product files were modified during this reconciliation.
+- Adopted WorkBuddy's operating requirements for README-first change logging, Android release acceptance, Web-only default deployment, explicit APK authorization, mobile page-level async states, and secret hygiene.
+- Updated `docs/prd/session-memory.md` with the concise 2026-08-31 continuation point and separated the verified Java requirements for local emulator builds (JBR 21) and release APK builds (Corretto 17).
+- Completed Phase 36. The next active product work remains Phase 35's Android-first workflow and edge-state audit.
+
 ## 2026-06-05
 
 - Confirmed Git repository exists.

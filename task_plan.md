@@ -6,7 +6,7 @@ Deliver a usable counselor-assistant MVP with a real Expo mobile client, FastAPI
 
 ## Current Phase
 
-MVP implementation has returned to mobile-first functional refinement. Durable state is backend-owned, file bytes use private MinIO, and the mobile app uses typed real APIs and native adapters. iOS simulator build verification passed; local Android emulator build/install verification also passed on AVD `psy_api35`.
+The MVP is deployed and the active work is mobile-first production refinement. Durable state is backend-owned, file bytes use MinIO, and the mobile app uses typed real APIs and native adapters. Local iOS/Android build verification passed, a production-like server and Web client are live, and Android device-specific interaction issues are being closed through release-APK testing. The current local build is `0831-3`; it is newer than the last recorded server APK.
 
 ## Phases
 
@@ -47,6 +47,8 @@ MVP implementation has returned to mobile-first functional refinement. Durable s
 - [x] Phase 33: Regression-test the complete mobile workflows and update handoff records.
 - [x] Phase 34: Complete final local Android APK verification. iOS simulator build is verified; Android emulator build/install is verified on AVD `psy_api35`.
 - [ ] Phase 35: Continue browser-based page, interface, permission, lifecycle, and edge-case audits until every MVP workflow is complete and usable.
+- [x] Phase 36: Reconcile `.workbuddy` history with Codex planning records, capture the latest completed scope and operating requirements, and define the exact continuation point.
+- [x] Phase 37: Re-diagnose and fix the Android consultation-record generation navigation failure based on observable state transitions rather than the previous WorkBuddy conclusion.
 
 ### Phase 35 Progress
 
@@ -60,7 +62,33 @@ MVP implementation has returned to mobile-first functional refinement. Durable s
 - [x] Complete a browser interaction audit pass for recording permission failure, archive completion focus, profile search/time labels, profile material status, record-editor session context, grant-expiry recovery, privacy center focus, schedule, security, and information pages.
 - [x] Complete a second browser audit pass for case-report source filtering, draft overwrite confirmation, Web original-file downloads, and legal-file preview warnings.
 - [x] Complete Android SDK/AVD setup and install the native Android app on `psy_api35`.
+- [x] Deploy FastAPI, PostgreSQL, MinIO, Nginx Web, and an APK download surface to the production-like server.
+- [x] Add Web WeChat OAuth foundations, production JWT validation, configurable CORS, and backend containerization.
+- [x] Add profile-scoped privacy/resource APIs, async recording processing status polling, and full-page report generation states.
+- [x] Run the `0830-4` through `0830-6` Android touch-delivery investigation; the later user retest invalidated it as a complete fix.
+- [x] Prevent report/source API failures from silently clearing the generation page and returning to the profile; verified in local Android release build `0831-1`.
+- [x] Correct the diagnosis: existing reports should open the editor; the Android defect is stale button/status presentation.
+- [x] Reconcile session button state against the real report list when loading a profile and restore the correct existing-report editor navigation.
+- [ ] Rebuild and verify Android release `0831-3`.
 - [ ] Continue the mobile audit across recording, archive, profile materials, generated reports, calendar, and security edge states.
+- [ ] Push the three local Android diagnostic/fix commits when network access permits and the user wants the completed batch synchronized.
+- [ ] If requested, build and distribute a fresh `0830-6` (or later) APK and obtain Android-device acceptance; do not upload APK by default.
+
+### Phase 36 Progress
+
+- [x] Read the existing Codex planning records and restore the current Phase 35 context.
+- [x] Read the complete `.workbuddy` memory timeline and durable memory.
+- [x] Reconcile differences against code and Git state.
+- [x] Update `task_plan.md`, `findings.md`, and `progress.md` with the synchronized handoff.
+- [x] Synchronize the concise handoff in `docs/prd/session-memory.md` and verify the final diff.
+
+### Phase 37 Progress
+
+- [x] Reject the prior “fixed” conclusion based on the user's Android retest.
+- [x] Trace the session-card press handler, `openSessionRecord`, `quickView`, pending generation state, and generation-source loading effect.
+- [x] Identify an immediate silent return path: any report/source API failure clears pending state and navigates back, making Android appear not to have navigated.
+- [x] Keep the generation page mounted on load failure, add page-level error/retry behavior, and remove misleading transient button state.
+- [x] Run frontend tests, typecheck, Web export, and an Android release build.
 
 ## Working Files
 
@@ -113,16 +141,20 @@ MVP implementation has returned to mobile-first functional refinement. Durable s
 
 ## Resume Checklist
 
-1. Read `progress.md`, `task_plan.md`, and `docs/prd/session-memory.md`.
-2. Confirm PostgreSQL and MinIO are healthy, then start FastAPI and Expo Web only for the active browser test session.
-3. Continue the mobile audit for recording upload/recording, archive, profile materials, report generation/export, calendar, and security settings.
-4. Use disposable backend records when testing destructive privacy and lifecycle operations; do not mutate the durable seed examples unnecessarily.
-5. Extend backend whitespace and invalid-state boundary tests when another route stores user-entered text after trimming.
-6. Re-run frontend tests, backend tests, typecheck, Web export, and browser console checks after each closed-loop batch.
-7. For Android testing, start `psy_api35`, run the backend on `127.0.0.1:8000`, then run `npm run android` with Android Studio JBR Java 21.
-8. Before ending each implementation batch, update `progress.md` using `docs/development/change-log-guidelines.md`; update `task_plan.md`, session memory, and backend notes when the decision has long-term impact.
+1. Read `progress.md`, `task_plan.md`, `findings.md`, `docs/prd/session-memory.md`, and `.workbuddy/memory/MEMORY.md`.
+2. Check `git status` and compare local `main` with `origin/main`; the reconciled baseline has three local commits through `f845820` that are not yet on origin.
+3. Continue Android-first testing from build `0830-6`, especially report generation/editing, recording archive/status, privacy authorization, files, calendar, and security edge states.
+4. Confirm PostgreSQL and MinIO health before local browser testing; start FastAPI and Expo only for the active test session.
+5. Use disposable records for destructive privacy/lifecycle tests. Do not re-seed production after clearing business data.
+6. For async mobile actions, navigate immediately and render page-level loading/empty/error states. Do not hide failure or empty-state outcomes in toast-only branches.
+7. Re-run backend tests, frontend tests, typecheck, Web export, and Android release build as appropriate to the changed surface. Android-sensitive UI is not accepted from Web-only verification.
+8. Default deployment is Web-only. Build/upload APK only when explicitly requested; verify `BUILD_TAG`, bundled API URL, manifest cleartext setting (while HTTP remains), signing, and APK cache headers.
+9. Before commit, update the README change log and project records. Do not commit secrets, `.env`, `.workbuddy`, or generated build output; then push only when requested or when completing the established batch workflow.
 
 ## Errors Encountered
 
 | Error | Attempt | Resolution |
 |---|---|---|
+| TypeScript could not resolve `RefreshCw` | 1 | Use the already imported Lucide icon name `RefreshCcw`. |
+| `tsx --test` could not create its IPC pipe under the managed sandbox (`EPERM`) | 1 | Re-run the established test command with escalated execution rather than treating it as a test failure. |
+| Existing profile mapping test expected a July appointment not to be overdue | 1 | Removed the unrelated fixed date from the frequency-mapping test so it tests frequency without becoming calendar-sensitive. |

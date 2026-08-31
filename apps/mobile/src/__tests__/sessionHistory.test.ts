@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   addSessionTag,
   applySessionResourceStatuses,
+  applySessionReportStatuses,
   removeSession,
   sortSessionsDescending,
   updateSession,
@@ -76,4 +77,19 @@ test("session cards reflect backend recordings and attachments", () => {
   assert.equal(updated.scale, "已上传 1");
   assert.equal(updated.homework, "已添加 1");
   assert.equal(updated.other, "1 项");
+});
+
+test("real reports correct a stale pending record status from the session response", () => {
+  assert.equal(applySessionReportStatuses([{
+    ...sessions[0],
+    record: "待生成",
+  }], [{
+    sessionId: sessions[0].id,
+    formalSavedAt: null,
+  }])[0].record, "草稿");
+
+  assert.equal(applySessionReportStatuses([sessions[0]], [{
+    sessionId: sessions[0].id,
+    formalSavedAt: "2026-08-31T12:00:00+08:00",
+  }])[0].record, "正式版");
 });

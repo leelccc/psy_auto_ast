@@ -21,6 +21,11 @@ type SessionResourceRecording = {
   ttl: string;
 };
 
+type SessionReportStatus = {
+  sessionId: string | null;
+  formalSavedAt: string | null;
+};
+
 export function sortSessionsDescending(sessions: SessionHistoryItem[]): SessionHistoryItem[] {
   return [...sessions].sort((left, right) => {
     const timeDifference = Date.parse(right.occurredAt) - Date.parse(left.occurredAt);
@@ -64,6 +69,22 @@ export function applySessionResourceStatuses(
       homework: counts.homework > 0 ? `已添加 ${counts.homework}` : session.homework,
       other: counts.other > 0 ? `${counts.other} 项` : session.other,
     };
+  });
+}
+
+export function applySessionReportStatuses(
+  sessions: SessionHistoryItem[],
+  reports: SessionReportStatus[],
+): SessionHistoryItem[] {
+  return sessions.map((session) => {
+    const ownedReports = reports.filter((report) => report.sessionId === session.id);
+    if (ownedReports.some((report) => report.formalSavedAt)) {
+      return { ...session, record: "正式版" };
+    }
+    if (ownedReports.length > 0) {
+      return { ...session, record: "草稿" };
+    }
+    return session;
   });
 }
 

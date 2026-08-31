@@ -88,12 +88,12 @@ test("backend profile mapping keeps configured frequency", () => {
     crisis_level: null,
     initial_session_count: 0,
     latest_sequence: 0,
-    next_session_at: "2026-07-14T09:30:00+08:00",
+    next_session_at: null,
     metadata: { frequency: "双周" },
   });
 
   assert.equal(profile.frequency, "双周");
-  assert.equal(profile.next, "7月14日 09:30");
+  assert.equal(profile.next, "未设置");
 });
 
 test("profile creation sends role-specific fields to the backend", async () => {

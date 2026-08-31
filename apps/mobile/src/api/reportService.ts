@@ -73,8 +73,11 @@ export function createReportService(client: ApiClient) {
       if (filters.profileId) params.set("profile_id", filters.profileId);
       if (filters.sessionId) params.set("session_id", filters.sessionId);
       if (filters.reportType) params.set("report_type", filters.reportType);
+      // 注意：不能用 params.size 判断——Hermes 原生 URLSearchParams 没有 size getter，
+      // Android 上恒为 undefined，query 会被整体丢弃（曾导致生成页查到别人的报告直接跳编辑页）。
+      const query = params.toString() ? `?${params}` : "";
       const response = await client.get<{ items: BackendReport[] }>(
-        `/reports${params.size ? `?${params}` : ""}`,
+        `/reports${query}`,
       );
       return response.items.map(mapReport);
     },
