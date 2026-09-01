@@ -55,6 +55,14 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [x] Phase 41: Reconcile the 2026-09-01 WorkBuddy work and complete the in-progress iOS readiness batch.
 - [ ] Phase 42: Design and validate the production MinIO HTTPS migration before changing production file URLs.
 - [x] Phase 43: Redesign the profile basic-information edit entry as a compact, accessible mobile control.
+- [x] Phase 44: Deploy Web build `0901-6` with the HTTPS API endpoint and verify the production artifact.
+
+### Phase 44 Progress
+
+- [x] Confirm local `main` is clean and aligned with `origin/main`; deployment scope is Web only.
+- [x] Export the Web artifact with `EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1` and verify its embedded build/API markers.
+- [x] Replace the server Web artifact without deleting the bind-mount directory, reload Nginx, and verify the public site and API health.
+- [x] Record deployment evidence, commit, and push the deployment record.
 
 ### Phase 43 Progress
 
@@ -214,3 +222,4 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 | `tsx --test` could not create its IPC pipe under the managed sandbox (`EPERM`) | 1 | Re-run the established test command with escalated execution rather than treating it as a test failure. |
 | Existing profile mapping test expected a July appointment not to be overdue | 1 | Removed the unrelated fixed date from the frequency-mapping test so it tests frequency without becoming calendar-sensitive. |
 | Backend pytest could not connect to `127.0.0.1:55432` | 1 | Docker daemon is not running, so Compose PostgreSQL cannot start in this session; verified backend syntax with `compileall` and left pytest for when Docker Desktop is available. |
+| Web export command was rejected because it included `rm -rf` for an old `/tmp` artifact directory | 1 | Use a new `mktemp -d` output directory and avoid destructive cleanup. |

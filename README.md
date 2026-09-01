@@ -17,7 +17,8 @@
 - **档案详情**：移除档案头部卡片底部整行的「编辑基本信息」通用按钮，将入口收进姓名右侧，避免它与档案状态、频率和下次安排争抢视觉层级。
 - **视觉设计**：新增暖米色微型胶囊，左侧为陶土色圆形铅笔徽记，配轻微暖灰阴影；按下时背景加深并下沉 1px，保持当前温暖、克制的移动端风格，不使用 HTML 按钮样式。
 - **移动端可用性**：视觉高度为 30px，通过 `hitSlop` 将实际触控范围扩展到 48px；补充 button role 与「编辑档案基本信息」无障碍标签。长姓名单行收缩，保留编辑入口和「已解锁」徽章空间。
-- **验证**：`npm run typecheck` 通过；前端全量 98 项测试通过；`git diff --check` 通过。移动 Web 真实页面联调受生产 API 的 localhost CORS 策略限制，未为截图放宽线上跨域配置。**BUILD_TAG** 升至 `0901-6`；本轮未部署 Web、未构建或上传 APK。
+- **验证**：`npm run typecheck` 通过；前端全量 98 项测试通过；`git diff --check` 通过。移动 Web 真实页面联调受生产 API 的 localhost CORS 策略限制，未为截图放宽线上跨域配置。**BUILD_TAG** 升至 `0901-6`；功能提交时尚未部署 Web，也未构建或上传 APK。
+- **Web 部署**：用户随后明确要求部署 Web；已用 `EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1` 重新导出并覆盖服务器 `/opt/psy_auto_ast/web`，Nginx 配置检查与 reload 成功。线上 bundle `AppEntry-4f43b2adfdc4588a64376ecc7ef5524c.js` 已核对包含 `0901-6` 和 HTTPS API 地址，公开首页及健康接口均返回 200。部署前备份：`/opt/psy_auto_ast/backups/web_20260901_201926/web_before_0901_6.tar.gz`。本次仍未构建或上传 APK。
 
 ### 2026-09-01 · HTTPS 全量收口清单（0901-5）
 

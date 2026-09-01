@@ -651,3 +651,11 @@
 - Kept the 30px visual size while expanding the touch target to 48px with `hitSlop`; added accessibility role/label and long-name shrink behavior.
 - Validation passed: TypeScript, all 98 frontend tests, and `git diff --check`.
 - Local mobile-Web visual login was blocked by the production API CORS allowlist for localhost. The API health endpoint returned 200; production CORS was intentionally not weakened for screenshot testing.
+
+# 2026-09-01 Web Deployment (0901-6)
+
+- User explicitly requested Web deployment; scope remained Web-only with no APK build/upload and no backend or MinIO configuration change.
+- Exported Expo Web with `EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1`; the 4.8MB artifact contains `0901-6` and the HTTPS API marker.
+- Confirmed backend, PostgreSQL, and MinIO health before deployment.
+- Backed up the previous Web artifact to `/opt/psy_auto_ast/backups/web_20260901_201926/web_before_0901_6.tar.gz`, cleared only the contents of the existing bind-mounted Web directory, extracted the new artifact, and reloaded Nginx after a successful config test.
+- Verified the production bundle is `AppEntry-4f43b2adfdc4588a64376ecc7ef5524c.js`, contains the expected build/API markers, and serves HTTP 200; `/api/v1/health` reports all components ok.
