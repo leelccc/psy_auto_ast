@@ -12,6 +12,19 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-01 · iOS 端 ATS 临时白名单（0901-4 续）
+
+- **背景**：0901-4 跑通 iOS 模拟器并修好安全区，但发现 iOS 硬阻塞未解——服务器 `MINIO_ENDPOINT=47.96.89.215:9000`（HTTP 裸 IP 非标端口）→ 后端 `presigned_get_object`/`presigned_put_object` 返回的预签名 URL 是 `http://...` → iOS ATS 直接拒。**录音播放**（`fileService.getDownloadUrl`）和**附件/导出下载**在 iOS 上全挂。**录音上传**走 `recording_audio_input_mode=base64` 默认值（JSON body），不受影响。
+- **临时方案**（仅 Ad Hoc 内部分发可用，App Store 审核会拦，要走「彻底收口」时移除）：`apps/mobile/ios/app/Info.plist` 加 `NSExceptionDomains`（`47.96.89.215` 允许 HTTP）；同步在 `apps/mobile/app.json` 的 `ios.infoPlist.NSAppTransportSecurity` 落持久记录（**注意**：`app.json` 改完需 `npx expo prebuild --platform ios` 让 Expo 重新生成 Info.plist 才生效；这次手动改 Info.plist 是 dev session 临时方案，gitignored）。
+- **彻底收口（生产方案 A）待办**（动生产，用户点头才做）：
+  1. 阿里云 DNS 给 `oss.maxpeking.top` 加 A 记录（47.96.89.215）
+  2. `certbot certonly --standalone -d oss.maxpeking.top` 签子域证书
+  3. nginx 443 反代到本地 `minio:9000`
+  4. 后端 `.env` 改 `MINIO_ENDPOINT=oss.maxpeking.top`、`MINIO_SECURE=true`
+  5. `docker compose -f compose.prod.yaml up -d --build backend` 重建镜像（~25 分钟）
+  6. 移除 `Info.plist` / `app.json` 的 ATS 临时白名单
+- **已知状态**：构建产物 `app.app/Info.plist` 经 `PlistBuddy` 验证含 `NSExceptionDomains.47.96.89.215.NSExceptionAllowsInsecureHTTPLoads=true`；App 启动正常（模拟器登录页可达；具体播放链路需登录后实测）。**未在本批验证**：因为 osascript System Events 权限 `-10004` 拒，没法在模拟器里发键盘事件登录后点开录音，播放链路的端到端验证留给你手动测（模拟器菜单 Bar → Hardware → Keyboard → Connect Hardware Keyboard；或点击输入框弹软键盘）。
+
 ### 2026-09-01 · iOS 端首版构建链跑通 + 安全区修复（0901-4）
 
 - **背景**：用户决定做 iOS 端。本机 Xcode 26.5 + iOS 26.5 模拟器、已 prebuild 的 `apps/mobile/ios`（含 Pods）、CocoaPods 1.16.2；目标「能分发给其他人安装」，账号「免费 Apple ID」+「暂时只有模拟器」（免费 Apple ID 无法导出可分发的 IPA，需 ¥688/年的付费个人账号才能 Ad Hoc 分发到 100 台设备）。
