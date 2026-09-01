@@ -12,6 +12,23 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-01 · 档案基本信息编辑入口轻量化（0901-6）
+
+- **档案详情**：移除档案头部卡片底部整行的「编辑基本信息」通用按钮，将入口收进姓名右侧，避免它与档案状态、频率和下次安排争抢视觉层级。
+- **视觉设计**：新增暖米色微型胶囊，左侧为陶土色圆形铅笔徽记，配轻微暖灰阴影；按下时背景加深并下沉 1px，保持当前温暖、克制的移动端风格，不使用 HTML 按钮样式。
+- **移动端可用性**：视觉高度为 30px，通过 `hitSlop` 将实际触控范围扩展到 48px；补充 button role 与「编辑档案基本信息」无障碍标签。长姓名单行收缩，保留编辑入口和「已解锁」徽章空间。
+- **验证**：`npm run typecheck` 通过；前端全量 98 项测试通过；`git diff --check` 通过。移动 Web 真实页面联调受生产 API 的 localhost CORS 策略限制，未为截图放宽线上跨域配置。**BUILD_TAG** 升至 `0901-6`；本轮未部署 Web、未构建或上传 APK。
+
+### 2026-09-01 · HTTPS 全量收口清单（0901-5）
+
+- **新增权威清单 `docs/https-migration-checklist.md`**：APK + iOS + Web + 服务端全链路从 `http://47.96.89.215` 迁到 `https://maxpeking.top` / `https://oss.maxpeking.top` 的逐条勾选清单（含文件路径 + 行号 + 可复制的 nginx 配置 + 回归验收项 + 回滚方案）。**后续改 HTTPS 以该文档为准，避免改漏。**
+- **修正此前误判**：iOS 上**上传也挂**，不是只有下载挂。此前认为 `recording_audio_input_mode=base64` 让上传不受影响——实际那是「后端交给 AI 的音频输入方式」，而**文件本身仍走 `createUpload` → `PUT presigned URL`**，同样被 ATS 拒。
+- **根因收敛**：后端产生绝对 URL 的地方只有 `backend/app/services/storage.py:44`（`create_upload_url`）和 `:55`（`create_download_url`），仅受 `minio_endpoint` + `minio_secure` 控制。**改这两个环境变量即全链路变 https，无需改业务代码**；DB 只存 `storage_key` 不存 URL，迁移与回滚零数据风险。
+- **出口 3 个**：`POST /api/v1/files`→`upload_url`（files.py:87）、`GET /api/v1/files/{id}/download-url`→`download_url`（files.py:120）、`recordings.py:229`→`audio_url`（服务端内部给百炼下载用，仅 `minio_url` 模式触发）。
+- **前端消费点 11 处**（回归必测）：`App.tsx` 1187/1540（上传 PUT）、2200/2266（导出）、3041/3068/3090/3121（录音播放）、5051/5167（附件预览/下载）；底层 `src/native/fileTransfer.ts:54`(PUT)、`:79/:102/:114`(GET)。
+- **nginx 反代 MinIO 四要点**（缺一即失败，已写入清单文档）：`proxy_set_header Host $host`（SigV4 预签名把 Host 算进签名，用默认 `$proxy_host` 会 403）、`client_max_body_size 500m`、`proxy_request_buffering off`、`proxy_buffering off`。
+- **安全待办已记录**：MinIO 9000 端口当前公网可达（`http://47.96.89.215:9000/minio/health/live` 返回 200），迁移后应从安全组撤掉；9001 console 已确认不可达。
+
 ### 2026-09-01 · iOS 端 ATS 临时白名单（0901-4 续）
 
 - **背景**：0901-4 跑通 iOS 模拟器并修好安全区，但发现 iOS 硬阻塞未解——服务器 `MINIO_ENDPOINT=47.96.89.215:9000`（HTTP 裸 IP 非标端口）→ 后端 `presigned_get_object`/`presigned_put_object` 返回的预签名 URL 是 `http://...` → iOS ATS 直接拒。**录音播放**（`fileService.getDownloadUrl`）和**附件/导出下载**在 iOS 上全挂。**录音上传**走 `recording_audio_input_mode=base64` 默认值（JSON body），不受影响。
