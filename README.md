@@ -12,6 +12,13 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-01 · 邮箱验证码前端打包收口（0901-3）
+
+- **背景**：0901-1 完成邮箱验证码注册/重置密码的前后端代码并 commit（HEAD `148998c`）；0901-2 完成生产后端部署（SMTP 已写入 `47.96.89.215` 的 `backend/.env`，`POST /auth/verification-code` 真发邮件验证通过，alembic 建 `email_verification_codes` 表）。但**线上前端（web/APK）仍是旧 AuthScreen**——本次补齐前端打包收口。
+- **Web 重新导出**：`EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1 npx expo export --platform web`，产物 `dist/` 经 tar+rsync 覆盖 `/opt/psy_auto_ast/web`（服务器用 `find web -mindepth 1 -delete` 清空保留目录再解压）；线上暴露「获取验证码 / 忘记密码」新 UI。
+- **APK 重新打包（按约定默认不上传，本轮回填说明）**：`gradlew assembleRelease`（JDK 17，`EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1` 保持 IP 直连兼容）本地重新打包为 `app-release.apk`（BUILD_TAG 0901-3）。按 0830 发版约定**默认只更新 web、不上传 APK**；但本次 rsync 在中断前已先行传完，故服务器 `/opt/psy_auto_ast/apk/app-release.apk` 实际已是 0901-3，下载页 `BUILD_TAG` 已同步为 `0901-3`。**下次发版默认不再主动传 APK**（用户自取本机产物）。
+- **BUILD_TAG** 升至 `0901-3`（「我的」页底部显示，用于 Android 核对安装版本）。APK 的 https 域名切换与 MinIO https 仍属待收口（待 DNS 稳定后重打）。
+
 ### 2026-09-01 · 邮箱验证码注册 + 重置密码（构建 0901-1）
 
 - **暂缓微信登录**：因暂无营业执照，前端登录页移除「微信登录」入口，改为「邮箱 + 密码」为主登录方式。后端 `wechat_auth` 路由与 `external_accounts` 表保留（未配置时接口返回 503），待后续申请到开放平台资质后再启用。
