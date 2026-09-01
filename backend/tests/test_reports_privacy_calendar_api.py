@@ -51,6 +51,7 @@ def test_report_generation_formal_copy_and_real_exports() -> None:
     )
     assert sources.status_code == 200
     assert any(item["resource_type"] == "session" for item in sources.json()["items"])
+    assert not any(item["resource_type"] in {"profile", "report"} for item in sources.json()["items"])
     attachment_sources = [
         item for item in sources.json()["items"]
         if item["resource_type"] == "attachment"

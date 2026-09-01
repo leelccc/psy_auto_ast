@@ -79,7 +79,7 @@ import {
 } from "./src/profileLibrary";
 import { ApiClient, ApiError } from "./src/api/apiClient";
 import { configuredApiBaseUrl } from "./src/api/apiConfig";
-import { createAuthService, type CurrentUser } from "./src/api/authService";
+import { createAuthService, type CurrentUser, type VerificationCodeResult } from "./src/api/authService";
 import { createAttachmentService, type ProfileAttachment } from "./src/api/attachmentService";
 import { createBackendFileService } from "./src/api/fileService";
 import { createProfileAccessService } from "./src/api/profileAccessService";
@@ -176,7 +176,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0831-4";
+const BUILD_TAG = "0901-1";
 
 type QuickView =
   | "overview"
@@ -231,6 +231,10 @@ type ArchiveResult = ReturnType<typeof buildArchiveResult> & {
   profileId?: string;
   profileCode?: string;
   profileNotes?: string;
+  profileCrisisLevel?: string;
+  profileGender?: string;
+  profileFirstVisitComplaint?: string;
+  profileSupervisionMode?: string;
 };
 type ProfileCreateInput = {
   kind: ArchiveKind;
@@ -379,7 +383,7 @@ function reportSourceGroups(sources: ReportSource[]) {
     if (source.resourceType === "session") labels.add("本次摘要");
     else if (source.resourceType === "transcript" || source.resourceType === "recording_summary") labels.add("录音");
     else if (source.resourceType === "profile") labels.add("基础档案");
-    else if (source.resourceType === "report") labels.add("既往记录/报告");
+    else if (source.resourceType === "report") labels.add("历史记录/报告");
     else if (source.label.includes("量表") || source.label.includes("scale")) labels.add("量表");
     else if (source.label.includes("作业") || source.label.includes("homework")) labels.add("作业");
     else labels.add("其他资料");
@@ -770,13 +774,13 @@ export default function App() {
       setSessionMaterials(materials);
       setProfileItems((current) => current.map((item) => {
         if (item.id !== profileId) return item;
-        const latestSequence = Math.max(item.initialSessionCount ?? 0, ...sessions.map((session) => session.sequence));
+        const latestSequence = Math.max(0, ...sessions.map((session) => session.sequence));
         const sessionCount = sessions.length;
         return {
           ...item,
           count: latestSequence > 0 ? `第${latestSequence}次` : "尚无记录",
           countDetail: item.initialSessionCount && item.initialSessionCount > 0
-            ? `系统内 ${sessionCount} 条 · 既往 ${item.initialSessionCount} 次`
+            ? `系统内 ${sessionCount} 条 · 约定 ${item.initialSessionCount} 次`
             : sessionCount > 0 ? `系统内 ${sessionCount} 条` : undefined,
           sessionCount,
           latestSequence,
@@ -784,14 +788,14 @@ export default function App() {
       }));
       setActiveProfile((current) => {
         if (!current) return current;
-        const latestSequence = Math.max(current.initialSessionCount ?? 0, ...sessions.map((session) => session.sequence));
+        const latestSequence = Math.max(0, ...sessions.map((session) => session.sequence));
         const sessionCount = sessions.length;
         const recordNoun = current.kindLabel === "来访者" ? "咨询" : current.kindLabel === "督导师" ? "受督" : "督导";
         return {
           ...current,
           recordLabel: latestSequence > 0 ? `第 ${latestSequence} 次${recordNoun}` : "尚无记录",
           countDetail: current.initialSessionCount && current.initialSessionCount > 0
-            ? `系统内 ${sessionCount} 条 · 既往 ${current.initialSessionCount} 次`
+            ? `系统内 ${sessionCount} 条 · 约定 ${current.initialSessionCount} 次`
             : sessionCount > 0 ? `系统内 ${sessionCount} 条` : undefined,
           sessionCount,
           latestSequence,
@@ -824,6 +828,10 @@ export default function App() {
       latestSequence: profile.latestSequence,
       profileCode: profile.displayCode,
       profileNotes: profile.notes,
+      profileCrisisLevel: profile.crisisLevel,
+      profileGender: profile.gender,
+      profileFirstVisitComplaint: profile.firstVisitComplaint,
+      profileSupervisionMode: profile.supervisionMode,
     });
     void loadProfileData(profile.id);
   };
@@ -1477,12 +1485,19 @@ export default function App() {
           setAuthStatus("authenticated");
           void authService.me().then(setCurrentUser).catch(() => undefined);
         }}
-        onRegister={async (email, password, displayName) => {
-          await authService.register({ email, password, displayName });
+        onRegister={async (email, password, displayName, code) => {
+          await authService.register({ email, password, displayName, code });
           setCurrentUser(optimisticUser(email, displayName));
           setAuthStatus("authenticated");
           void authService.me().then(setCurrentUser).catch(() => undefined);
         }}
+        onResetPassword={async (email, code, newPassword) => {
+          await authService.resetPassword(email, code, newPassword);
+          setCurrentUser(optimisticUser(email));
+          setAuthStatus("authenticated");
+          void authService.me().then(setCurrentUser).catch(() => undefined);
+        }}
+        onSendCode={(email, purpose) => authService.sendCode(email, purpose)}
       />
     );
   }
@@ -2374,21 +2389,68 @@ export default function App() {
 function AuthScreen({
   onLogin,
   onRegister,
+  onResetPassword,
+  onSendCode,
 }: {
   onLogin: (email: string, password: string) => Promise<void>;
-  onRegister: (email: string, password: string, displayName: string) => Promise<void>;
+  onRegister: (email: string, password: string, displayName: string, code: string) => Promise<void>;
+  onResetPassword: (email: string, code: string, newPassword: string) => Promise<void>;
+  onSendCode: (email: string, purpose: "register" | "reset_password") => Promise<VerificationCodeResult>;
 }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "reset">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const { width } = useWindowDimensions();
   const authShellWidth = Math.max(280, Math.min(width - 48, 430));
-  const canSubmit = email.trim().includes("@")
-    && password.length >= 6
-    && (mode === "login" || displayName.trim().length > 0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setTimeout(() => setCooldown((current) => current - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [cooldown]);
+
+  const emailValid = email.trim().includes("@");
+  const passwordValid = password.length >= 6;
+  const codeValid = code.trim().length >= 4;
+  const canSubmit = emailValid
+    && passwordValid
+    && (mode === "login" || codeValid)
+    && (mode !== "register" || displayName.trim().length > 0);
+
+  const switchMode = (next: "login" | "register" | "reset") => {
+    setMode(next);
+    setError(null);
+    setInfo(null);
+    setCode("");
+  };
+
+  const sendCode = async () => {
+    if (sendingCode || cooldown > 0) return;
+    if (!emailValid) {
+      setError("请先填写正确的邮箱。");
+      return;
+    }
+    setSendingCode(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const purpose = mode === "register" ? "register" : "reset_password";
+      const result = await onSendCode(email.trim().toLowerCase(), purpose);
+      setCooldown(result.retry_seconds || 60);
+      setInfo(result.dev_code ? `开发环境验证码：${result.dev_code}` : "验证码已发送到你的邮箱，请查收。");
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "验证码发送失败，请稍后重试。");
+    } finally {
+      setSendingCode(false);
+    }
+  };
 
   const submit = async () => {
     if (!canSubmit || submitting) return;
@@ -2397,8 +2459,10 @@ function AuthScreen({
     try {
       if (mode === "login") {
         await onLogin(email.trim().toLowerCase(), password);
+      } else if (mode === "register") {
+        await onRegister(email.trim().toLowerCase(), password, displayName.trim(), code.trim());
       } else {
-        await onRegister(email.trim().toLowerCase(), password, displayName.trim());
+        await onResetPassword(email.trim().toLowerCase(), code.trim(), password);
       }
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "登录服务暂不可用，请稍后重试。");
@@ -2406,23 +2470,13 @@ function AuthScreen({
       setSubmitting(false);
     }
   };
-  const handleWechat = async () => {
-    if (Platform.OS === "web") {
-      try {
-        const res = await fetch(`${configuredApiBaseUrl()}/auth/wechat/status`);
-        const data = await res.json() as { web?: boolean };
-        if (!data.web) {
-          setError("微信网页登录尚未配置，请在 backend/.env 填写 AppID/Secret 并重启后端。");
-          return;
-        }
-      } catch {
-        // 检测失败不阻断，直接跳转由后端处理
-      }
-      window.location.href = `${configuredApiBaseUrl()}/auth/wechat/web/authorize`;
-      return;
-    }
-    setError("原生端微信登录需先接入微信 SDK（见 docs/wechat-login.md）。");
-  };
+
+  const titleCopy = mode === "login" ? "欢迎回来" : mode === "register" ? "创建安全工作空间" : "重置密码";
+  const subCopy = mode === "login"
+    ? "登录后访问你的档案、录音、报告与督导记录。"
+    : mode === "register"
+      ? "账号数据存储在后端，档案访问密码按类型独立保护。"
+      : "通过邮箱验证码设置新密码。";
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -2432,12 +2486,8 @@ function AuthScreen({
             <ShieldCheck size={27} color={colors.clayDark} />
           </View>
           <Text style={styles.kicker}>咨询师助手</Text>
-          <Text style={styles.authTitle}>{mode === "login" ? "欢迎回来" : "创建安全工作空间"}</Text>
-          <Text style={styles.authCopy}>
-            {mode === "login"
-              ? "登录后访问你的档案、录音、报告与督导记录。"
-              : "账号数据存储在后端，档案访问密码按类型独立保护。"}
-          </Text>
+          <Text style={styles.authTitle}>{titleCopy}</Text>
+          <Text style={styles.authCopy}>{subCopy}</Text>
         </View>
         <View style={styles.authCard}>
           {mode === "register" ? (
@@ -2461,16 +2511,49 @@ function AuthScreen({
             autoCorrect={false}
             textContentType="emailAddress"
           />
+          {mode !== "login" ? (
+            <View style={styles.authCodeRow}>
+              <TextInput
+                value={code}
+                onChangeText={setCode}
+                placeholder="邮箱验证码"
+                placeholderTextColor={colors.subtle}
+                style={[styles.profileFormInput, styles.authCodeInput]}
+                keyboardType="number-pad"
+                autoCapitalize="none"
+                maxLength={8}
+              />
+              <TouchableOpacity
+                style={[
+                  styles.authSendButton,
+                  (!emailValid || sendingCode || cooldown > 0) && styles.authSendButtonDisabled,
+                ]}
+                activeOpacity={0.8}
+                disabled={!emailValid || sendingCode || cooldown > 0}
+                onPress={() => void sendCode()}
+              >
+                <Text style={styles.authSendButtonText}>
+                  {sendingCode ? "发送中..." : cooldown > 0 ? `${cooldown}s` : "获取验证码"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
           <TextInput
             value={password}
             onChangeText={setPassword}
-            placeholder={mode === "login" ? "密码" : "密码（至少 8 位）"}
+            placeholder={mode === "login" ? "密码" : mode === "register" ? "密码（至少 8 位）" : "新密码（至少 8 位）"}
             placeholderTextColor={colors.subtle}
             style={styles.profileFormInput}
             secureTextEntry
             textContentType={mode === "login" ? "password" : "newPassword"}
           />
+          {mode === "login" ? (
+            <TouchableOpacity activeOpacity={0.7} onPress={() => switchMode("reset")} style={{ alignSelf: "flex-end" }}>
+              <Text style={styles.authForgot}>忘记密码？</Text>
+            </TouchableOpacity>
+          ) : null}
           {error ? <Text style={styles.authError}>{error}</Text> : null}
+          {info ? <Text style={styles.authInfo}>{info}</Text> : null}
           <TouchableOpacity
             style={[styles.primaryButton, styles.wideButton, !canSubmit && styles.pendingPrimaryButton]}
             activeOpacity={0.78}
@@ -2479,30 +2562,15 @@ function AuthScreen({
           >
             {submitting ? <ActivityIndicator color="#FFF9F3" /> : <LockKeyhole size={18} color="#FFF9F3" />}
             <Text style={styles.primaryButtonText}>
-              {submitting ? "正在验证..." : mode === "login" ? "安全登录" : "创建账号"}
+              {submitting ? "正在验证..." : mode === "login" ? "安全登录" : mode === "register" ? "创建账号" : "重置并登录"}
             </Text>
-          </TouchableOpacity>
-          <View style={{ flexDirection: "row", alignItems: "center", marginVertical: 14 }}>
-            <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
-            <Text style={{ marginHorizontal: 10, color: colors.subtle, fontSize: 12 }}>或</Text>
-            <View style={{ flex: 1, height: 1, backgroundColor: colors.line }} />
-          </View>
-          <TouchableOpacity
-            style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", height: 50, borderRadius: 12, backgroundColor: "#07C160" }}
-            activeOpacity={0.85}
-            onPress={handleWechat}
-          >
-            <Text style={{ color: "#FFFFFF", fontSize: 16, fontWeight: "600" }}>微信登录</Text>
           </TouchableOpacity>
           <TouchableOpacity
             activeOpacity={0.75}
-            onPress={() => {
-              setMode((current) => current === "login" ? "register" : "login");
-              setError(null);
-            }}
+            onPress={() => switchMode(mode === "login" ? "register" : "login")}
           >
             <Text style={styles.authSwitch}>
-              {mode === "login" ? "还没有账号？创建账号" : "已有账号？返回登录"}
+              {mode === "reset" ? "返回登录" : mode === "login" ? "还没有账号？创建账号" : "已有账号？返回登录"}
             </Text>
           </TouchableOpacity>
         </View>
@@ -3731,21 +3799,21 @@ function ProfileCreateScreen({
     client: {
       name: "姓名",
       code: "来访者编号",
-      count: "咨询次数",
+      count: "约定咨询次数",
       time: "下次咨询时间",
       timePlaceholder: "例如：2026-07-14 09:30",
       notePlaceholder: "补充来访背景、转介来源等",
     },
     supervisor: {
       name: "督导师",
-      count: "督导次数",
+      count: "约定受督次数",
       time: "下次督导时间",
       timePlaceholder: "例如：2026-07-14 09:30",
       notePlaceholder: "补充督导取向、合作约定等",
     },
     supervisee: {
       name: "受督者",
-      count: "受督次数",
+      count: "约定督导次数",
       time: "下次受督时间",
       timePlaceholder: "例如：2026-07-14 09:30",
       notePlaceholder: "补充受督者背景、关注方向等",
@@ -3757,27 +3825,6 @@ function ProfileCreateScreen({
     { value: "双周", label: "双周" },
     { value: "每月", label: "每月" },
     { value: "自定义", label: "自定义" },
-  ];
-  const genderOptions = [
-    { value: "unknown", label: "未填写" },
-    { value: "female", label: "女" },
-    { value: "male", label: "男" },
-    { value: "other", label: "其他" },
-  ];
-  const crisisOptions = [
-    { value: "none", label: "无" },
-    { value: "mild", label: "轻度" },
-    { value: "moderate", label: "中度" },
-    { value: "high", label: "高" },
-  ];
-  const statusOptions = [
-    { value: "active", label: "进行中" },
-    { value: "paused", label: "暂停" },
-  ];
-  const supervisionModeOptions = [
-    { value: "online", label: "线上" },
-    { value: "offline", label: "线下" },
-    { value: "hybrid", label: "混合" },
   ];
   const switchKind = (nextKind: ArchiveKind) => {
     setKind(nextKind);
@@ -3809,7 +3856,7 @@ function ProfileCreateScreen({
       kind,
       name: name.trim(),
       code: kind === "client" ? code.trim() : "",
-      status: kind === "client" ? profileStatus : "active",
+      status: profileStatus,
       crisisLevel: kind === "client" ? crisisLevel : undefined,
       initialSessionCount: parsedCount,
       next: scheduledAt.trim(),
@@ -3820,6 +3867,7 @@ function ProfileCreateScreen({
             first_visit_complaint: complaint.trim(),
           }
         : {
+            gender,
             supervision_mode: supervisionMode,
           },
       notes: notes.trim(),
@@ -3828,10 +3876,21 @@ function ProfileCreateScreen({
 
   return (
     <View style={styles.stack}>
-      <View style={styles.identityPicker}>
-        <IdentityOption active={kind === "client"} title="新增来访者" detail="咨询记录与个案报告" onPress={() => switchKind("client")} />
-        <IdentityOption active={kind === "supervisor"} title="新增督导师" detail="受督记录与反馈" onPress={() => switchKind("supervisor")} />
-        <IdentityOption active={kind === "supervisee"} title="新增受督者" detail="督导记录与评价" onPress={() => switchKind("supervisee")} />
+      <View style={styles.segmented}>
+        {([
+          { key: "client" as const, label: "来访者" },
+          { key: "supervisor" as const, label: "督导师" },
+          { key: "supervisee" as const, label: "受督者" },
+        ]).map((item) => (
+          <TouchableOpacity
+            key={item.key}
+            style={[styles.segmentButton, kind === item.key && styles.segmentActive]}
+            activeOpacity={0.75}
+            onPress={() => switchKind(item.key)}
+          >
+            <Text style={[styles.segmentText, kind === item.key && styles.segmentTextActive]}>新增{item.label}</Text>
+          </TouchableOpacity>
+        ))}
       </View>
       <View style={styles.formPreviewCard}>
         <Text style={styles.formPreviewTitle}>基础信息</Text>
@@ -3856,8 +3915,8 @@ function ProfileCreateScreen({
               maxLength={12}
             />
             <Text style={styles.formHint}>规则：类型字母 + 年份 + 序号，例如 C26-001。也可以手动填写 12 位以内编号。</Text>
-            <Text style={styles.formFieldLabel}>来访者性别</Text>
-            <ChoiceGroup options={genderOptions} value={gender} onChange={setGender} />
+            <Text style={styles.formFieldLabel}>性别</Text>
+            <ChoiceGroup options={GENDER_CHOICES} value={gender} onChange={setGender} />
           </>
         ) : null}
         <Text style={styles.formFieldLabel}>{fieldCopy.count}</Text>
@@ -3898,14 +3957,18 @@ function ProfileCreateScreen({
               multiline
             />
             <Text style={styles.formFieldLabel}>危机评估</Text>
-            <ChoiceGroup options={crisisOptions} value={crisisLevel} onChange={setCrisisLevel} />
+            <ChoiceGroup options={CRISIS_CHOICES} value={crisisLevel} onChange={setCrisisLevel} />
             <Text style={styles.formFieldLabel}>个案状态</Text>
-            <ChoiceGroup options={statusOptions} value={profileStatus} onChange={setProfileStatus} />
+            <ChoiceGroup options={PROFILE_STATUS_CREATE_CHOICES} value={profileStatus} onChange={setProfileStatus} />
           </>
         ) : (
           <>
+            <Text style={styles.formFieldLabel}>性别</Text>
+            <ChoiceGroup options={GENDER_CHOICES} value={gender} onChange={setGender} />
+            <Text style={styles.formFieldLabel}>档案状态</Text>
+            <ChoiceGroup options={PROFILE_STATUS_CREATE_CHOICES} value={profileStatus} onChange={setProfileStatus} />
             <Text style={styles.formFieldLabel}>督导形式</Text>
-            <ChoiceGroup options={supervisionModeOptions} value={supervisionMode} onChange={setSupervisionMode} />
+            <ChoiceGroup options={SUPERVISION_MODE_CHOICES} value={supervisionMode} onChange={setSupervisionMode} />
           </>
         )}
         <Text style={styles.formFieldLabel}>备注</Text>
@@ -3969,6 +4032,31 @@ const FREQUENCY_CHOICES = [
   { value: "自定义", label: "自定义" },
 ];
 
+const GENDER_CHOICES = [
+  { value: "unknown", label: "未填写" },
+  { value: "female", label: "女" },
+  { value: "male", label: "男" },
+  { value: "other", label: "其他" },
+];
+
+const CRISIS_CHOICES = [
+  { value: "none", label: "无" },
+  { value: "mild", label: "轻度" },
+  { value: "moderate", label: "中度" },
+  { value: "high", label: "高" },
+];
+
+const SUPERVISION_MODE_CHOICES = [
+  { value: "online", label: "线上" },
+  { value: "offline", label: "线下" },
+  { value: "hybrid", label: "混合" },
+];
+
+const PROFILE_STATUS_CREATE_CHOICES = [
+  { value: "active", label: "进行中" },
+  { value: "paused", label: "暂停" },
+];
+
 const PROFILE_STATUS_CHOICES = [
   { value: "进行中", label: "进行中" },
   { value: "暂停", label: "暂停" },
@@ -4011,7 +4099,9 @@ function ProfileDetailScreen({
     code?: string | null;
     status?: string;
     frequency?: string;
+    crisisLevel?: string | null;
     initialSessionCount?: number;
+    metadata?: Record<string, string>;
     notes?: string;
   }) => Promise<void>;
   onCreateSession: (input: { sessionType: string; occurredAt: string; summary: string }) => Promise<void>;
@@ -4045,6 +4135,10 @@ function ProfileDetailScreen({
   const [statusDraft, setStatusDraft] = useState(profile.profileStatus ?? "进行中");
   const [initialCountDraft, setInitialCountDraft] = useState(String(profile.initialSessionCount ?? 0));
   const [notesDraft, setNotesDraft] = useState(profile.profileNotes ?? "");
+  const [genderDraft, setGenderDraft] = useState(profile.profileGender ?? "unknown");
+  const [complaintDraft, setComplaintDraft] = useState(profile.profileFirstVisitComplaint ?? "");
+  const [crisisDraft, setCrisisDraft] = useState(profile.profileCrisisLevel ?? "none");
+  const [supervisionModeDraft, setSupervisionModeDraft] = useState(profile.profileSupervisionMode ?? "online");
   const [savingProfile, setSavingProfile] = useState(false);
   useEffect(() => {
     setNameDraft(profile.profileName);
@@ -4052,6 +4146,10 @@ function ProfileDetailScreen({
     setStatusDraft(profile.profileStatus ?? "进行中");
     setInitialCountDraft(String(profile.initialSessionCount ?? 0));
     setNotesDraft(profile.profileNotes ?? "");
+    setGenderDraft(profile.profileGender ?? "unknown");
+    setComplaintDraft(profile.profileFirstVisitComplaint ?? "");
+    setCrisisDraft(profile.profileCrisisLevel ?? "none");
+    setSupervisionModeDraft(profile.profileSupervisionMode ?? "online");
     setFrequencyDraft(profile.profileFrequency ?? "未设置");
   }, [profile]);
   const [nextSessionDraft, setNextSessionDraft] = useState(() => (
@@ -4130,88 +4228,155 @@ function ProfileDetailScreen({
           activeOpacity={0.78}
           onPress={() => {
             setEditingFrequency(false);
-            setEditingProfile((current) => !current);
+            setEditingProfile(true);
           }}
         >
           <Edit3 size={15} color={colors.clayDark} />
-          <Text style={styles.smallActionText}>{editingProfile ? "收起基本信息" : "编辑基本信息"}</Text>
+          <Text style={styles.smallActionText}>编辑基本信息</Text>
         </TouchableOpacity>
       </View>
 
       {editingProfile ? (
-        <View style={styles.inlineCreateCard}>
-          <Text style={styles.formPreviewTitle}>编辑基本信息</Text>
-          <Text style={styles.formFieldLabel}>姓名 / 称呼</Text>
-          <TextInput
-            value={nameDraft}
-            onChangeText={setNameDraft}
-            placeholder="例如：陈雨"
-            placeholderTextColor={colors.subtle}
-            style={styles.archiveTextInput}
-          />
-          <Text style={styles.formFieldLabel}>档案编号</Text>
-          <TextInput
-            value={codeDraft}
-            onChangeText={setCodeDraft}
-            placeholder="留空则由系统生成"
-            placeholderTextColor={colors.subtle}
-            autoCapitalize="characters"
-            style={styles.archiveTextInput}
-          />
-          <Text style={styles.formFieldLabel}>档案状态</Text>
-          <ChoiceGroup options={PROFILE_STATUS_CHOICES} value={statusDraft} onChange={setStatusDraft} />
-          <Text style={styles.formFieldLabel}>咨询频率</Text>
-          <ChoiceGroup options={FREQUENCY_CHOICES} value={frequencyDraft} onChange={setFrequencyDraft} />
-          <Text style={styles.formFieldLabel}>既往咨询次数</Text>
-          <TextInput
-            value={initialCountDraft}
-            onChangeText={(value) => setInitialCountDraft(value.replace(/[^0-9]/g, ""))}
-            placeholder="0"
-            placeholderTextColor={colors.subtle}
-            keyboardType="numeric"
-            style={styles.archiveTextInput}
-          />
-          <Text style={styles.formFieldLabel}>备注</Text>
-          <TextInput
-            value={notesDraft}
-            onChangeText={setNotesDraft}
-            placeholder="仅自己可见的背景说明"
-            placeholderTextColor={colors.subtle}
-            style={[styles.archiveTextInput, styles.archiveTextArea]}
-            multiline
-          />
-          <View style={styles.inlineActions}>
-            <GhostButton icon={X} label="取消" onPress={() => setEditingProfile(false)} />
-            <PrimaryButton
-              icon={Save}
-              label={savingProfile ? "保存中..." : "保存基本信息"}
-              onPress={async () => {
-                if (savingProfile) return;
-                if (!nameDraft.trim()) {
-                  onNotice("请填写姓名", "档案至少需要姓名或称呼。");
-                  return;
-                }
-                setSavingProfile(true);
-                try {
-                  await onUpdateDetails({
-                    name: nameDraft.trim(),
-                    code: codeDraft.trim() || null,
-                    status: PROFILE_STATUS_TO_BACKEND[statusDraft] ?? statusDraft,
-                    frequency: frequencyDraft,
-                    initialSessionCount: Number(initialCountDraft) || 0,
-                    notes: notesDraft.trim(),
-                  });
-                  setEditingProfile(false);
-                } catch {
-                  // 父级已提示具体错误
-                } finally {
-                  setSavingProfile(false);
-                }
-              }}
-              disabled={savingProfile}
-            />
-          </View>
-        </View>
+        <Modal transparent animationType="slide" visible onRequestClose={() => {
+          if (!savingProfile) setEditingProfile(false);
+        }}>
+          <TouchableWithoutFeedback onPress={() => {
+            if (!savingProfile) setEditingProfile(false);
+          }}>
+            <View style={styles.profileEditBackdrop}>
+              <TouchableWithoutFeedback>
+                <View style={styles.profileEditSheet}>
+                  <View style={styles.datePickerSheetHeader}>
+                    <Text style={styles.formPreviewTitle}>编辑基本信息</Text>
+                    <TouchableOpacity
+                      style={styles.noticeToastClose}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        if (!savingProfile) setEditingProfile(false);
+                      }}
+                    >
+                      <X size={16} color={colors.muted} />
+                    </TouchableOpacity>
+                  </View>
+                  <ScrollView
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.profileEditContent}
+                  >
+                    <Text style={styles.formFieldLabel}>姓名 / 称呼</Text>
+                    <TextInput
+                      value={nameDraft}
+                      onChangeText={setNameDraft}
+                      placeholder="例如：陈雨"
+                      placeholderTextColor={colors.subtle}
+                      style={styles.archiveTextInput}
+                    />
+                    <Text style={styles.formFieldLabel}>档案编号</Text>
+                    <TextInput
+                      value={codeDraft}
+                      onChangeText={(value) => setCodeDraft(normalizeProfileCodeInput(value))}
+                      placeholder="留空则由系统生成"
+                      placeholderTextColor={colors.subtle}
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                      maxLength={12}
+                      style={styles.archiveTextInput}
+                    />
+                    <Text style={styles.formFieldLabel}>档案状态</Text>
+                    <ChoiceGroup options={PROFILE_STATUS_CHOICES} value={statusDraft} onChange={setStatusDraft} />
+                    <Text style={styles.formFieldLabel}>性别</Text>
+                    <ChoiceGroup options={GENDER_CHOICES} value={genderDraft} onChange={setGenderDraft} />
+                    <Text style={styles.formFieldLabel}>频率</Text>
+                    <ChoiceGroup options={FREQUENCY_CHOICES} value={frequencyDraft} onChange={setFrequencyDraft} />
+                    <Text style={styles.formFieldLabel}>约定{sessionNoun}次数</Text>
+                    <TextInput
+                      value={initialCountDraft}
+                      onChangeText={(value) => setInitialCountDraft(value.replace(/[^0-9]/g, "").slice(0, 3))}
+                      placeholder="0"
+                      placeholderTextColor={colors.subtle}
+                      keyboardType="numeric"
+                      style={styles.archiveTextInput}
+                    />
+                    {profile.kindLabel === "来访者" ? (
+                      <>
+                        <Text style={styles.formFieldLabel}>首访时主诉</Text>
+                        <TextInput
+                          value={complaintDraft}
+                          onChangeText={setComplaintDraft}
+                          placeholder="例如：近期焦虑、睡眠受影响"
+                          placeholderTextColor={colors.subtle}
+                          style={[styles.archiveTextInput, styles.archiveTextArea]}
+                          multiline
+                        />
+                        <Text style={styles.formFieldLabel}>危机评估</Text>
+                        <ChoiceGroup options={CRISIS_CHOICES} value={crisisDraft} onChange={setCrisisDraft} />
+                      </>
+                    ) : (
+                      <>
+                        <Text style={styles.formFieldLabel}>督导形式</Text>
+                        <ChoiceGroup
+                          options={SUPERVISION_MODE_CHOICES}
+                          value={supervisionModeDraft}
+                          onChange={setSupervisionModeDraft}
+                        />
+                      </>
+                    )}
+                    <Text style={styles.formFieldLabel}>备注</Text>
+                    <TextInput
+                      value={notesDraft}
+                      onChangeText={setNotesDraft}
+                      placeholder="仅自己可见的背景说明"
+                      placeholderTextColor={colors.subtle}
+                      style={[styles.archiveTextInput, styles.archiveTextArea]}
+                      multiline
+                    />
+                  </ScrollView>
+                  <View style={styles.inlineActions}>
+                    <GhostButton icon={X} label="取消" onPress={() => setEditingProfile(false)} />
+                    <PrimaryButton
+                      icon={Save}
+                      label={savingProfile ? "保存中..." : "保存基本信息"}
+                      onPress={async () => {
+                        if (savingProfile) return;
+                        if (!nameDraft.trim()) {
+                          onNotice("请填写姓名", "档案至少需要姓名或称呼。");
+                          return;
+                        }
+                        setSavingProfile(true);
+                        try {
+                          await onUpdateDetails({
+                            name: nameDraft.trim(),
+                            code: codeDraft.trim() || null,
+                            status: PROFILE_STATUS_TO_BACKEND[statusDraft] ?? statusDraft,
+                            frequency: frequencyDraft,
+                            crisisLevel: profile.kindLabel === "来访者" ? crisisDraft : undefined,
+                            initialSessionCount: Number(initialCountDraft) || 0,
+                            metadata: profile.kindLabel === "来访者"
+                              ? {
+                                  gender: genderDraft,
+                                  first_visit_complaint: complaintDraft.trim(),
+                                }
+                              : {
+                                  gender: genderDraft,
+                                  supervision_mode: supervisionModeDraft,
+                                },
+                            notes: notesDraft.trim(),
+                          });
+                          setEditingProfile(false);
+                        } catch {
+                          // 父级已提示具体错误
+                        } finally {
+                          setSavingProfile(false);
+                        }
+                      }}
+                      disabled={savingProfile}
+                    />
+                  </View>
+                </View>
+              </TouchableWithoutFeedback>
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
       ) : null}
 
       {editingNextSession ? (
@@ -7920,6 +8085,45 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: "700",
   },
+  authInfo: {
+    color: colors.sageDark,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
+  },
+  authForgot: {
+    color: colors.clayDark,
+    fontSize: 13,
+    fontWeight: "700",
+    paddingVertical: 2,
+  },
+  authCodeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  authCodeInput: {
+    flex: 1,
+  },
+  authSendButton: {
+    minWidth: 96,
+    height: 46,
+    paddingHorizontal: 14,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  authSendButtonDisabled: {
+    opacity: 0.45,
+  },
+  authSendButtonText: {
+    color: colors.clayDark,
+    fontSize: 13,
+    fontWeight: "700",
+  },
   authSwitch: {
     color: colors.clayDark,
     fontSize: 14,
@@ -8518,6 +8722,26 @@ const styles = StyleSheet.create({
     paddingBottom: 26,
     paddingHorizontal: 16,
     ...shadow.modal,
+  },
+  profileEditBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(40, 30, 24, 0.45)",
+  },
+  profileEditSheet: {
+    maxHeight: "88%",
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    paddingTop: 10,
+    paddingBottom: 18,
+    paddingHorizontal: 16,
+    gap: 10,
+    ...shadow.modal,
+  },
+  profileEditContent: {
+    paddingBottom: 6,
+    gap: 4,
   },
   datePickerSheetHeader: {
     flexDirection: "row",

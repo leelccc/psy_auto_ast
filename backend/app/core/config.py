@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     wechat_frontend_redirect_uri: str = ""
     wechat_mobile_app_id: str = ""
     wechat_mobile_app_secret: str = ""
+    # 邮件验证码 / SMTP（用于邮箱验证码注册与重置密码）。
+    # 未配置 smtp_host 时：开发环境会在响应中回传 dev_code 便于本地联调，生产环境直接报错。
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""  # 发件人；留空则用 smtp_username
+    smtp_use_ssl: bool = True  # True=SMTP_SSL(465)；False=SMTP+STARTTLS(587)
+    verification_code_length: int = 6
+    verification_code_minutes: int = 10
+    verification_code_retry_seconds: int = 60
+    verification_code_max_attempts: int = 5
     # 逗号分隔的来源白名单；原生 App 不走 CORS，仅 Web 端受影响
     cors_allow_origins: str = (
         "http://localhost:8081,"

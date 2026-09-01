@@ -12,10 +12,10 @@
 ### Current Delivery State
 
 - The project has moved beyond local MVP verification into a deployed production-like environment on `47.96.89.215` with PostgreSQL, MinIO, FastAPI/Gunicorn, Nginx-hosted Expo Web, and an Android APK download page.
-- The reconciled WorkBuddy baseline was `BUILD_TAG = "0830-6"`; the corrected local implementation is now `0831-3` and has not been committed or deployed.
+- The reconciled WorkBuddy baseline was `BUILD_TAG = "0830-6"`; the Android query-string root cause was later fixed and committed as `0831-4`.
 - WorkBuddy's claim that the Android consultation-record action was fully explained by touch delivery was incomplete. Touch safeguards remain useful, but the confirmed code-level failure path was an immediate state rollback after report/source API errors.
-- The local `main` branch is three commits ahead of `origin/main`: `29c97e0`, `22e82f0`, and `f845820`. The first two are diagnostic iterations retained in history; the final commit removes the diagnostic toast and keeps the real fix.
-- The latest server/APK version recorded before the local-only fixes is `0830-3`. The local APK is newer (`0831-3`) and should not be assumed deployed unless the user explicitly requests APK packaging/upload.
+- The local `main` branch is ahead of `origin/main`; the Android diagnostic commits plus `0831-4` root-cause fix are local unless the user requests push/deploy.
+- The current source tag for issue `0831-5` is newer than the latest built APK; it should not be assumed deployed unless the user explicitly requests APK packaging/upload.
 
 ### Product and Architecture Additions
 
@@ -37,6 +37,16 @@
 - For Android buttons apparently doing nothing, first determine whether touch reached the handler. Check `keyboardShouldPersistTaps`, competing layers, and component choice before changing navigation or modal rendering.
 - Preserve the production safety backlog: replace default account passwords, add domain/TLS, restrict security groups and MinIO exposure, remove sensitive backups, and use a release signing key before store distribution.
 - Production secrets appearing in historical `.workbuddy` notes are sensitive operational data. Do not repeat, commit, or expose them in future output; recommend rotation where exposure may have occurred.
+
+## 2026-08-31 Issue 0831-5 Findings
+
+- The `0831-4` baseline is commit `d55f2dd` (`BUILD_TAG = "0831-4"`); the local branch is four commits ahead of `origin/main` before issue `0831-5` edits.
+- Single-session record generation was reusing the full-profile source builder with both `session_id` and `profile_id`. Because `list_sources()` added all profile-level reports whenever `profile_id` was present, the generation page could list other session records and case reports under “将依据以下资料”.
+- The correct scope is report-type dependent: counseling/supervision notes are session-scoped and should use only the current session summary, transcript, recording summary, and current-session attachments; case reports remain profile-scoped and may use profile basics plus historical reports/materials.
+- The profile “咨询/受督/督导次数” field is basic profile information about the agreed/configured count. It is editable and must not control the actual consultation/supervision history sequence. Actual history count and next sequence come only from real `sessions`.
+- Profile metadata currently stores role-specific fields such as `gender`, `first_visit_complaint`, `frequency`, and `supervision_mode`. Updating only one metadata field must merge with existing metadata instead of replacing the whole object.
+- Profile detail “编辑基本信息” should be a modal for all three profile types, not an inline page expansion. Client profiles need editable gender, first-visit complaint, crisis assessment, case status, frequency, agreed count, and notes; supervisor/supervisee profiles need the shared fields plus supervision mode.
+- The profile creation screen already switched between the three identities, but the vertical card layout made the identities look like separate list rows. A segmented/tab control better matches the requested interaction.
 
 ## Source Documents
 

@@ -530,3 +530,108 @@
 - 上传音频时长读取依赖系统可解析 metadata；不可解析格式会上传成功但不计入时长，后续可按需要加服务端音频 metadata 识别。
 - Android Studio / SDK Manager 的远端 manifest 拉取不稳定；本机已通过官方直链补齐当前所需镜像和 NDK。
 - 当前后端、Android 模拟器、Metro 和 Android App 在测试后保持运行，方便继续人工测试。
+
+## 2026-08-31 Issue 0831-5 Profile And Report Source Fixes
+
+### 改动目标
+
+- 修复单次记录草稿页“将依据以下资料”混入其他历程记录、个案报告和全档案资料的问题。
+- 将三类档案的基本信息编辑改为弹窗，并补齐可编辑字段。
+- 将新增档案页的三类身份入口改成 tab/分段切换。
+- 明确“咨询/受督/督导次数”是可编辑基本信息里的约定次数，不参与真实历程数量和记录编号。
+
+### 改动点与实现方法
+
+- 后端：
+  - `/reports/generation-sources` 和 `/reports/generate` 在 `report_type != case_report` 时调用 session-scoped source 清单，不再加入 profile-level report/profile sources。
+  - 个案报告继续使用 profile-scoped sources，并保留排除既有 `case_report` 的规则。
+  - `next_session_sequence()` 和 `resequence_profile_sessions()` 不再以 `initial_session_count` 作为编号起点，真实历程序号只按 sessions 自身顺延。
+  - `PATCH /profiles/{id}` 的 `metadata` 改为与现有 metadata 局部合并，避免只改频率时覆盖性别、首访主诉或督导形式。
+- 前端：
+  - `profileService.mapBackendProfile()` 映射 `gender`、`first_visit_complaint`、`supervision_mode` 和 raw `crisis_level`，并把次数文案改为“约定 N 次”。
+  - 档案详情「编辑基本信息」由内联展开改为 RN `<Modal>` 弹窗；三类档案都可编辑姓名、编号、状态、性别、频率、约定次数和备注。
+  - 来访者编辑弹窗增加首访时主诉与危机评估；督导师/受督者编辑弹窗保留督导形式。
+  - 新增档案页三类入口从纵向身份卡片改为分段 tab；新增督导师/受督者也可填写性别和档案状态。
+  - `BUILD_TAG` 升至 `0831-5`，供后续打包安装时核对版本。
+
+### 接口与数据影响
+
+- 未新增数据库表或迁移。
+- `profiles.initial_session_count` 字段暂保留原后端字段名，但产品语义改为“约定次数/基本信息次数”。
+- 更新 profile metadata 时改为 merge 行为；客户端可只提交本次要修改的 metadata 字段。
+- 单次记录生成的可选资料清单和生成校验口径同步收窄，避免前端过滤与后端校验不一致。
+
+### 边界处理
+
+- 已有个案报告仍不会作为个案报告资料源再次自引用。
+- 已有 session 附件、转写、录音纪要仍可参与当前 session 记录生成。
+- 编辑基本信息弹窗保存中不可点遮罩关闭，防止提交中断造成状态不明。
+- 约定次数为 0 或正整数；实际历程为空时仍显示“尚无记录”。
+
+### 测试验证
+
+- `cd apps/mobile && npm run typecheck`：通过。
+- `cd apps/mobile && node --import tsx --test src/__tests__/*.test.ts`：`98 passed`。
+- `cd backend && ../venv/bin/python -m compileall app`：通过。
+- `git diff --check`：通过。
+- `cd backend && ../venv/bin/pytest tests/test_reports_privacy_calendar_api.py tests/test_core_api.py tests/test_api_contracts.py -q`：未执行成功，原因是当前 Docker daemon 未运行，无法启动 `127.0.0.1:55432` 测试 PostgreSQL。
+
+### 已知限制 / 后续
+
+- 本轮未构建/上传 Android APK；按当前规则，除非用户明确要求 APK 或部署，不默认打包。
+- 后端 pytest 需在 Docker Desktop 启动后补跑。
+
+## 2026-08-31 Issue 0831-5 Server Deployment
+
+### 部署目标
+
+- 按用户要求将 `0831-5` 部署到生产样服务器 `47.96.89.215`。
+- 部署范围按当前记忆规则执行为 Web + 后端；未构建或上传 APK。
+
+### 部署过程
+
+- 本机 Web 构建：
+  - `EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1 npx expo export --platform web --output-dir dist`
+  - 产物主 bundle：`AppEntry-6f5d2eb92ed7cd4b1bfbaa890b9f7bdf.js`
+- 本机打包：
+  - `/tmp/psy0831_5_backend_patch.tar.gz`：包含 `backend/app/api/routes/reports.py`、`backend/app/main.py`、`backend/app/services/session_ordering.py`。
+  - `/tmp/psy0831_5_web_dist.tar.gz`：包含 Web dist。
+- 服务器部署：
+  - 上传两个 tar 到 `/tmp/`。
+  - 部署前备份到 `/opt/psy_auto_ast/backups/deploy_0831_5_20260831_235832/`。
+  - 解压后端补丁到 `/opt/psy_auto_ast/backend`。
+  - 用 `find web -mindepth 1 -delete` 清空并保留 `/opt/psy_auto_ast/web` 目录，再解压新 Web dist。
+  - 执行 `docker compose -f compose.prod.yaml up -d --build backend` 重建并启动后端。
+  - 执行 `docker exec psy-auto-ast-web-1 nginx -s reload`。
+
+### 线上验证
+
+- 服务器内直连 `http://127.0.0.1:8000/api/v1/health`：`api/database/object_storage` 全 ok。
+- 服务器内 nginx 反代 `http://127.0.0.1/api/v1/health`：ok。
+- 公网 `http://47.96.89.215/`：HTTP 200，`Last-Modified: Mon, 31 Aug 2026 15:57:09 GMT`。
+- 公网 `http://47.96.89.215/api/v1/health`：ok。
+- 公网 Web bundle 包含 `0831-5` 与 `47.96.89.215/api/v1`。
+- Docker compose 状态：backend/postgres/minio healthy，web running。
+
+### 已知限制 / 后续
+
+- Android APK 未重新构建或上传；手机端仍需要用户明确要求后再走 Gradle release + `/opt/psy_auto_ast/apk/` 覆盖流程。
+- 本地后端 pytest 仍受 Docker Desktop 未启动限制，未补跑。
+
+## 2026-09-01 Issue 0831-5 Local Android APK Build
+
+- 按用户明确要求执行本地 Android release 打包。
+- 构建命令环境：
+  - `JAVA_HOME=/Users/apple/Library/Java/JavaVirtualMachines/corretto-17.0.15/Contents/Home`
+  - `ANDROID_HOME=/Users/apple/Library/Android/sdk`
+  - `EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1`
+  - `./gradlew assembleRelease`
+- 构建成功：`BUILD SUCCESSFUL in 1m 11s`。
+- 产物：`apps/mobile/android/app/build/outputs/apk/release/app-release.apk`。
+- 文件信息：`70,723,550 bytes`，MD5 `1359477fafac1f1d4d0b12d1205c5845`，本地时间 `2026-09-01 00:03:26`。
+- 包内校验：
+  - JS bundle 包含 `0831-5`。
+  - JS bundle 包含 `http://47.96.89.215/api/v1`。
+  - Manifest 包名 `com.psyautoast.counselor`，`versionName=0.1.0`。
+  - Manifest 保留 `usesCleartextTraffic=true`，适配当前 HTTP API 地址。
+- 本次仅本地打包，未上传或覆盖服务器 `/apk/` 下载页。

@@ -1,5 +1,5 @@
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends
@@ -18,6 +18,7 @@ from app.services.auth import (
     utc_now,
     verify_password,
 )
+from app.services.verification import consume_verification_code, issue_verification_code
 
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
@@ -28,10 +29,29 @@ DisplayName = Annotated[
 ]
 
 
+def _normalize_email(email: str) -> str:
+    email = email.strip().lower()
+    if not EMAIL_PATTERN.match(email):
+        raise ApiError(422, "email_invalid", "邮箱格式不正确。")
+    return email
+
+
+class SendCodeRequest(BaseModel):
+    email: str
+    purpose: Literal["register", "reset_password"]
+
+
 class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=6, max_length=128)
     display_name: DisplayName
+    code: str = Field(min_length=4, max_length=8)
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str = Field(min_length=4, max_length=8)
+    new_password: str = Field(min_length=6, max_length=128)
 
 
 class LoginRequest(BaseModel):
@@ -60,16 +80,30 @@ def serialize_user(user: User) -> dict[str, object]:
     }
 
 
+@router.post("/auth/verification-code")
+def send_verification_code(
+    payload: SendCodeRequest,
+    database: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    email = _normalize_email(payload.email)
+    if payload.purpose == "register":
+        if database.scalar(select(User.id).where(User.email == email)) is not None:
+            raise ApiError(409, "email_already_registered", "该邮箱已注册，请直接登录。")
+    else:  # reset_password
+        if database.scalar(select(User.id).where(User.email == email)) is None:
+            raise ApiError(404, "email_not_registered", "该邮箱尚未注册。")
+    return issue_verification_code(database, email, payload.purpose)
+
+
 @router.post("/auth/register", status_code=201)
 def register(
     payload: RegisterRequest,
     database: Annotated[Session, Depends(get_db)],
 ) -> dict[str, object]:
-    email = payload.email.strip().lower()
-    if not EMAIL_PATTERN.match(email):
-        raise ApiError(422, "email_invalid", "邮箱格式不正确。")
+    email = _normalize_email(payload.email)
     if database.scalar(select(User.id).where(User.email == email)) is not None:
         raise ApiError(409, "email_already_registered", "该邮箱已注册。")
+    consume_verification_code(database, email, "register", payload.code)
     now = utc_now()
     user = User(
         id=str(uuid4()),
@@ -86,6 +120,23 @@ def register(
     )
     database.add(user)
     database.flush()
+    return issue_token_pair(database, user.id)
+
+
+@router.post("/auth/reset-password")
+def reset_password(
+    payload: ResetPasswordRequest,
+    database: Annotated[Session, Depends(get_db)],
+) -> dict[str, object]:
+    email = _normalize_email(payload.email)
+    user = database.scalar(select(User).where(User.email == email))
+    if user is None:
+        raise ApiError(404, "email_not_registered", "该邮箱尚未注册。")
+    consume_verification_code(database, email, "reset_password", payload.code)
+    user.password_hash = hash_password(payload.new_password)
+    user.updated_at = utc_now()
+    database.commit()
+    # 重置成功后直接登录，返回令牌对
     return issue_token_pair(database, user.id)
 
 

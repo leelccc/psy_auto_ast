@@ -16,20 +16,28 @@ test("backend profile response maps to the existing profile card model", () => {
     status: "active",
     crisis_level: "mild",
     initial_session_count: 4,
+    session_count: 2,
     latest_sequence: 6,
     next_session_at: null,
+    metadata: {
+      gender: "female",
+      first_visit_complaint: "睡眠受影响",
+    },
   }), {
     id: "profile-chen-yu",
     displayCode: "A08",
     name: "陈雨",
     type: "来访者",
     count: "第6次",
-    countDetail: "系统内 2 条 · 既往 4 次",
+    countDetail: "系统内 2 条 · 约定 4 次",
     sessionCount: 2,
     initialSessionCount: 4,
     latestSequence: 6,
     status: "进行中",
     risk: "轻度",
+    crisisLevel: "mild",
+    gender: "female",
+    firstVisitComplaint: "睡眠受影响",
     next: "未设置",
   });
 });
@@ -52,7 +60,7 @@ test("backend profile mapping explains existing sequence gaps", () => {
     name: "王澜",
     type: "督导师",
     count: "第4次",
-    countDetail: "系统内 2 条 · 既往 2 次",
+    countDetail: "系统内 2 条 · 约定 2 次",
     sessionCount: 2,
     initialSessionCount: 2,
     latestSequence: 4,
@@ -165,6 +173,45 @@ test("profile update sends next session time to backend", async () => {
 
   assert.equal(updated.nextSessionAt, "2026-07-14T09:30:10+08:00");
   assert.deepEqual(requestBody, { next_session_at: "2026-07-14T09:30:10+08:00" });
+});
+
+test("profile update sends editable basic profile fields to backend", async () => {
+  let requestBody: unknown = null;
+  const service = createProfileService({
+    patch: async (_path: string, body: unknown) => {
+      requestBody = body;
+      return {
+        id: "profile-new",
+        type: "client",
+        name: "林清",
+        code: "C26-001",
+        status: "paused",
+        crisis_level: "moderate",
+        initial_session_count: 8,
+        session_count: 1,
+        latest_sequence: 1,
+        next_session_at: null,
+        metadata: { frequency: "双周", gender: "female", first_visit_complaint: "适应困难" },
+      };
+    },
+  } as unknown as ApiClient);
+
+  const updated = await service.update("profile-new", {
+    status: "paused",
+    crisisLevel: "moderate",
+    initialSessionCount: 8,
+    metadata: { gender: "female", first_visit_complaint: "适应困难" },
+    frequency: "双周",
+  });
+
+  assert.equal(updated.crisisLevel, "moderate");
+  assert.equal(updated.firstVisitComplaint, "适应困难");
+  assert.deepEqual(requestBody, {
+    status: "paused",
+    crisis_level: "moderate",
+    initial_session_count: 8,
+    metadata: { gender: "female", first_visit_complaint: "适应困难", frequency: "双周" },
+  });
 });
 
 

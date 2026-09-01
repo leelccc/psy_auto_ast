@@ -12,6 +12,16 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-01 · 邮箱验证码注册 + 重置密码（构建 0901-1）
+
+- **暂缓微信登录**：因暂无营业执照，前端登录页移除「微信登录」入口，改为「邮箱 + 密码」为主登录方式。后端 `wechat_auth` 路由与 `external_accounts` 表保留（未配置时接口返回 503），待后续申请到开放平台资质后再启用。
+- **邮箱验证码注册**：新增 `POST /api/v1/auth/verification-code`（发送验证码，用途 register/reset_password，含 60s 冷却、10min 有效期、最多 5 次校验、只存哈希）+ `POST /api/v1/auth/register` 增加 `code` 字段，注册需先通过邮箱验证码校验。
+- **验证码重置密码**：新增 `POST /api/v1/auth/reset-password`（`email + code + new_password`），重置成功后直接签发令牌并登录；前端登录页新增「忘记密码？」入口与「重置密码」模式。
+- **前端交互**：`AuthScreen` 增加验证码输入 + 「获取验证码」按钮（60s 倒计时）与开发环境 `dev_code` 提示；注册/重置模式复用同一验证码行。
+- **SMTP 配置**（`backend/.env`，未配置时开发环境回传 `dev_code`、生产环境报 503）：`SMTP_HOST`、`SMTP_PORT`（默认 465）、`SMTP_USERNAME`、`SMTP_PASSWORD`、`SMTP_FROM`（留空用 username）、`SMTP_USE_SSL`（true=SSL/465，false=STARTTLS/587）；验证码参数 `VERIFICATION_CODE_LENGTH`/`VERIFICATION_CODE_MINUTES`/`VERIFICATION_CODE_RETRY_SECONDS`/`VERIFICATION_CODE_MAX_ATTEMPTS`。
+- **数据库**：新增 `email_verification_codes` 表（alembic 迁移 `a1b2c3d4e5f6`）。`BUILD_TAG` 升至 `0901-1`。
+- **验证**：`apps/mobile` `tsc --noEmit` 通过；后端 `create_app()` 导入与路由注册通过（新增 3 条 auth 路由）。
+
 ### 2026-09-01 · HTTPS 域名落地与 Web Mixed Content 修复
 
 - **域名与证书**：`maxpeking.top`（阿里云注册）NS 切到阿里云 DNS 后，服务器用 Let's Encrypt `certbot certonly --standalone` 签发证书，已配 `systemd timer` + pre/post hook 自动续期。`https://maxpeking.top/` 可正常访问，证书到期 2026-11-29。

@@ -101,7 +101,7 @@ def test_profile_list_supports_real_search_filters_and_pagination() -> None:
                 "status": "active",
                 "crisis_level": None,
                 "initial_session_count": 3,
-                "latest_sequence": 3,
+                "latest_sequence": 0,
                 "session_count": 0,
                 "next_session_at": item["next_session_at"],
                 "metadata": {"direction": "整合取向"},
@@ -150,6 +150,16 @@ def test_profile_create_update_and_delete_preserve_complete_fields() -> None:
     assert updated.status_code == 200
     assert updated.json()["status"] == "paused"
     assert updated.json()["notes"] == "暂缓两周"
+    assert updated.json()["metadata"]["gender"] == "female"
+
+    metadata_updated = api.patch(
+        f"/api/v1/profiles/{profile_id}",
+        headers=unlocked_headers,
+        json={"metadata": {"frequency": "双周"}},
+    )
+    assert metadata_updated.status_code == 200
+    assert metadata_updated.json()["metadata"]["gender"] == "female"
+    assert metadata_updated.json()["metadata"]["frequency"] == "双周"
 
     missing_confirmation = api.request(
         "DELETE",

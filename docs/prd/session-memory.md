@@ -298,13 +298,21 @@ PDF 如果能提取文本，可参与 AI 分析。
 ## 2026-08-31 WorkBuddy 对齐后的接续状态
 
 - 项目已从本地 MVP 进入移动端优先的生产化打磨：生产样环境包含 FastAPI/Gunicorn、PostgreSQL、MinIO、Nginx Web 与独立 APK 下载页。
-- WorkBuddy 对齐时的本地构建为 `0830-6`、HEAD 为 `f845820`；用户随后确认 Android 端报告按钮状态仍不正确。当前修正版构建标识为 `0831-3`，尚未提交或部署。
+- WorkBuddy 对齐时的本地构建为 `0830-6`、HEAD 为 `f845820`；用户随后确认 Android 端报告按钮状态仍不正确。该问题后来由 `0831-4` 修复并提交，真实根因为 Hermes `URLSearchParams.size` 缺失导致 Android 请求 query string 丢失。
 - `0830-6` 的触摸问题结论不完整。保留 `keyboardShouldPersistTaps="handled"` 和 `TouchableOpacity` 防护，但本轮确认的代码级问题是资料接口失败后立即清空生成页并自动返回，Android 因而表现为没有跳转。
 - 已有报告自动打开编辑页是正确行为。`0831-3` 修复的是 Android 卡片仍显示「生成咨询记录」的状态不一致：档案加载时以真实报告列表校准草稿/正式版状态。
 - 报告首次生成/重新生成已改为全屏页面：点击立即跳转，页面内展示加载、无资料、资料选择和错误状态，避免先等待请求再给反馈。
 - 录音归档后异步触发 AI 处理，并通过轻量状态接口轮询；档案隐私页已支持按档案聚合和分类管理。
 - Web 微信 OAuth 核心已接入；原生微信登录仍需 SDK/prebuild 与正式凭据。
 - 全 App 共用一个时间选择组件：iOS 底部弹层、Android 原生对话框、Web `react-datepicker`。
+
+## 2026-08-31 问题0831-5 接续状态
+
+- 当前源码 `BUILD_TAG` 已升至 `0831-5`；Web + 后端已部署到服务器 `47.96.89.215`。2026-09-01 已按用户明确要求完成本地 Android release APK 打包：`apps/mobile/android/app/build/outputs/apk/release/app-release.apk`，`70,723,550 bytes`，MD5 `1359477fafac1f1d4d0b12d1205c5845`。该 APK 已校验包含 `0831-5` 与 `http://47.96.89.215/api/v1`，但尚未上传或覆盖服务器 `/apk/` 下载页。
+- 单次记录草稿资料源已收窄：咨询/受督/督导记录只依据当前历程的 session 摘要、转写、录音纪要和本次附件；个案报告才继续使用全档案资料。
+- 档案基本信息里的咨询/受督/督导次数已明确为“约定次数/基本信息次数”，可编辑，但不参与真实历程条数或下一条记录编号。
+- 三类档案的基本信息编辑已改为 RN `<Modal>` 弹窗；新增档案页三类入口已改为 tab/分段切换。
+- 已验证移动端 typecheck、移动端 98 项测试、后端 Python compileall、`git diff --check` 和线上健康检查。服务器部署备份目录为 `/opt/psy_auto_ast/backups/deploy_0831_5_20260831_235832/`；后端 pytest 因当前 Docker daemon 未运行、测试 PostgreSQL 不可用而未执行。
 
 ### 后续工作要求
 

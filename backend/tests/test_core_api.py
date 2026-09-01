@@ -113,7 +113,7 @@ def test_profile_detail_requires_reusable_short_lived_profile_access_grant() -> 
     cleanup_profile(profile_id)
 
 
-def test_creating_session_uses_initial_count_and_keeps_sequence_stable() -> None:
+def test_creating_session_keeps_agreed_count_separate_from_sequence() -> None:
     api = client()
     profile_response = api.post(
         "/api/v1/profiles",
@@ -139,9 +139,9 @@ def test_creating_session_uses_initial_count_and_keeps_sequence_stable() -> None
     )
 
     assert first_session.status_code == 201
-    assert first_session.json()["sequence_no"] == 6
+    assert first_session.json()["sequence_no"] == 1
     assert second_session.status_code == 201
-    assert second_session.json()["sequence_no"] == 7
+    assert second_session.json()["sequence_no"] == 2
     cleanup_profile(profile_id)
 
 

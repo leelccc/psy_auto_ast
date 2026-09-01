@@ -11,7 +11,7 @@ def next_session_sequence(database: Session, *, profile: Profile, user_id: str) 
             SessionRecord.user_id == user_id,
         )
     )
-    return max(latest_sequence or 0, profile.initial_session_count) + 1
+    return (latest_sequence or 0) + 1
 
 
 def resequence_profile_sessions(
@@ -32,12 +32,12 @@ def resequence_profile_sessions(
             SessionRecord.id.asc(),
         )
     ).all()
-    start = profile.initial_session_count + 1
+    start = 1
     expected = [start + index for index in range(len(sessions))]
     if [session.sequence_no for session in sessions] == expected:
         return False
     temporary_start = max(
-        [session.sequence_no for session in sessions] + [profile.initial_session_count],
+        [session.sequence_no for session in sessions] + [0],
     ) + len(sessions) + 1000
     for index, session in enumerate(sessions):
         session.sequence_no = temporary_start + index

@@ -6,7 +6,7 @@ Deliver a usable counselor-assistant MVP with a real Expo mobile client, FastAPI
 
 ## Current Phase
 
-The MVP is deployed and the active work is mobile-first production refinement. Durable state is backend-owned, file bytes use MinIO, and the mobile app uses typed real APIs and native adapters. Local iOS/Android build verification passed, a production-like server and Web client are live, and Android device-specific interaction issues are being closed through release-APK testing. The current local build is `0831-3`; it is newer than the last recorded server APK.
+The MVP is deployed and the active work is mobile-first production refinement. Durable state is backend-owned, file bytes use MinIO, and the mobile app uses typed real APIs and native adapters. Local iOS/Android build verification passed, a production-like server and Web client are live, and Android device-specific interaction issues are being closed through release-APK testing. The current source build tag is `0831-5`; a local Android release APK for `0831-5` has been built and verified, but it has not been uploaded to the server APK download page unless separately requested.
 
 ## Phases
 
@@ -49,6 +49,9 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [ ] Phase 35: Continue browser-based page, interface, permission, lifecycle, and edge-case audits until every MVP workflow is complete and usable.
 - [x] Phase 36: Reconcile `.workbuddy` history with Codex planning records, capture the latest completed scope and operating requirements, and define the exact continuation point.
 - [x] Phase 37: Re-diagnose and fix the Android consultation-record generation navigation failure based on observable state transitions rather than the previous WorkBuddy conclusion.
+- [x] Phase 38: Fix issue `0831-5`: session-record draft sources, profile basic-info editing, profile creation tabs, and initial-count semantics.
+- [x] Phase 39: Deploy issue `0831-5` backend and Web changes to the production-like server.
+- [x] Phase 40: Build and verify a local Android release APK for `0831-5`.
 
 ### Phase 35 Progress
 
@@ -69,10 +72,11 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [x] Prevent report/source API failures from silently clearing the generation page and returning to the profile; verified in local Android release build `0831-1`.
 - [x] Correct the diagnosis: existing reports should open the editor; the Android defect is stale button/status presentation.
 - [x] Reconcile session button state against the real report list when loading a profile and restore the correct existing-report editor navigation.
-- [ ] Rebuild and verify Android release `0831-3`.
+- [x] Rebuild and verify Android release `0831-4`.
 - [ ] Continue the mobile audit across recording, archive, profile materials, generated reports, calendar, and security edge states.
-- [ ] Push the three local Android diagnostic/fix commits when network access permits and the user wants the completed batch synchronized.
-- [ ] If requested, build and distribute a fresh `0830-6` (or later) APK and obtain Android-device acceptance; do not upload APK by default.
+- [ ] Push the local Android diagnostic/fix commits and issue `0831-5` work when the user wants the completed batch synchronized.
+- [x] Build a fresh local `0831-5` Android release APK after explicit user request; do not upload APK by default.
+- [ ] If requested, upload/distribute the fresh `0831-5` APK and obtain Android-device acceptance.
 
 ### Phase 36 Progress
 
@@ -89,6 +93,30 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [x] Identify an immediate silent return path: any report/source API failure clears pending state and navigates back, making Android appear not to have navigated.
 - [x] Keep the generation page mounted on load failure, add page-level error/retry behavior, and remove misleading transient button state.
 - [x] Run frontend tests, typecheck, Web export, and an Android release build.
+
+### Phase 38 Progress
+
+- [x] Start issue `0831-5` from user feedback.
+- [x] Confirm the current baseline is `0831-4` at commit `d55f2dd`, with four local commits ahead of `origin/main`.
+- [x] Identify source-scope root cause: single-session note generation passes both `session_id` and `profile_id`, and the shared backend source builder currently adds full profile-level reports whenever `profile_id` is present.
+- [x] Implement the session-note source narrowing and profile UI/data fixes.
+- [x] Run targeted validation and update durable records.
+
+### Phase 39 Progress
+
+- [x] User explicitly requested server deployment for `0831-5`.
+- [x] Confirm deployment scope from memory: deploy backend and Web by default; do not build/upload APK unless explicitly requested.
+- [x] Build Web export with `EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1`.
+- [x] Sync backend patch and Web artifact to `/opt/psy_auto_ast` on `47.96.89.215`.
+- [x] Rebuild backend container, reload Web nginx, and verify health.
+
+### Phase 40 Progress
+
+- [x] User explicitly requested local APK packaging.
+- [x] Run `./gradlew assembleRelease` with Corretto JDK 17 and `EXPO_PUBLIC_API_BASE_URL=http://47.96.89.215/api/v1`.
+- [x] Build output: `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`, `70,723,550 bytes`, MD5 `1359477fafac1f1d4d0b12d1205c5845`.
+- [x] Verify APK bundle contains `0831-5` and `http://47.96.89.215/api/v1`; verify manifest package `com.psyautoast.counselor`, `versionName=0.1.0`, and `usesCleartextTraffic=true`.
+- [x] Leave server `/apk/` untouched because the user requested packaging, not upload/distribution.
 
 ## Working Files
 
@@ -158,3 +186,4 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 | TypeScript could not resolve `RefreshCw` | 1 | Use the already imported Lucide icon name `RefreshCcw`. |
 | `tsx --test` could not create its IPC pipe under the managed sandbox (`EPERM`) | 1 | Re-run the established test command with escalated execution rather than treating it as a test failure. |
 | Existing profile mapping test expected a July appointment not to be overdue | 1 | Removed the unrelated fixed date from the frequency-mapping test so it tests frequency without becoming calendar-sensitive. |
+| Backend pytest could not connect to `127.0.0.1:55432` | 1 | Docker daemon is not running, so Compose PostgreSQL cannot start in this session; verified backend syntax with `compileall` and left pytest for when Docker Desktop is available. |

@@ -21,6 +21,7 @@ type BackendProfile = {
 const statusLabels: Record<string, string> = {
   active: "进行中",
   paused: "暂停",
+  closed: "已结束",
 };
 
 const riskLabels: Record<string, string> = {
@@ -43,11 +44,16 @@ function formatFrequency(metadata: Record<string, unknown> | undefined): string 
   return typeof frequency === "string" && frequency.trim() ? frequency.trim() : undefined;
 }
 
+function metadataString(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export function mapBackendProfile(profile: BackendProfile): ProfileListItem {
-  const sequence = profile.latest_sequence ?? profile.initial_session_count;
-  const sessionCount = profile.session_count ?? Math.max(0, sequence - profile.initial_session_count);
+  const sequence = profile.latest_sequence ?? 0;
+  const sessionCount = profile.session_count ?? sequence;
   const countDetail = profile.initial_session_count > 0
-    ? `系统内 ${sessionCount} 条 · 既往 ${profile.initial_session_count} 次`
+    ? `系统内 ${sessionCount} 条 · 约定 ${profile.initial_session_count} 次`
     : sessionCount > 0
       ? `系统内 ${sessionCount} 条`
       : undefined;
@@ -65,10 +71,17 @@ export function mapBackendProfile(profile: BackendProfile): ProfileListItem {
     risk: profile.crisis_level ? riskLabels[profile.crisis_level] ?? profile.crisis_level : "未评估",
     next: formatNextSession(profile.next_session_at),
   };
+  if (profile.crisis_level) mapped.crisisLevel = profile.crisis_level;
   if (profile.next_session_at) mapped.nextSessionAt = profile.next_session_at;
   if (profile.notes) mapped.notes = profile.notes;
   const frequency = formatFrequency(profile.metadata);
   if (frequency) mapped.frequency = frequency;
+  const gender = metadataString(profile.metadata, "gender");
+  if (gender) mapped.gender = gender;
+  const firstVisitComplaint = metadataString(profile.metadata, "first_visit_complaint");
+  if (firstVisitComplaint) mapped.firstVisitComplaint = firstVisitComplaint;
+  const supervisionMode = metadataString(profile.metadata, "supervision_mode");
+  if (supervisionMode) mapped.supervisionMode = supervisionMode;
   return mapped;
 }
 
@@ -105,18 +118,26 @@ export function createProfileService(client: ApiClient) {
     async update(profileId: string, input: {
       nextSessionAt?: string | null;
       frequency?: string;
+      crisisLevel?: string | null;
       name?: string;
       code?: string | null;
       status?: string;
       initialSessionCount?: number;
+      metadata?: Record<string, unknown>;
       notes?: string;
     }): Promise<ProfileListItem> {
       const body: Record<string, unknown> = {};
       if (input.nextSessionAt !== undefined) body.next_session_at = input.nextSessionAt;
-      if (input.frequency !== undefined) body.metadata = { frequency: input.frequency };
+      if (input.frequency !== undefined || input.metadata !== undefined) {
+        body.metadata = { ...(input.metadata ?? {}) };
+        if (input.frequency !== undefined) {
+          (body.metadata as Record<string, unknown>).frequency = input.frequency;
+        }
+      }
       if (input.name !== undefined) body.name = input.name;
       if (input.code !== undefined) body.code = input.code;
       if (input.status !== undefined) body.status = input.status;
+      if (input.crisisLevel !== undefined) body.crisis_level = input.crisisLevel;
       if (input.initialSessionCount !== undefined) {
         body.initial_session_count = input.initialSessionCount;
       }

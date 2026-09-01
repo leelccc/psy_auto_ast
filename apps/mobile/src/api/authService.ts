@@ -8,21 +8,38 @@ export type CurrentUser = {
   updated_at: string;
 };
 
+export type VerificationCodeResult = {
+  sent: boolean;
+  dev_code?: string;
+  expire_seconds: number;
+  retry_seconds: number;
+};
+
 export function createAuthService(client: ApiClient) {
   const applyTokens = (tokens: TokenPair) => {
     client.setTokens(tokens.access_token, tokens.refresh_token);
     return tokens;
   };
   return {
-    async register(input: { email: string; password: string; displayName: string }) {
+    async register(input: { email: string; password: string; displayName: string; code: string }) {
       return applyTokens(await client.post<TokenPair>("/auth/register", {
         email: input.email,
         password: input.password,
         display_name: input.displayName,
+        code: input.code,
       }));
     },
     async login(email: string, password: string) {
       return applyTokens(await client.post<TokenPair>("/auth/login", { email, password }));
+    },
+    sendCode: (email: string, purpose: "register" | "reset_password") =>
+      client.post<VerificationCodeResult>("/auth/verification-code", { email, purpose }),
+    async resetPassword(email: string, code: string, newPassword: string) {
+      return applyTokens(await client.post<TokenPair>("/auth/reset-password", {
+        email,
+        code,
+        new_password: newPassword,
+      }));
     },
     async loginWithWechatMobile(code: string) {
       const result = await client.post<TokenPair & { user: CurrentUser }>("/auth/wechat/mobile", { code });

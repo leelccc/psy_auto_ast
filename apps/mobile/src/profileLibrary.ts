@@ -15,6 +15,10 @@ export type ProfileListItem = {
   latestSequence?: number;
   status: string;
   risk: string;
+  crisisLevel?: string;
+  gender?: string;
+  firstVisitComplaint?: string;
+  supervisionMode?: string;
   next: string;
   nextSessionAt?: string | null;
   frequency?: string;

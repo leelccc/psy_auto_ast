@@ -227,7 +227,7 @@ def create_app(
         database.add(profile)
         sync_profile_next_session_event(database, profile)
         database.commit()
-        return serialize_profile(profile, latest_sequence=profile.initial_session_count)
+        return serialize_profile(profile, latest_sequence=0)
 
     @app.get("/api/v1/profiles")
     def list_profiles(
@@ -265,15 +265,12 @@ def create_app(
             "items": [
                 serialize_profile(
                     profile,
-                    latest_sequence=max(
-                        database.scalar(
-                            select(func.max(SessionRecord.sequence_no)).where(
-                                SessionRecord.profile_id == profile.id,
-                                SessionRecord.user_id == user_id,
-                            )
-                        ) or 0,
-                        profile.initial_session_count,
-                    ),
+                    latest_sequence=database.scalar(
+                        select(func.max(SessionRecord.sequence_no)).where(
+                            SessionRecord.profile_id == profile.id,
+                            SessionRecord.user_id == user_id,
+                        )
+                    ) or 0,
                     session_count=database.scalar(
                         select(func.count())
                         .select_from(SessionRecord)
@@ -312,7 +309,7 @@ def create_app(
         )
         return serialize_profile(
             profile,
-            latest_sequence=max(latest_sequence or 0, profile.initial_session_count),
+            latest_sequence=latest_sequence or 0,
             session_count=database.scalar(
                 select(func.count())
                 .select_from(SessionRecord)
@@ -355,10 +352,10 @@ def create_app(
                             code=value,
                             exclude_profile_id=profile.id,
                         )
+                if request_field == "metadata" and value is not None:
+                    value = {**(profile.metadata_json or {}), **value}
                 setattr(profile, model_field, value)
         profile.updated_at = utc_now()
-        if "initial_session_count" in payload.model_fields_set:
-            resequence_profile_sessions(database, profile=profile, user_id=user_id)
         sync_profile_next_session_event(database, profile)
         database.commit()
         latest_sequence = database.scalar(
@@ -369,7 +366,7 @@ def create_app(
         )
         return serialize_profile(
             profile,
-            latest_sequence=max(latest_sequence or 0, profile.initial_session_count),
+            latest_sequence=latest_sequence or 0,
             session_count=database.scalar(
                 select(func.count())
                 .select_from(SessionRecord)
@@ -565,7 +562,7 @@ def serialize_profile(
         "status": profile.status,
         "crisis_level": profile.crisis_level,
         "initial_session_count": profile.initial_session_count,
-        "latest_sequence": latest_sequence if latest_sequence is not None else profile.initial_session_count,
+        "latest_sequence": latest_sequence if latest_sequence is not None else 0,
         "session_count": session_count,
         "code": getattr(profile, "code", None),
         "next_session_at": iso(profile.next_session_at) if getattr(profile, "next_session_at", None) else None,

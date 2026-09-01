@@ -120,6 +120,7 @@ def list_sources(
     session_id: str | None,
     exclude_report_types: set[str] | None = None,
     exclude_report_id: str | None = None,
+    include_profile_sources: bool = True,
 ) -> list[dict[str, object]]:
     items: list[dict[str, object]] = []
     if session_id:
@@ -197,7 +198,7 @@ def list_sources(
                 "analysis_status": status,
                 "default_selected": status == "available",
             })
-    if profile_id:
+    if profile_id and include_profile_sources:
         profile = database.scalar(
             select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
         )
@@ -351,7 +352,7 @@ def source_content(
             f"身份类型：{profile.type}",
             f"状态：{profile.status or '未设置'}",
             f"危机评估：{profile.crisis_level or '未设置'}",
-            f"既往次数：{profile.initial_session_count}",
+            f"约定次数：{profile.initial_session_count}",
             f"下次安排：{profile.next_session_at.isoformat() if profile.next_session_at else '未设置'}",
             f"扩展字段：{compact_json_content(profile.metadata_json)}",
             f"备注：{profile.notes or '无'}",
@@ -573,6 +574,7 @@ def create_reports_router(storage: Storage) -> APIRouter:
                 session_id=session_id,
                 exclude_report_types={"case_report"} if report_type == "case_report" else None,
                 exclude_report_id=exclude_report_id,
+                include_profile_sources=report_type == "case_report",
             )
         }
 
@@ -602,6 +604,7 @@ def create_reports_router(storage: Storage) -> APIRouter:
             profile_id=payload.profile_id,
             session_id=payload.session_id,
             exclude_report_types={"case_report"} if payload.report_type == "case_report" else None,
+            include_profile_sources=payload.report_type == "case_report",
         )
         selected = validate_selected_sources(available, payload.selected_sources)
         if not selected:
