@@ -175,7 +175,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0901-6";
+const BUILD_TAG = "0901-7";
 
 type QuickView =
   | "overview"

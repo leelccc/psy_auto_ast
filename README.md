@@ -12,6 +12,13 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-01 · APK 切 HTTPS 基址并重打 release（0901-7）
+
+- **APK 构建**：以 `EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1` 重新打包 Android release（本机 Gradle + JDK17），产物 `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`（约 68MB）。
+- **BUILD_TAG** 升至 `0901-7`（「我的」页底部可核对）。
+- **核对**：`unzip -p` 验证 bundle 含 `https://maxpeking.top/api/v1`（计数 1）、残留 `http://47.96.89.215` 计数 0。
+- **半迁移说明**：API 已走 HTTPS，但服务端 MinIO 仍未迁（`MINIO_ENDPOINT=47.96.89.215:9000` / `MINIO_SECURE=false`），录音/附件的 presigned URL 仍是 http 裸 IP——Android 因 `usesCleartextTraffic="true"` 可正常用；彻底收口见 `docs/https-migration-checklist.md`。**本次未上传 APK 到服务器。**
+
 ### 2026-09-01 · 档案基本信息编辑入口轻量化（0901-6）
 
 - **档案详情**：移除档案头部卡片底部整行的「编辑基本信息」通用按钮，将入口收进姓名右侧，避免它与档案状态、频率和下次安排争抢视觉层级。
