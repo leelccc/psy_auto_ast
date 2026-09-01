@@ -643,3 +643,11 @@
 - WorkBuddy concurrently committed and pushed the iOS batch as `3f25b02` (`0901-4`); Codex detected the new baseline and did not duplicate that commit.
 - Fresh validation passed: TypeScript, all 98 frontend tests, HTTPS Web export, Xcode iPhone 17 simulator build/install/launch with 0 errors and 0 warnings, icon alpha check, and `git diff --check`.
 - Captured and visually inspected the running iPhone 17 login screen; safe-area spacing is correct around the Dynamic Island and Home indicator.
+
+# 2026-09-01 Profile Basic-Information Edit Control (0901-6)
+
+- Replaced the profile-header card's full-width「编辑基本信息」button with the user-approved compact edit control beside the profile name.
+- Built the control from React Native `Pressable`/`View` and Lucide `Edit3`: warm ivory pill, clay icon disc, restrained shadow, and pressed-state depth feedback.
+- Kept the 30px visual size while expanding the touch target to 48px with `hitSlop`; added accessibility role/label and long-name shrink behavior.
+- Validation passed: TypeScript, all 98 frontend tests, and `git diff --check`.
+- Local mobile-Web visual login was blocked by the production API CORS allowlist for localhost. The API health endpoint returned 200; production CORS was intentionally not weakened for screenshot testing.

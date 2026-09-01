@@ -54,6 +54,15 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [x] Phase 40: Build and verify a local Android release APK for `0831-5`.
 - [x] Phase 41: Reconcile the 2026-09-01 WorkBuddy work and complete the in-progress iOS readiness batch.
 - [ ] Phase 42: Design and validate the production MinIO HTTPS migration before changing production file URLs.
+- [x] Phase 43: Redesign the profile basic-information edit entry as a compact, accessible mobile control.
+
+### Phase 43 Progress
+
+- [x] Review the existing profile header hierarchy and identify the oversized shared action style as the source of excess visual weight.
+- [x] Confirm with the user that the edit entry belongs beside the profile name.
+- [x] Implement a custom warm-clay edit pill with a circular pencil medallion, pressed feedback, 48px effective touch target, and accessibility metadata.
+- [x] Remove the former full-width edit action while preserving the existing edit modal and save flow.
+- [x] Pass TypeScript, all 98 frontend tests, and `git diff --check`; document the production CORS limitation encountered during local browser visual verification.
 
 ### Phase 41 Progress
 
