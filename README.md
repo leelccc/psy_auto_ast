@@ -29,7 +29,7 @@
   - 付费个人账号（¥688/年，Apple ID 直接升级，最快 24-48h 生效，无须 D-U-N-S）+ Ad Hoc（100 台/年，需收集 UDID）→ nginx 挂 `/ipa/` location 走 `itms-services://` 链接（照 /apk/ 的 no-cache 做法）
   - TestFlight / App Store 上架 → 大陆区需 ICP 备案（要营业执照，暂不可行）
   - 过渡方案：Web PWA（Safari 添加到主屏幕），零成本
-- **验证**：`tsc --noEmit` 通过；`mvpUiFlows.test.ts` 11 个子测通过；Xcode build SUCCEEDED；模拟器日志确认 `https://maxpeking.top/api/v1/calendar/settings` 200 OK（QUIC/HTTP3 走 443，30s 持续连接后被取消——日历轮询正常）。**键盘避让（KeyboardAvoidingView）未做**（TextInput 多但目前 RN 的 ScrollView 自动滚焦点输入可见，主屏登录/注册/编辑表单需在真机实测再决定要不要做）。**BUILD_TAG** 升至 `0901-4`。
+- **验证**：`tsc --noEmit` 通过；前端全量 98 项测试通过；HTTPS API 地址的 Web export 通过；iPhone 17 模拟器原生构建、安装和启动成功（0 error / 0 warning）；截图确认登录页未被灵动岛或 Home 指示条裁切；`icon.png` 已确认 `hasAlpha: no`；`git diff --check` 通过。模拟器日志此前也确认 `https://maxpeking.top/api/v1/calendar/settings` 200 OK（QUIC/HTTP3 走 443，30s 持续连接后被取消——日历轮询正常）。**键盘避让（KeyboardAvoidingView）未做**（TextInput 多但目前 RN 的 ScrollView 自动滚焦点输入可见，主屏登录/注册/编辑表单需在真机实测再决定要不要做）。**BUILD_TAG** 升至 `0901-4`。
 - **背景 Metro 弃用警告**：可能仍会在 Metro 终端出现 SafeAreaView deprecation 警告——`App.tsx:174` 已加 `LogBox.ignoreLogs(["SafeAreaView has been deprecated"])`，运行时不再 toast；终端警告来源是 Metro 检测到 `react-native` 自带 SafeAreaView 仍被打包（理论上代码已不用，警告应消失；若仍出现，是 metro preset 的检测滞后，不影响运行）。
 
 ### 2026-09-01 · 邮箱验证码前端打包收口（0901-3）

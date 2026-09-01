@@ -6,7 +6,7 @@ Deliver a usable counselor-assistant MVP with a real Expo mobile client, FastAPI
 
 ## Current Phase
 
-The MVP is deployed and the active work is mobile-first production refinement. Durable state is backend-owned, file bytes use MinIO, and the mobile app uses typed real APIs and native adapters. Android and iOS simulator builds have passed, the production Web/API stack is live over HTTPS, and email verification is the current authentication path. WorkBuddy was synchronized through 2026-09-01. The current source build tag is `0901-3`; the active local batch is iOS readiness (safe areas, icon alpha, export metadata, and simulator validation). Production MinIO still uses a cleartext IP endpoint and must be migrated before iOS file flows can be accepted.
+The MVP is deployed and the active work is mobile-first production refinement. Durable state is backend-owned, file bytes use MinIO, and the mobile app uses typed real APIs and native adapters. Android and iOS simulator builds have passed, the production Web/API stack is live over HTTPS, and email verification is the current authentication path. WorkBuddy was synchronized through 2026-09-01. The current source build tag is `0901-4`; the iOS safe-area, icon, export-metadata, and simulator-readiness batch is complete. Production MinIO still uses a cleartext IP endpoint and must be migrated before iOS file flows can be accepted.
 
 ## Phases
 
@@ -52,16 +52,24 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [x] Phase 38: Fix issue `0831-5`: session-record draft sources, profile basic-info editing, profile creation tabs, and initial-count semantics.
 - [x] Phase 39: Deploy issue `0831-5` backend and Web changes to the production-like server.
 - [x] Phase 40: Build and verify a local Android release APK for `0831-5`.
-- [ ] Phase 41: Reconcile the 2026-09-01 WorkBuddy work and complete the in-progress iOS readiness batch.
+- [x] Phase 41: Reconcile the 2026-09-01 WorkBuddy work and complete the in-progress iOS readiness batch.
+- [ ] Phase 42: Design and validate the production MinIO HTTPS migration before changing production file URLs.
 
 ### Phase 41 Progress
 
 - [x] Fetch `origin/main` and confirm local `main` is 0 ahead / 0 behind while preserving five uncommitted mobile changes.
 - [x] Read WorkBuddy durable memory and the 2026-09-01 timeline; identify HTTPS, email verification, and iOS simulator work completed after the prior Codex handoff.
 - [x] Confirm the five local changes are the active iOS batch: safe-area migration, encryption export metadata, icon alpha removal, and dependency lock updates.
-- [ ] Validate TypeScript, frontend tests, Web export, and iOS simulator compilation for the active changes.
-- [ ] Resolve any validation defects, update README/project records, then commit and push the completed batch per project convention.
-- [ ] Plan the separate production MinIO HTTPS migration; do not mutate production storage or distribution without validating the migration path.
+- [x] Validate TypeScript, all 98 frontend tests, HTTPS Web export, and iOS simulator compilation for the active changes.
+- [x] Visually verify the iPhone 17 login screen respects the top and bottom safe areas without clipping.
+- [x] Confirm the icon has no alpha channel and the workspace passes `git diff --check`.
+- [x] Update README/project records and synchronize the completed batch to `origin/main`.
+
+### Phase 42 Progress
+
+- [ ] Inspect the existing Nginx, MinIO, DNS, certificate-renewal, and presigned-URL configuration.
+- [ ] Define a migration and rollback path for a dedicated HTTPS MinIO endpoint.
+- [ ] Apply production changes only after the endpoint and certificate path can be verified without disrupting existing Android/Web clients.
 
 ### Phase 35 Progress
 

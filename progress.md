@@ -640,3 +640,6 @@
 - Fetched `origin/main`; local and remote commits are aligned (`0/0`) and five existing mobile modifications were preserved.
 - Read the WorkBuddy durable memory and 2026-09-01 timeline, then reconciled the newer HTTPS, email-authentication, and iOS simulator status with the Codex plan.
 - Identified the current workspace diff as the unfinished iOS-readiness batch and started Phase 41 validation without changing production services.
+- WorkBuddy concurrently committed and pushed the iOS batch as `3f25b02` (`0901-4`); Codex detected the new baseline and did not duplicate that commit.
+- Fresh validation passed: TypeScript, all 98 frontend tests, HTTPS Web export, Xcode iPhone 17 simulator build/install/launch with 0 errors and 0 warnings, icon alpha check, and `git diff --check`.
+- Captured and visually inspected the running iPhone 17 login screen; safe-area spacing is correct around the Dynamic Island and Home indicator.
