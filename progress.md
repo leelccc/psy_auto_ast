@@ -635,3 +635,8 @@
   - Manifest 包名 `com.psyautoast.counselor`，`versionName=0.1.0`。
   - Manifest 保留 `usesCleartextTraffic=true`，适配当前 HTTP API 地址。
 - 本次仅本地打包，未上传或覆盖服务器 `/apk/` 下载页。
+# 2026-09-01 Codex / WorkBuddy Resynchronization
+
+- Fetched `origin/main`; local and remote commits are aligned (`0/0`) and five existing mobile modifications were preserved.
+- Read the WorkBuddy durable memory and 2026-09-01 timeline, then reconciled the newer HTTPS, email-authentication, and iOS simulator status with the Codex plan.
+- Identified the current workspace diff as the unfinished iOS-readiness batch and started Phase 41 validation without changing production services.

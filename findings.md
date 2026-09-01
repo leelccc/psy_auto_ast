@@ -1,5 +1,12 @@
 # Backend Specification Findings
 
+## 2026-09-01 WorkBuddy Resynchronization
+
+- `origin/main` and local `main` are commit-aligned; the workspace contains five intentional, uncommitted iOS-readiness changes under `apps/mobile`.
+- WorkBuddy progressed beyond the previous Codex handoff: `maxpeking.top` HTTPS and email verification are deployed, Web build `0901-3` is live, and an iPhone 17 simulator build completed.
+- The active local patch migrates from React Native's deprecated `SafeAreaView` to `react-native-safe-area-context`, adds the iOS non-exempt-encryption declaration, removes the PNG alpha channel, and updates package metadata.
+- The remaining iOS functional blocker is production MinIO using `http://47.96.89.215:9000`; iOS ATS will reject those presigned file URLs. This is separate from the current UI/readiness patch and requires a validated HTTPS endpoint migration.
+
 ## 2026-08-31 WorkBuddy Reconciliation
 
 ### Correction: Android Report Generation Was Not Fixed

@@ -12,6 +12,26 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-01 · iOS 端首版构建链跑通 + 安全区修复（0901-4）
+
+- **背景**：用户决定做 iOS 端。本机 Xcode 26.5 + iOS 26.5 模拟器、已 prebuild 的 `apps/mobile/ios`（含 Pods）、CocoaPods 1.16.2；目标「能分发给其他人安装」，账号「免费 Apple ID」+「暂时只有模拟器」（免费 Apple ID 无法导出可分发的 IPA，需 ¥688/年的付费个人账号才能 Ad Hoc 分发到 100 台设备）。
+- **构建链验证**（Xcode 26.5 + RN 0.81.5 + Expo SDK 54 兼容，0 error / 0 warning）：`EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1 npx expo run:ios -d "iPhone 17"`（注：SDK 54 已移除 `--simulator`，统一用 `-d`）。**踩坑**：`expo run:ios` 末尾用 osascript 激活模拟器窗口时被 AppleEvents 权限拒绝（`isSimulatorAppRunningAsync: -10004`）—— 绕过：手动 `nohup npx expo start -p 8081` 起 Metro，`xcrun simctl install` + `xcrun simctl launch booted com.psyautoast.counselor` 拉起 App，build 产物在 `apps/mobile/ios/build/Build/Products/Debug-iphonesimulator/app.app`。
+- **图标 alpha 修复**：`assets/icon.png` 带 alpha 通道（iOS 上传会触发 `ITMS-90717`），用项目 venv 的 Pillow 合成到 App 底色 `#FAF6F0` 重写（实际像素无透明，视觉零差异）。
+- **iOS 安全区**（`App.tsx`）：原 `SafeAreaView` 来自 `react-native`（已弃用，Metro 警告）且 `styles.safe.paddingTop: Platform.OS === "android" ? NativeStatusBar.currentHeight ?? 0 : 0` 只护 Android → iOS 状态栏/灵动岛/Home 指示条会遮挡内容。改：
+  - 装 `react-native-safe-area-context`（`npx expo install` 自动挑 SDK 54 兼容版）+ `pod install` 接入原生模块
+  - `App.tsx` 改 import：`SafeAreaView`/`SafeAreaProvider` from `react-native-safe-area-context`，移除 RN 自带的 `StatusBar as NativeStatusBar` 引入
+  - `App` 的三个分支（loading / guest / authenticated）统一外层包 `<SafeAreaProvider>`
+  - 4 处 `<SafeAreaView style={styles.safe}>` 加 `edges={["top", "bottom"]}`，让 safe-area-context 接管 iOS 灵动岛 + Home 指示条 inset
+  - `styles.safe` 移除 `paddingTop` hack，由 `edges` 统一处理（Android 行为不变：top = 状态栏高度，bottom = 0；iOS 行为：top = 灵动岛区，bottom = Home 指示条区）
+- **InfoPlist 出口合规**：`app.json` 的 `ios.infoPlist` 加 `ITSAppUsesNonExemptEncryption: false`，避免每次 Archive 询问出口合规。
+- **已知 iOS 硬阻塞**（待用户决策后处理）：服务器 `MINIO_ENDPOINT=47.96.89.215:9000`（HTTP 裸 IP 非标端口）→ 后端 `presigned_get_object`/`presigned_put_object` 返回 `http://47.96.89.215:9000/...` 预签名 URL → iOS ATS 直接拒。**录音播放**（`fileService.getDownloadUrl`）和**附件/导出下载**会全部失败。**录音上传**走 `recording_audio_input_mode=base64` 默认值（JSON body），不受影响。修法两条路：A. 彻底收口（nginx 反代 MinIO 到 `https://oss.maxpeking.top` + certbot 签子域证书 + 改 `MINIO_ENDPOINT`/`MINIO_SECURE`，顺带解决 09-01 列的「HTTPS 收口」待办）；B. Info.plist `NSExceptionDomains` 临时允许 `47.96.89.215` 走 HTTP（Ad Hoc 内部分发可用，App Store 审核会拦）。
+- **分发路径**（用户付费个人 Apple 开发者账号就绪后才能走）：
+  - 付费个人账号（¥688/年，Apple ID 直接升级，最快 24-48h 生效，无须 D-U-N-S）+ Ad Hoc（100 台/年，需收集 UDID）→ nginx 挂 `/ipa/` location 走 `itms-services://` 链接（照 /apk/ 的 no-cache 做法）
+  - TestFlight / App Store 上架 → 大陆区需 ICP 备案（要营业执照，暂不可行）
+  - 过渡方案：Web PWA（Safari 添加到主屏幕），零成本
+- **验证**：`tsc --noEmit` 通过；`mvpUiFlows.test.ts` 11 个子测通过；Xcode build SUCCEEDED；模拟器日志确认 `https://maxpeking.top/api/v1/calendar/settings` 200 OK（QUIC/HTTP3 走 443，30s 持续连接后被取消——日历轮询正常）。**键盘避让（KeyboardAvoidingView）未做**（TextInput 多但目前 RN 的 ScrollView 自动滚焦点输入可见，主屏登录/注册/编辑表单需在真机实测再决定要不要做）。**BUILD_TAG** 升至 `0901-4`。
+- **背景 Metro 弃用警告**：可能仍会在 Metro 终端出现 SafeAreaView deprecation 警告——`App.tsx:174` 已加 `LogBox.ignoreLogs(["SafeAreaView has been deprecated"])`，运行时不再 toast；终端警告来源是 Metro 检测到 `react-native` 自带 SafeAreaView 仍被打包（理论上代码已不用，警告应消失；若仍出现，是 metro preset 的检测滞后，不影响运行）。
+
 ### 2026-09-01 · 邮箱验证码前端打包收口（0901-3）
 
 - **背景**：0901-1 完成邮箱验证码注册/重置密码的前后端代码并 commit（HEAD `148998c`）；0901-2 完成生产后端部署（SMTP 已写入 `47.96.89.215` 的 `backend/.env`，`POST /auth/verification-code` 真发邮件验证通过，alembic 建 `email_verification_codes` 表）。但**线上前端（web/APK）仍是旧 AuthScreen**——本次补齐前端打包收口。

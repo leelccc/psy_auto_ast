@@ -48,7 +48,6 @@ import {
 } from "lucide-react-native";
 import { Component, createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  SafeAreaView,
   ActivityIndicator,
   Image,
   Modal,
@@ -62,11 +61,11 @@ import {
   View,
   useWindowDimensions,
   ScrollView,
-  StatusBar as NativeStatusBar,
   LogBox,
   BackHandler,
   Linking,
 } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { buildArchiveResult, describeArchiveTarget, filterArchiveCandidates, type ArchiveKind } from "./src/archiveFlow";
 import {
@@ -176,7 +175,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0901-3";
+const BUILD_TAG = "0901-4";
 
 type QuickView =
   | "overview"
@@ -557,7 +556,7 @@ class AppErrorBoundary extends Component<{ onReset: () => void; children: ReactN
     if (this.state.error) {
       const stack = String(this.state.error.stack ?? "").split("\n").slice(0, 12).join("\n");
       return (
-        <SafeAreaView style={styles.safe}>
+        <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
           <ScrollView contentContainerStyle={styles.scrollContent} style={styles.scroll}>
             <View style={styles.errorCard}>
               <CircleAlert size={28} color={colors.danger} />
@@ -1467,44 +1466,49 @@ export default function App() {
 
   if (authStatus === "loading") {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.authLoading}>
-          <ActivityIndicator size="large" color={colors.clayDark} />
-          <Text style={styles.authLoadingText}>正在恢复安全会话...</Text>
-        </View>
-      </SafeAreaView>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+          <View style={styles.authLoading}>
+            <ActivityIndicator size="large" color={colors.clayDark} />
+            <Text style={styles.authLoadingText}>正在恢复安全会话...</Text>
+          </View>
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 
   if (authStatus === "guest") {
     return (
-      <AuthScreen
-        onLogin={async (email, password) => {
-          await authService.login(email, password);
-          setCurrentUser(optimisticUser(email));
-          setAuthStatus("authenticated");
-          void authService.me().then(setCurrentUser).catch(() => undefined);
-        }}
-        onRegister={async (email, password, displayName, code) => {
-          await authService.register({ email, password, displayName, code });
-          setCurrentUser(optimisticUser(email, displayName));
-          setAuthStatus("authenticated");
-          void authService.me().then(setCurrentUser).catch(() => undefined);
-        }}
-        onResetPassword={async (email, code, newPassword) => {
-          await authService.resetPassword(email, code, newPassword);
-          setCurrentUser(optimisticUser(email));
-          setAuthStatus("authenticated");
-          void authService.me().then(setCurrentUser).catch(() => undefined);
-        }}
-        onSendCode={(email, purpose) => authService.sendCode(email, purpose)}
-      />
+      <SafeAreaProvider>
+        <AuthScreen
+          onLogin={async (email, password) => {
+            await authService.login(email, password);
+            setCurrentUser(optimisticUser(email));
+            setAuthStatus("authenticated");
+            void authService.me().then(setCurrentUser).catch(() => undefined);
+          }}
+          onRegister={async (email, password, displayName, code) => {
+            await authService.register({ email, password, displayName, code });
+            setCurrentUser(optimisticUser(email, displayName));
+            setAuthStatus("authenticated");
+            void authService.me().then(setCurrentUser).catch(() => undefined);
+          }}
+          onResetPassword={async (email, code, newPassword) => {
+            await authService.resetPassword(email, code, newPassword);
+            setCurrentUser(optimisticUser(email));
+            setAuthStatus("authenticated");
+            void authService.me().then(setCurrentUser).catch(() => undefined);
+          }}
+          onSendCode={(email, purpose) => authService.sendCode(email, purpose)}
+        />
+      </SafeAreaProvider>
     );
   }
 
   return (
+    <SafeAreaProvider>
     <AppErrorBoundary onReset={() => { setQuickView("overview"); setTab("home"); }}>
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
         <StatusBar style="dark" />
       <View style={[styles.phoneShell, isCompact && styles.phoneShellCompact]}>
         <Header title={title} quickView={quickView} onBack={handleBack} onOpenSchedule={() => setQuickView("schedule")} />
@@ -2383,6 +2387,7 @@ export default function App() {
       </View>
       </SafeAreaView>
     </AppErrorBoundary>
+    </SafeAreaProvider>
   );
 }
 
@@ -2479,7 +2484,7 @@ function AuthScreen({
       : "通过邮箱验证码设置新密码。";
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={[styles.authShell, { width: authShellWidth }]}>
         <View style={styles.authBrand}>
           <View style={styles.authBrandIcon}>
@@ -7998,7 +8003,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.paper,
     alignItems: "center",
-    paddingTop: Platform.OS === "android" ? NativeStatusBar.currentHeight ?? 0 : 0,
   },
   authLoading: {
     width: "100%",

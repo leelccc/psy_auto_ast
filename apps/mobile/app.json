@@ -21,7 +21,10 @@
     "ios": {
       "bundleIdentifier": "com.psyautoast.counselor",
       "buildNumber": "1",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.psyautoast.counselor",
