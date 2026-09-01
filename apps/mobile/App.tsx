@@ -175,7 +175,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0901-4";
+const BUILD_TAG = "0901-6";
 
 type QuickView =
   | "overview"
@@ -4204,7 +4204,27 @@ function ProfileDetailScreen({
             <Text style={styles.avatarLargeText}>{profile.profileName.slice(0, 1)}</Text>
           </View>
           <View style={styles.listBody}>
-            <Text style={styles.detailName}>{profile.profileName}</Text>
+            <View style={styles.profileNameRow}>
+              <Text style={[styles.detailName, styles.profileNameText]} numberOfLines={1}>{profile.profileName}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="编辑档案基本信息"
+                hitSlop={9}
+                onPress={() => {
+                  setEditingFrequency(false);
+                  setEditingProfile(true);
+                }}
+                style={({ pressed }) => [
+                  styles.profileEditPill,
+                  pressed && styles.profileEditPillPressed,
+                ]}
+              >
+                <View style={styles.profileEditIconDisc}>
+                  <Edit3 size={12} strokeWidth={2.4} color={colors.surface} />
+                </View>
+                <Text style={styles.profileEditPillText}>编辑</Text>
+              </Pressable>
+            </View>
             <Text style={styles.listMeta}>{profile.kindLabel}档案 · {profile.recordLabel}</Text>
             {profile.countDetail ? <Text style={styles.listMeta}>{profile.countDetail}</Text> : null}
           </View>
@@ -4228,17 +4248,6 @@ function ProfileDetailScreen({
           nextAt={profile.profileNextSessionAt}
           onPress={() => setEditingNextSession((current) => !current)}
         />
-        <TouchableOpacity
-          style={styles.smallActionButton}
-          activeOpacity={0.78}
-          onPress={() => {
-            setEditingFrequency(false);
-            setEditingProfile(true);
-          }}
-        >
-          <Edit3 size={15} color={colors.clayDark} />
-          <Text style={styles.smallActionText}>编辑基本信息</Text>
-        </TouchableOpacity>
       </View>
 
       {editingProfile ? (
@@ -9246,6 +9255,50 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 22,
     lineHeight: 28,
+    fontWeight: "700",
+  },
+  profileNameRow: {
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  profileNameText: {
+    flexShrink: 1,
+  },
+  profileEditPill: {
+    height: 30,
+    paddingLeft: 4,
+    paddingRight: 10,
+    borderRadius: 999,
+    backgroundColor: "#F7EDE5",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    shadowColor: "#8F7064",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.14,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  profileEditPillPressed: {
+    backgroundColor: "#F0DED2",
+    transform: [{ translateY: 1 }],
+    shadowOpacity: 0.06,
+    elevation: 0,
+  },
+  profileEditIconDisc: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.clayDark,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  profileEditPillText: {
+    color: colors.clayDark,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: "700",
   },
   detailStats: {
