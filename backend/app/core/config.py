@@ -10,6 +10,8 @@ DEV_JWT_SECRET = "psy-auto-ast-local-development-secret-change-me"
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://psy_auto_ast:psy_auto_ast_dev@127.0.0.1:55432/psy_auto_ast"
     minio_endpoint: str = "127.0.0.1:59000"
+    # 内部 API 调用（bucket_exists/stat/读写）用的 endpoint，生产环境通常是 docker 网络 minio:9000
+    minio_internal_endpoint: str = "127.0.0.1:59000"
     minio_root_user: str = "psy_auto_ast"
     minio_root_password: str = "psy_auto_ast_minio_dev"
     minio_bucket: str = "psy-auto-ast"

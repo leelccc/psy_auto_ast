@@ -12,6 +12,21 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-02 · MinIO Console 反代与后端双 endpoint 修复
+
+- **MinIO 管理控制台可访问**：原 `compose.prod.yaml` 中 minio 端口映射为 `"9443:9443"`，但 `command` 已将 console 开在 `:9001`，导致外部 9443 无服务。改为：
+  - minio 容器不再映射主机端口（仅 `expose: [9000, 9001]`）
+  - web 容器新增 `"9443:9443"` 映射
+  - `nginx.conf` 新增 `listen 9443 ssl` server 块，复用 `maxpeking.top` Let's Encrypt 证书，反代到 `http://minio:9001`
+  - 访问地址：`https://47.96.89.215:9443`（IP 直连，证书域名不匹配需点继续）；DNS 全生效后可用 `https://maxpeking.top:9443`
+  - 登录账号/密码见服务器 `.env` 的 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`
+- **修复后端 health 503（文件存储不可用）**：之前把 `MINIO_ENDPOINT` 改成 `maxpeking.top` 后，后端 `storage.py` 的所有 MinIO API 调用（含 `bucket_exists`）都走 443 路径代理；路径代理不能完整支持 S3 bucket 级签名请求，导致 health 返回 503。
+  - `backend/app/core/config.py` 新增 `minio_internal_endpoint`（默认 `minio:9000`）
+  - `backend/app/services/storage.py` 拆分为 `internal_client`（走 docker 网络 `minio:9000`，用于 bucket/读写/删除）和 `public_client`（走 `maxpeking.top`，用于生成 presigned URL）
+  - 服务器 `.env` 追加 `MINIO_INTERNAL_ENDPOINT=minio:9000`
+  - 重新 build backend 镜像并启动，`/api/v1/health` 恢复 200
+- **修复 nginx 路径代理斜杠陷阱**：`location /psy-auto-ast/` 会对 `/psy-auto-ast?location=` 返回 301 到 `/psy-auto-ast/?location=`，破坏 S3 SigV4 签名。改为 `location /psy-auto-ast`（无尾斜杠）+ `proxy_pass http://minio:9000/psy-auto-ast/`，bucket 级请求不再 301。
+
 ### 2026-09-01 · APK 切 HTTPS 基址并重打 release（0901-7）
 
 - **APK 构建**：以 `EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1` 重新打包 Android release（本机 Gradle + JDK17），产物 `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`（约 68MB）。

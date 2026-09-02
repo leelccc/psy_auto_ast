@@ -30,7 +30,15 @@ class Storage(Protocol):
 class MinioStorage:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
-        self.client = Minio(
+        # 内部 client：走 docker 网络 minio:9000（HTTP），用于 bucket 管理/读写
+        self.internal_client = Minio(
+            self.settings.minio_internal_endpoint,
+            access_key=self.settings.minio_root_user,
+            secret_key=self.settings.minio_root_password,
+            secure=False,
+        )
+        # 外部 client：用于生成给 App/Web 使用的 presigned URL，地址和协议按 .env 配置
+        self.public_client = Minio(
             self.settings.minio_endpoint,
             access_key=self.settings.minio_root_user,
             secret_key=self.settings.minio_root_password,
@@ -38,11 +46,11 @@ class MinioStorage:
         )
 
     def health_check(self) -> None:
-        if not self.client.bucket_exists(self.settings.minio_bucket):
+        if not self.internal_client.bucket_exists(self.settings.minio_bucket):
             raise RuntimeError("MinIO bucket does not exist")
 
     def create_upload_url(self, storage_key: str, mime_type: str) -> tuple[str, dict[str, str]]:
-        url = self.client.presigned_put_object(
+        url = self.public_client.presigned_put_object(
             self.settings.minio_bucket,
             storage_key,
             expires=timedelta(minutes=15),
@@ -50,20 +58,20 @@ class MinioStorage:
         return url, {"Content-Type": mime_type}
 
     def stat_object(self, storage_key: str) -> ObjectStat:
-        return self.client.stat_object(self.settings.minio_bucket, storage_key)
+        return self.internal_client.stat_object(self.settings.minio_bucket, storage_key)
 
     def create_download_url(self, storage_key: str) -> str:
-        return self.client.presigned_get_object(
+        return self.public_client.presigned_get_object(
             self.settings.minio_bucket,
             storage_key,
             expires=timedelta(minutes=5),
         )
 
     def delete_object(self, storage_key: str) -> None:
-        self.client.remove_object(self.settings.minio_bucket, storage_key)
+        self.internal_client.remove_object(self.settings.minio_bucket, storage_key)
 
     def read_object(self, storage_key: str) -> bytes:
-        response = self.client.get_object(self.settings.minio_bucket, storage_key)
+        response = self.internal_client.get_object(self.settings.minio_bucket, storage_key)
         try:
             return response.read()
         finally:
@@ -71,7 +79,7 @@ class MinioStorage:
             response.release_conn()
 
     def write_object(self, storage_key: str, data: bytes, mime_type: str) -> None:
-        self.client.put_object(
+        self.internal_client.put_object(
             self.settings.minio_bucket,
             storage_key,
             BytesIO(data),
