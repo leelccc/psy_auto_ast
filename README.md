@@ -12,6 +12,15 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-03 · DNS 生效 / 证书续期验证 / 生产配置纳入 git
+
+- **DNS 全量生效**：权威 NS（dns21/dns22.hichina.com）与服务器侧公网解析均返回真 IP `47.96.89.215`，NS 切换 24–48h 过渡期（198.18.x.x 占位）结束。
+- **证书自动续期演练通过**：`certbot renew --dry-run` 成功，pre-hook 停 web → 模拟续期 → post-hook 重启 web + `nginx -s reload` 全链路正常；证书到期 2026-11-29，到期前 30 天 systemd timer 自动续期。
+- **0901-7 APK 上传生产**：覆盖服务器 `/opt/psy_auto_ast/apk/app-release.apk`，下载页 `https://maxpeking.top/apk/` 版本号同步到 `0901-7`（带 `?v=0901-7` 防缓存）。
+- **MinIO Console 加固**：`https://maxpeking.top:9443` 加 nginx Basic Auth（账号 `admin` / 随机强密码，存服务器 `nginx-secrets/.minio_console_htpasswd`，不入库）。踩坑：① 密码文件需只读挂进 web 容器 `/etc/nginx/secrets/`；② 代理前必须 `proxy_set_header Authorization ""`，否则 Console 误判为 API 鉴权返 403。
+- **修复录音保存 503（核心）**：`POST /api/v1/files` 返回 503，根因是 nginx 路径代理 `proxy_pass http://minio:9000/psy-auto-ast/`（带尾斜杠）把对象请求拼成 `/psy-auto-ast//u/...` 双斜杠，MinIO 按单斜杠签名 → `SignatureDoesNotMatch`。修复：去掉尾斜杠为 `proxy_pass http://minio:9000/psy-auto-ast`。**关键坑（必记）**：`sed -i` 会换文件 inode，运行中的 web 容器是 ro bind 挂载、仍绑旧 inode → 仅 `nginx -s reload`/容器内改写均不生效；必须 `docker rm -f psy-auto-ast-web-1 && docker compose -f compose.prod.yaml up -d web` 强制重建容器。修后容器内端到端 `PUT`(路径代理)→`GET` 全 200。
+- **生产配置纳入 git（本次提交）**：新增 `server/` 目录，存放服务器生产配置 `server/nginx.conf` 与 `server/compose.prod.yaml`（与服务器 `/opt/psy_auto_ast/` 同名文件同步）。**不提交** `.env`（已被 .gitignore 忽略）与 `nginx-secrets/.minio_console_htpasswd`（Console Basic Auth 密码，仅留存在服务器）。重部署时把 `server/nginx.conf` → `/opt/psy_auto_ast/nginx.conf`、`server/compose.prod.yaml` → `/opt/psy_auto_ast/compose.prod.yaml` 即可；改完 nginx.conf 后务必强制重建 web 容器。
+
 ### 2026-09-02 · MinIO Console 反代与后端双 endpoint 修复
 
 - **MinIO 管理控制台可访问**：原 `compose.prod.yaml` 中 minio 端口映射为 `"9443:9443"`，但 `command` 已将 console 开在 `:9001`，导致外部 9443 无服务。改为：
