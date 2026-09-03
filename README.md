@@ -12,6 +12,14 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-03 · 录音转写支持最长 2 小时（base64→minio_url）
+
+- **转写接口层切换**：生产 `.env` `RECORDING_AUDIO_INPUT_MODE` 由 `base64`（qwen3-asr-flash 实时端点，5 分钟/10MB 硬上限）切换为 `minio_url`（fun-asr 文件异步识别，支持长音频 + 说话人分离）。2 小时录音（≈115MB）现已可正常转写。
+- **2 小时产品上限**：`backend/app/services/ai/bailian.py` 新增 `MAX_AUDIO_SECONDS = 2*60*60`，`process_recording` 对 `duration_seconds > 2h` 统一报错「录音时长超过 2 小时，当前暂不支持转写」；原 base64 模式 5 分钟/10MB 校验保留。
+- **下载 URL 有效期**：`backend/app/services/storage.py` `create_download_url` presigned GET 有效期由 5 分钟延长至 60 分钟，避免 2 小时长音频异步识别时阿里云拉取源文件 URL 过期 403。
+- **上传限制不变**：录音文件字节上限 500MB（约可装 8 小时 128kbps 音频），2 小时富余覆盖。
+- **部署**：改动已 `git commit`（`f016048`）并 push；scp 两文件到生产 `/opt/psy_auto_ast/backend/...`，`.env` 切 `minio_url`，`docker compose -f compose.prod.yaml up -d --build backend` 重建；`/api/v1/health` 返回 200（`object_storage: ok`），容器内 `RECORDING_AUDIO_INPUT_MODE=minio_url` 确认生效。
+
 ### 2026-09-03 · 前端自适应、说明层级与输入契约第一轮优化
 
 - **说明信息减负**：新增触屏友好的可展开信息组件；档案编号规则默认收起，保存规则保留“基础档案长期保存 / 敏感资料默认 14 天”的可见摘要，详细解释按需展开。错误、危机、删除后果等关键信息继续常显。
