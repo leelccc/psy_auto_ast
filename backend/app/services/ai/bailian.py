@@ -10,6 +10,7 @@ from app.services.ai.base import RecordingAIResult, RecordingSummaryResult
 
 MAX_BASE64_AUDIO_BYTES = 10 * 1024 * 1024
 MAX_SYNC_AUDIO_SECONDS = 5 * 60
+MAX_AUDIO_SECONDS = 2 * 60 * 60  # 产品上限：录音转写最多支持 2 小时
 
 
 class BailianAIError(RuntimeError):
@@ -63,6 +64,8 @@ class BailianRecordingAIProvider:
             raise ValueError("当前同步语音识别单次最多支持 5 分钟录音。")
         if audio_bytes is not None and len(audio_bytes) > MAX_BASE64_AUDIO_BYTES:
             raise ValueError("当前 Base64 语音识别单文件不能超过 10MB。")
+        if duration_seconds > MAX_AUDIO_SECONDS:
+            raise ValueError("录音时长超过 2 小时，当前暂不支持转写。")
 
         audio = audio_url or (
             f"data:{mime_type};base64,{base64.b64encode(audio_bytes or b'').decode('ascii')}"

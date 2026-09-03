@@ -64,7 +64,7 @@ class MinioStorage:
         return self.public_client.presigned_get_object(
             self.settings.minio_bucket,
             storage_key,
-            expires=timedelta(minutes=5),
+            expires=timedelta(minutes=60),
         )
 
     def delete_object(self, storage_key: str) -> None:
