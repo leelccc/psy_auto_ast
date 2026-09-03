@@ -57,6 +57,16 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [x] Phase 43: Redesign the profile basic-information edit entry as a compact, accessible mobile control.
 - [x] Phase 44: Deploy Web build `0901-6` with the HTTPS API endpoint and verify the production artifact.
 - [x] Phase 45: Reconcile WorkBuddy through 2026-09-03 and remove obsolete client cleartext-network exceptions after the HTTPS migration.
+- [ ] Phase 46: Audit and simplify the complete frontend design system, responsive behavior, long-text handling, explanatory content, and input contracts.
+
+### Phase 46 Progress
+
+- [x] Collect current guidance from established mobile/design-system sources and define a restrained reference direction for this product.
+- [x] Inventory screens, reusable visual patterns, fixed dimensions, text-overflow risks, explanatory cards, and inconsistent component variants.
+- [x] Compare frontend input controls with backend schemas and validation; identify missing length, numeric, enum, and file constraints.
+- [x] Capture representative pages at narrow mobile, standard mobile, tablet, and desktop widths and verify interaction states.
+- [x] Write a prioritized audit/design specification and implement the first high-priority shared fix batch.
+- [ ] Continue page-by-page consolidation of recording, report, privacy, supervision, and account explanation patterns.
 
 ### Phase 45 Progress
 
@@ -233,3 +243,4 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 | Existing profile mapping test expected a July appointment not to be overdue | 1 | Removed the unrelated fixed date from the frequency-mapping test so it tests frequency without becoming calendar-sensitive. |
 | Backend pytest could not connect to `127.0.0.1:55432` | 1 | Docker daemon is not running, so Compose PostgreSQL cannot start in this session; verified backend syntax with `compileall` and left pytest for when Docker Desktop is available. |
 | Web export command was rejected because it included `rm -rf` for an old `/tmp` artifact directory | 1 | Use a new `mktemp -d` output directory and avoid destructive cleanup. |
+| Combined UI guideline and image-platform search returned HTTP 429 | 1 | Stop image search; use authoritative design-system documentation and local page captures instead. |

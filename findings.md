@@ -1,5 +1,22 @@
 # Backend Specification Findings
 
+## 2026-09-03 Frontend UI Audit — Initial Evidence
+
+- Reference direction: Material 3 for mobile control sizing and state clarity, Apple HIG for restrained hierarchy, Atlassian for separating short tooltips from inline action-required messages, and Vercel's current interface guidelines for long-content, flex shrink, labels, focus, and form semantics.
+- Tooltips should only explain a compact interactive element or low-frequency field rule. Safety, retention, destructive consequences, current errors, and information required to make a decision must remain visible inline; hiding these behind an icon would reduce informed consent.
+- Production captures at 320×760, 390×844, and 768×1024 show that the app already constrains tablet/desktop content to a centered mobile shell. The layout does not stretch uncontrollably at 768px.
+- At 320px, the three profile-type tabs and several choice groups fit but are close to the density limit. The form remains usable without horizontal overflow, yet explanatory copy substantially increases scroll length and competes with field labels.
+- The profile-create screen contains at least three distinct explanatory patterns in one flow: an always-visible profile-code rule, placeholder examples inside inputs, and a full privacy card after the form. The code rule is a good candidate for an info trigger; the privacy/retention rule must stay visible but can be reduced to a compact disclosure row.
+- Current frontend input audit found many fields without explicit `maxLength`, including display name during registration, email/password, profile names, custom frequency, complaint, notes, session summary, chapter/transcript content, report content, supervision message, session summary, and tags. Backend validation is uneven: profile names and some auth/supervision fields are constrained, while session summary/tags and metadata-backed profile fields need stronger contracts.
+- Long-text fuzzing at 320px did not create horizontal page overflow, but single-line custom-frequency input hides most of a long value and provides no counter or limit. The profile name accepts text beyond the backend's 80-character limit, so failure would occur only after submission.
+- The account screen is comparatively clean: grouped settings rows, compact secondary labels, and restrained section actions. Its profile name/email row still needs explicit shrink/truncation rules for long account identities.
+- The privacy screen demonstrates over-cardification: hero explanation, two empty-state cards, and a final risk card all use similarly strong bordered surfaces. With no data, nearly the entire screen is explanatory containers. Keep the 14-day policy visible, but render empty collections as lighter rows and collapse the final risk explanation behind a compact disclosure/info affordance unless a destructive action is active.
+- Visual hierarchy is inconsistent across explanatory content: green hero poster, beige privacy panel, neutral notice card, warning text, rule text, form hint, and ordinary list metadata all communicate overlapping concepts without a stable semantic system.
+- The first implementation batch introduces a tap/focus-friendly inline disclosure instead of a hover-only tooltip. Profile code help is collapsed; retention keeps its 14-day summary visible and expands only the detail.
+- Shared horizontal text containers now use `minWidth: 0` and shrinkable titles/metas. Browser verification reported `scrollWidth === clientWidth` at both 390px and 768px; the 320px capture also rendered without horizontal clipping.
+- Frontend and backend now agree on high-frequency auth/profile/session boundaries. Password copy and validation consistently use the existing 6–128 character contract.
+- Full backend API pytest remains environment-blocked because the local PostgreSQL test port `55432` is unavailable; direct Pydantic boundary checks passed.
+
 ## 2026-09-03 WorkBuddy Resynchronization
 
 - WorkBuddy completed the production HTTPS migration: DNS now resolves publicly, certificate renewal dry-run succeeds, MinIO presigned URLs use the 443 bucket-path proxy, and the recording-upload 503 caused by a double-slash proxy path is fixed.

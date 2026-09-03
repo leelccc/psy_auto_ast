@@ -667,3 +667,12 @@
 - Started the next safe source-level task: removed the temporary iOS IP ATS exception and installed/configured Expo SDK 54's `expo-build-properties` with Android `usesCleartextTraffic: false`.
 - Expo public config and Android/iOS Prebuild completed. Generated Android Manifest contains `usesCleartextTraffic="false"`; the current generated iOS Info.plist no longer contains the production IP exception.
 - TypeScript, all 98 frontend tests, HTTPS Web export, and `git diff --check` passed. No APK/IPA build or deployment was performed.
+
+# 2026-09-03 Frontend UI Audit And First Optimization Batch
+
+- Audited the 56-component mobile/Web frontend for responsive shells, fixed rows, long-text risks, explanatory surfaces, and 38 text inputs; compared the high-frequency inputs with backend Pydantic schemas.
+- Defined the information hierarchy in `docs/plans/2026-09-03-frontend-ui-system-audit-design.md`: safety and retention facts remain visible, important detail becomes expandable, and low-frequency field help is collapsed by default.
+- Added a reusable accessible inline disclosure to the profile-create screen, strengthened shared row shrink behavior, and aligned auth/profile/session length and count boundaries across frontend and backend.
+- Verified the local build against the production API through browser request interception without changing production CORS. The updated profile-create page has no horizontal overflow at 320/390/768px, and the disclosure works by tap/focus.
+- Frontend typecheck and all 98 tests passed. Direct backend schema boundary checks passed; full backend pytest remains blocked because local PostgreSQL test port 55432 is not running.
+- No Web deployment and no APK/IPA build were performed.

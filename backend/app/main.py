@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session as DatabaseSession
 
@@ -53,16 +53,30 @@ def iso(value: datetime) -> str:
     return value.isoformat()
 
 
+def validate_profile_metadata_text(value: dict[str, Any]) -> dict[str, Any]:
+    limits = {"frequency": 80, "first_visit_complaint": 2000}
+    for key, limit in limits.items():
+        item = value.get(key)
+        if isinstance(item, str) and len(item) > limit:
+            raise ValueError(f"metadata.{key} must contain at most {limit} characters")
+    return value
+
+
 class CreateProfileRequest(BaseModel):
     type: str
     name: str = Field(min_length=1, max_length=80)
     code: str | None = Field(default=None, max_length=12)
     status: str | None = None
     crisis_level: str | None = None
-    initial_session_count: int = Field(default=0, ge=0)
+    initial_session_count: int = Field(default=0, ge=0, le=999)
     next_session_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    notes: str = ""
+    notes: str = Field(default="", max_length=4000)
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata_text(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return validate_profile_metadata_text(value)
 
 
 class UpdateProfileRequest(BaseModel):
@@ -70,10 +84,15 @@ class UpdateProfileRequest(BaseModel):
     code: str | None = Field(default=None, max_length=12)
     status: str | None = None
     crisis_level: str | None = None
-    initial_session_count: int | None = Field(default=None, ge=0)
+    initial_session_count: int | None = Field(default=None, ge=0, le=999)
     next_session_at: datetime | None = None
     metadata: dict[str, Any] | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_metadata_text(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return validate_profile_metadata_text(value) if value is not None else None
 
 
 class DeleteResourceRequest(BaseModel):
@@ -82,13 +101,13 @@ class DeleteResourceRequest(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     session_type: str
-    title: str | None = None
+    title: str | None = Field(default=None, max_length=160)
     started_at: datetime | None = None
     occurred_at: datetime | None = None
     ended_at: datetime | None = None
     mode: str | None = None
-    summary: str = ""
-    tags: list[str] = Field(default_factory=list)
+    summary: str = Field(default="", max_length=4000)
+    tags: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=24)]] = Field(default_factory=list, max_length=4)
 
 
 class UpdateSessionRequest(BaseModel):
@@ -96,8 +115,8 @@ class UpdateSessionRequest(BaseModel):
     occurred_at: datetime | None = None
     ended_at: datetime | None = None
     mode: str | None = None
-    summary: str | None = None
-    tags: list[str] | None = None
+    summary: str | None = Field(default=None, max_length=4000)
+    tags: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=24)]] | None = Field(default=None, max_length=4)
 
 
 def create_app(

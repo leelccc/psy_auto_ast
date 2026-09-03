@@ -37,26 +37,26 @@ def _normalize_email(email: str) -> str:
 
 
 class SendCodeRequest(BaseModel):
-    email: str
+    email: str = Field(max_length=254)
     purpose: Literal["register", "reset_password"]
 
 
 class RegisterRequest(BaseModel):
-    email: str
+    email: str = Field(max_length=254)
     password: str = Field(min_length=6, max_length=128)
     display_name: DisplayName
     code: str = Field(min_length=4, max_length=8)
 
 
 class ResetPasswordRequest(BaseModel):
-    email: str
+    email: str = Field(max_length=254)
     code: str = Field(min_length=4, max_length=8)
     new_password: str = Field(min_length=6, max_length=128)
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(max_length=254)
+    password: str = Field(max_length=128)
 
 
 class RefreshRequest(BaseModel):

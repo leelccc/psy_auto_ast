@@ -16,7 +16,9 @@ import {
   CalendarDays,
   ChartNoAxesColumn,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleAlert,
   Clock3,
   ClipboardList,
@@ -176,6 +178,19 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
 const BUILD_TAG = "0901-7";
+
+const INPUT_LIMITS = {
+  email: 254,
+  password: 128,
+  displayName: 80,
+  profileName: 80,
+  profileCode: 12,
+  profileFrequency: 80,
+  profileComplaint: 2000,
+  profileNotes: 4000,
+  sessionSummary: 4000,
+  sessionTag: 24,
+} as const;
 
 type QuickView =
   | "overview"
@@ -2503,6 +2518,7 @@ function AuthScreen({
               placeholderTextColor={colors.subtle}
               style={styles.profileFormInput}
               textContentType="name"
+              maxLength={INPUT_LIMITS.displayName}
             />
           ) : null}
           <TextInput
@@ -2515,6 +2531,7 @@ function AuthScreen({
             autoCapitalize="none"
             autoCorrect={false}
             textContentType="emailAddress"
+            maxLength={INPUT_LIMITS.email}
           />
           {mode !== "login" ? (
             <View style={styles.authCodeRow}>
@@ -2546,11 +2563,12 @@ function AuthScreen({
           <TextInput
             value={password}
             onChangeText={setPassword}
-            placeholder={mode === "login" ? "密码" : mode === "register" ? "密码（至少 8 位）" : "新密码（至少 8 位）"}
+            placeholder={mode === "login" ? "密码" : mode === "register" ? "密码（至少 6 位）" : "新密码（至少 6 位）"}
             placeholderTextColor={colors.subtle}
             style={styles.profileFormInput}
             secureTextEntry
             textContentType={mode === "login" ? "password" : "newPassword"}
+            maxLength={INPUT_LIMITS.password}
           />
           {mode === "login" ? (
             <TouchableOpacity activeOpacity={0.7} onPress={() => switchMode("reset")} style={{ alignSelf: "flex-end" }}>
@@ -3800,6 +3818,8 @@ function ProfileCreateScreen({
   const [profileStatus, setProfileStatus] = useState("active");
   const [supervisionMode, setSupervisionMode] = useState("online");
   const [notes, setNotes] = useState("");
+  const [showCodeHelp, setShowCodeHelp] = useState(false);
+  const [showRetentionHelp, setShowRetentionHelp] = useState(false);
   const fieldCopy = {
     client: {
       name: "姓名",
@@ -3900,7 +3920,7 @@ function ProfileCreateScreen({
       <View style={styles.formPreviewCard}>
         <Text style={styles.formPreviewTitle}>基础信息</Text>
         <Text style={styles.formFieldLabel}>{fieldCopy.name}（必填）</Text>
-        <TextInput value={name} onChangeText={setName} placeholder="例如：陈雨" placeholderTextColor={colors.subtle} style={styles.profileFormInput} />
+        <TextInput value={name} onChangeText={setName} placeholder="例如：陈雨" placeholderTextColor={colors.subtle} style={styles.profileFormInput} maxLength={INPUT_LIMITS.profileName} />
         {kind === "client" ? (
           <>
             <View style={styles.formFieldHeader}>
@@ -3917,9 +3937,14 @@ function ProfileCreateScreen({
               style={styles.profileFormInput}
               autoCapitalize="characters"
               autoCorrect={false}
-              maxLength={12}
+              maxLength={INPUT_LIMITS.profileCode}
             />
-            <Text style={styles.formHint}>规则：类型字母 + 年份 + 序号，例如 C26-001。也可以手动填写 12 位以内编号。</Text>
+            <InfoDisclosure
+              title="编号规则"
+              detail="使用类型字母、年份和序号组合，例如 C26-001；也可以手动填写 12 位以内编号。"
+              expanded={showCodeHelp}
+              onToggle={() => setShowCodeHelp((current) => !current)}
+            />
             <Text style={styles.formFieldLabel}>性别</Text>
             <ChoiceGroup options={GENDER_CHOICES} value={gender} onChange={setGender} />
           </>
@@ -3932,6 +3957,7 @@ function ProfileCreateScreen({
           placeholderTextColor={colors.subtle}
           style={styles.profileFormInput}
           keyboardType="number-pad"
+          maxLength={3}
         />
         <Text style={styles.formFieldLabel}>频率</Text>
         <ChoiceGroup options={frequencyOptions} value={frequency} onChange={setFrequency} />
@@ -3942,6 +3968,7 @@ function ProfileCreateScreen({
             placeholder="例如：每 10 天、按需"
             placeholderTextColor={colors.subtle}
             style={styles.profileFormInput}
+            maxLength={INPUT_LIMITS.profileFrequency}
           />
         ) : null}
         <Text style={styles.formFieldLabel}>{fieldCopy.time}</Text>
@@ -3960,6 +3987,7 @@ function ProfileCreateScreen({
               placeholderTextColor={colors.subtle}
               style={[styles.profileFormInput, styles.profileFormArea]}
               multiline
+              maxLength={INPUT_LIMITS.profileComplaint}
             />
             <Text style={styles.formFieldLabel}>危机评估</Text>
             <ChoiceGroup options={CRISIS_CHOICES} value={crisisLevel} onChange={setCrisisLevel} />
@@ -3984,12 +4012,17 @@ function ProfileCreateScreen({
           placeholderTextColor={colors.subtle}
           style={[styles.profileFormInput, styles.profileFormArea]}
           multiline
+          maxLength={INPUT_LIMITS.profileNotes}
         />
       </View>
-      <View style={styles.privacyPanel}>
-        <Text style={styles.privacyTitle}>基础档案长期保存</Text>
-        <Text style={styles.privacyCopy}>基础档案信息会长期保存在云端；录音、咨询记录、个案报告、附件等敏感资料仍按 14 天临时保存与主动授权规则处理。</Text>
-      </View>
+      <InfoDisclosure
+        title="保存规则"
+        summary="基础档案长期保存；敏感资料默认保存 14 天。"
+        detail="录音、咨询记录、个案报告和附件等敏感资料需要主动授权，才会转为长期保存。"
+        expanded={showRetentionHelp}
+        onToggle={() => setShowRetentionHelp((current) => !current)}
+        important
+      />
       <TouchableOpacity
         style={[styles.primaryButton, styles.wideButton, !name.trim() && styles.pendingPrimaryButton]}
         activeOpacity={0.78}
@@ -4284,6 +4317,7 @@ function ProfileDetailScreen({
                       placeholder="例如：陈雨"
                       placeholderTextColor={colors.subtle}
                       style={styles.archiveTextInput}
+                      maxLength={INPUT_LIMITS.profileName}
                     />
                     <Text style={styles.formFieldLabel}>档案编号</Text>
                     <TextInput
@@ -4293,7 +4327,7 @@ function ProfileDetailScreen({
                       placeholderTextColor={colors.subtle}
                       autoCapitalize="characters"
                       autoCorrect={false}
-                      maxLength={12}
+                      maxLength={INPUT_LIMITS.profileCode}
                       style={styles.archiveTextInput}
                     />
                     <Text style={styles.formFieldLabel}>档案状态</Text>
@@ -4310,6 +4344,7 @@ function ProfileDetailScreen({
                       placeholderTextColor={colors.subtle}
                       keyboardType="numeric"
                       style={styles.archiveTextInput}
+                      maxLength={3}
                     />
                     {profile.kindLabel === "来访者" ? (
                       <>
@@ -4321,6 +4356,7 @@ function ProfileDetailScreen({
                           placeholderTextColor={colors.subtle}
                           style={[styles.archiveTextInput, styles.archiveTextArea]}
                           multiline
+                          maxLength={INPUT_LIMITS.profileComplaint}
                         />
                         <Text style={styles.formFieldLabel}>危机评估</Text>
                         <ChoiceGroup options={CRISIS_CHOICES} value={crisisDraft} onChange={setCrisisDraft} />
@@ -4343,6 +4379,7 @@ function ProfileDetailScreen({
                       placeholderTextColor={colors.subtle}
                       style={[styles.archiveTextInput, styles.archiveTextArea]}
                       multiline
+                      maxLength={INPUT_LIMITS.profileNotes}
                     />
                   </ScrollView>
                   <View style={styles.inlineActions}>
@@ -4519,6 +4556,7 @@ function ProfileDetailScreen({
             placeholderTextColor={colors.subtle}
             style={[styles.archiveTextInput, styles.archiveTextArea]}
             multiline
+            maxLength={INPUT_LIMITS.sessionSummary}
           />
           <TouchableOpacity
             style={[
@@ -7285,6 +7323,46 @@ function SectionHeader({ title, action, onAction }: { title: string; action?: st
   );
 }
 
+function InfoDisclosure({
+  title,
+  summary,
+  detail,
+  expanded,
+  onToggle,
+  important = false,
+}: {
+  title: string;
+  summary?: string;
+  detail: string;
+  expanded: boolean;
+  onToggle: () => void;
+  important?: boolean;
+}) {
+  const Chevron = expanded ? ChevronUp : ChevronDown;
+  return (
+    <View style={[styles.infoDisclosure, important && styles.infoDisclosureImportant]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${expanded ? "收起" : "展开"}${title}`}
+        accessibilityState={{ expanded }}
+        hitSlop={6}
+        onPress={onToggle}
+        style={({ pressed }) => [styles.infoDisclosureTrigger, pressed && styles.infoDisclosurePressed]}
+      >
+        <View style={[styles.infoDisclosureIcon, important && styles.infoDisclosureIconImportant]}>
+          {important ? <ShieldCheck size={15} color={colors.sageDark} /> : <CircleAlert size={15} color={colors.clayDark} />}
+        </View>
+        <View style={styles.infoDisclosureBody}>
+          <Text style={styles.infoDisclosureTitle}>{title}</Text>
+          {summary ? <Text style={styles.infoDisclosureSummary}>{summary}</Text> : null}
+        </View>
+        <Chevron size={17} color={colors.muted} />
+      </Pressable>
+      {expanded ? <Text style={styles.infoDisclosureDetail}>{detail}</Text> : null}
+    </View>
+  );
+}
+
 function PrimaryButton({
   icon: Icon,
   label,
@@ -7660,6 +7738,7 @@ function SessionCard({
             onChangeText={setSummaryDraft}
             multiline
             style={[styles.archiveTextInput, styles.archiveTextArea]}
+            maxLength={INPUT_LIMITS.sessionSummary}
           />
           <View style={styles.tagEditRow}>
             {session.tags.map((tag) => (
@@ -7676,6 +7755,7 @@ function SessionCard({
               placeholderTextColor={colors.subtle}
               style={[styles.archiveTextInput, styles.flexInput]}
               editable={session.tags.length < 4}
+              maxLength={INPUT_LIMITS.sessionTag}
             />
             <TouchableOpacity style={[styles.smallActionButton, session.tags.length >= 4 && styles.smallActionDisabled]} activeOpacity={0.78} onPress={() => {
               const nextTags = addSessionTag(session.tags, tagDraft);
@@ -8309,8 +8389,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 12,
   },
   sectionTitle: {
+    flexShrink: 1,
     color: colors.ink,
     fontSize: 18,
     fontWeight: "700",
@@ -8380,15 +8462,18 @@ const styles = StyleSheet.create({
   },
   listBody: {
     flex: 1,
+    minWidth: 0,
     gap: 3,
   },
   listTitle: {
+    flexShrink: 1,
     color: colors.ink,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: "700",
   },
   listMeta: {
+    flexShrink: 1,
     color: colors.muted,
     fontSize: 12,
     lineHeight: 17,
@@ -9181,6 +9266,64 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     fontWeight: "700",
+  },
+  infoDisclosure: {
+    overflow: "hidden",
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  infoDisclosureImportant: {
+    backgroundColor: "#F4F8F5",
+    borderColor: "#D8E6DD",
+  },
+  infoDisclosureTrigger: {
+    minHeight: 46,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  infoDisclosurePressed: {
+    opacity: 0.72,
+  },
+  infoDisclosureIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  infoDisclosureIconImportant: {
+    backgroundColor: "#E4EFE9",
+  },
+  infoDisclosureBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  infoDisclosureTitle: {
+    color: colors.ink,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  infoDisclosureSummary: {
+    marginTop: 2,
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600",
+  },
+  infoDisclosureDetail: {
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "600",
   },
   choiceGroup: {
     flexDirection: "row",
