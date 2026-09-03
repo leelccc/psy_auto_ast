@@ -12,6 +12,12 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-03 · 客户端 HTTPS 强制收口
+
+- **iOS**：生产 MinIO 文件 URL 已稳定迁到 `https://maxpeking.top/psy-auto-ast/...`，因此从 `app.json` 删除过渡期的 `47.96.89.215` ATS 明文例外；同步清理当前本机生成的 `Info.plist`，保留本地网络访问能力。
+- **Android**：安装 Expo SDK 54 兼容的 `expo-build-properties`，在持久配置中设置 `usesCleartextTraffic: false`，避免只修改被忽略的生成 Manifest、下次 Prebuild 又恢复明文兼容。Prebuild 后已确认 Manifest 生成值为 `false`。
+- **验证**：Expo public config 正确解析插件配置；iOS 原生文件不再包含生产 IP 例外；`npm run typecheck`、前端全量 98 项测试和 HTTPS Web export 均通过。本批只完成源码与生成配置收口，未打 APK/IPA、未部署 Web，也未修改生产服务器。
+
 ### 2026-09-03 · DNS 生效 / 证书续期验证 / 生产配置纳入 git
 
 - **DNS 全量生效**：权威 NS（dns21/dns22.hichina.com）与服务器侧公网解析均返回真 IP `47.96.89.215`，NS 切换 24–48h 过渡期（198.18.x.x 占位）结束。

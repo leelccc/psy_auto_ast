@@ -324,3 +324,11 @@ PDF 如果能提取文本，可参与 AI 分析。
 - 遇到 Android 按钮无响应，先用可视探针确认 handler 是否收到触摸，再查 `keyboardShouldPersistTaps`、遮挡层和触摸组件。
 - 本地 Android 开发/模拟器构建沿用 Android Studio JBR Java 21；生产 release APK 的已验证 Gradle 流程使用 Corretto JDK 17。两条流程不要混用。
 - 安全遗留仍包括：修改默认账号密码、域名与 HTTPS、安全组和 MinIO 暴露收口、清理敏感备份、正式 release key 签名。
+
+## 2026-09-03 HTTPS 收口后的接续状态
+
+- DNS、Let's Encrypt 续期演练、Web/API、MinIO 443 路径代理与 Console HTTPS 已验证；生产配置已同步到仓库 `server/`。
+- MinIO 内部访问与公开预签名地址已拆为双 client，文件外链使用 `https://maxpeking.top/psy-auto-ast/...`；路径代理双斜杠导致的上传 503 已修复。
+- 客户端源码已移除 iOS 生产 IP ATS 白名单，并用 `expo-build-properties` 持久设置 Android `usesCleartextTraffic=false`。本机 Prebuild 生成结果、TypeScript、98 项测试和 Web export 均通过。
+- 本批未重新构建或发布移动安装包；下次用户明确要求 APK/IPA 时，需用新的原生配置构建并核对最终 Manifest/Info.plist。
+- 仍需外部手工处理：阿里云安全组关闭公网 9000；发布前还需正式 Android release key、Apple 付费开发者签名及敏感凭据轮换。

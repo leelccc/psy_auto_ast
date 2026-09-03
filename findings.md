@@ -1,5 +1,12 @@
 # Backend Specification Findings
 
+## 2026-09-03 WorkBuddy Resynchronization
+
+- WorkBuddy completed the production HTTPS migration: DNS now resolves publicly, certificate renewal dry-run succeeds, MinIO presigned URLs use the 443 bucket-path proxy, and the recording-upload 503 caused by a double-slash proxy path is fixed.
+- Production Nginx and Compose configs are now tracked under `server/`; changes to the bind-mounted Nginx config require recreating the Web container, not only reloading Nginx.
+- APK `0901-7`, Web, API, and MinIO file URLs have been verified to use HTTPS. The remaining source-level compatibility exceptions are the iOS IP ATS allowlist and Android `usesCleartextTraffic=true` in generated native output.
+- Expo SDK 54 officially supports persistent Android cleartext configuration through `expo-build-properties`; direct edits to the ignored generated Manifest would be lost on a later Prebuild.
+
 ## 2026-09-01 WorkBuddy Resynchronization
 
 - `origin/main` and local `main` are commit-aligned; the workspace contains five intentional, uncommitted iOS-readiness changes under `apps/mobile`.

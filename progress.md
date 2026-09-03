@@ -659,3 +659,11 @@
 - Confirmed backend, PostgreSQL, and MinIO health before deployment.
 - Backed up the previous Web artifact to `/opt/psy_auto_ast/backups/web_20260901_201926/web_before_0901_6.tar.gz`, cleared only the contents of the existing bind-mounted Web directory, extracted the new artifact, and reloaded Nginx after a successful config test.
 - Verified the production bundle is `AppEntry-4f43b2adfdc4588a64376ecc7ef5524c.js`, contains the expected build/API markers, and serves HTTP 200; `/api/v1/health` reports all components ok.
+
+# 2026-09-03 Codex / WorkBuddy Resynchronization And Client HTTPS Hardening
+
+- Fetched `origin/main`; local and remote were clean and aligned before work began.
+- Reconciled WorkBuddy's 2026-09-02/03 HTTPS, DNS, certificate-renewal, MinIO proxy, Console-security, APK, and production-config work.
+- Started the next safe source-level task: removed the temporary iOS IP ATS exception and installed/configured Expo SDK 54's `expo-build-properties` with Android `usesCleartextTraffic: false`.
+- Expo public config and Android/iOS Prebuild completed. Generated Android Manifest contains `usesCleartextTraffic="false"`; the current generated iOS Info.plist no longer contains the production IP exception.
+- TypeScript, all 98 frontend tests, HTTPS Web export, and `git diff --check` passed. No APK/IPA build or deployment was performed.

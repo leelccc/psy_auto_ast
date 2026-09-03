@@ -53,9 +53,19 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [x] Phase 39: Deploy issue `0831-5` backend and Web changes to the production-like server.
 - [x] Phase 40: Build and verify a local Android release APK for `0831-5`.
 - [x] Phase 41: Reconcile the 2026-09-01 WorkBuddy work and complete the in-progress iOS readiness batch.
-- [ ] Phase 42: Design and validate the production MinIO HTTPS migration before changing production file URLs.
+- [x] Phase 42: Design and validate the production MinIO HTTPS migration before changing production file URLs.
 - [x] Phase 43: Redesign the profile basic-information edit entry as a compact, accessible mobile control.
 - [x] Phase 44: Deploy Web build `0901-6` with the HTTPS API endpoint and verify the production artifact.
+- [x] Phase 45: Reconcile WorkBuddy through 2026-09-03 and remove obsolete client cleartext-network exceptions after the HTTPS migration.
+
+### Phase 45 Progress
+
+- [x] Fetch `origin/main`, confirm a clean 0/0 baseline, and read WorkBuddy's 2026-09-02/03 records plus durable memory.
+- [x] Confirm DNS, certificate renewal, Web/API/MinIO HTTPS, APK `0901-7`, Console protection, upload-path repair, and tracked production configs are complete.
+- [x] Remove the obsolete iOS ATS exception for the production IP.
+- [x] Add Expo SDK 54's `expo-build-properties` plugin and persist Android `usesCleartextTraffic: false` across Prebuild.
+- [x] Validate Expo config generation, native manifests, TypeScript, frontend tests, and Web export.
+- [x] Update durable records, commit, and push the completed client HTTPS-hardening batch.
 
 ### Phase 44 Progress
 
@@ -84,9 +94,9 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 
 ### Phase 42 Progress
 
-- [ ] Inspect the existing Nginx, MinIO, DNS, certificate-renewal, and presigned-URL configuration.
-- [ ] Define a migration and rollback path for a dedicated HTTPS MinIO endpoint.
-- [ ] Apply production changes only after the endpoint and certificate path can be verified without disrupting existing Android/Web clients.
+- [x] Inspect the existing Nginx, MinIO, DNS, certificate-renewal, and presigned-URL configuration.
+- [x] Define and execute the final 443 bucket-path proxy with separate internal/public MinIO clients and a documented rollback path.
+- [x] Verify DNS, certificate renewal, presigned upload/download, Web/API health, APK HTTPS markers, and production config tracking through WorkBuddy's 2026-09-02/03 work.
 
 ### Phase 35 Progress
 
