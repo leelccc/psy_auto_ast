@@ -676,3 +676,12 @@
 - Verified the local build against the production API through browser request interception without changing production CORS. The updated profile-create page has no horizontal overflow at 320/390/768px, and the disclosure works by tap/focus.
 - Frontend typecheck and all 98 tests passed. Direct backend schema boundary checks passed; full backend pytest remains blocked because local PostgreSQL test port 55432 is not running.
 - No Web deployment and no APK/IPA build were performed.
+
+# 2026-09-03 Web/Backend Deployment And Android Release 0903-1
+
+- Bumped the visible release marker to `0903-1` and exported Web with `https://maxpeking.top/api/v1`.
+- Backed up production Web and the two changed backend files under `/opt/psy_auto_ast/backups/deploy_0903_1/`, deployed the Web artifact, rebuilt the backend container, and reloaded Nginx after a successful config test.
+- Verified `https://maxpeking.top/` and `/api/v1/health` return 200, the public bundle contains `0903-1`, and a 255-character login email is rejected by the new server boundary with HTTP 422.
+- Built the local Android release APK with Corretto JDK 17 and the HTTPS API URL. Output: `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`, 71,603,559 bytes, SHA-256 `cac85b9e998c3ece715c277b7f0bd302e458abc7bdad37771647ccd039e8f740`.
+- Verified the APK contains one `0903-1` marker, one HTTPS API marker, no old HTTP-IP API marker, package `com.psyautoast.counselor`, version `0.1.0`, target SDK 36, and `usesCleartextTraffic=false`.
+- The APK remains local as requested; the production `/apk/` download page was not changed.

@@ -58,6 +58,7 @@ The MVP is deployed and the active work is mobile-first production refinement. D
 - [x] Phase 44: Deploy Web build `0901-6` with the HTTPS API endpoint and verify the production artifact.
 - [x] Phase 45: Reconcile WorkBuddy through 2026-09-03 and remove obsolete client cleartext-network exceptions after the HTTPS migration.
 - [ ] Phase 46: Audit and simplify the complete frontend design system, responsive behavior, long-text handling, explanatory content, and input contracts.
+- [x] Phase 47: Deploy UI/input-contract batch `0903-1` to Web and backend, then build and verify a local Android release APK.
 
 ### Phase 46 Progress
 

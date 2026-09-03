@@ -17,7 +17,10 @@
 - **说明信息减负**：新增触屏友好的可展开信息组件；档案编号规则默认收起，保存规则保留“基础档案长期保存 / 敏感资料默认 14 天”的可见摘要，详细解释按需展开。错误、危机、删除后果等关键信息继续常显。
 - **长文本与窄屏**：共享列表正文增加 `minWidth: 0`，标题和次要文字允许收缩；区块标题为右侧操作预留稳定空间。实测 320、390、768px 均无页面级横向溢出。
 - **前后端约束**：补齐邮箱、密码、显示名、档案名、编号、约定次数、自定义频率、首访主诉、档案备注、历程摘要和标签的长度/数量边界；密码提示与现有后端规则统一为 6–128 位。
-- **验证**：前端类型检查与 98 项测试通过；后端模型边界检查通过。完整后端 pytest 因本机测试 PostgreSQL `127.0.0.1:55432` 未运行而未执行。本批未部署 Web、未构建 APK/IPA。
+- **版本标识**：本轮发布标识升级为 `0903-1`。
+- **验证**：前端类型检查与 98 项测试通过；后端模型边界检查通过。完整后端 pytest 因本机测试 PostgreSQL `127.0.0.1:55432` 未运行而未执行。
+- **Web + 后端部署**：用户明确要求部署 Web；因本批同时修改了服务端输入边界，已一并同步并重建后端。线上 `https://maxpeking.top/` 与 `/api/v1/health` 返回 200，bundle 包含 `0903-1`，超长邮箱请求返回 422。部署前备份位于服务器 `/opt/psy_auto_ast/backups/deploy_0903_1/`。
+- **本机 Android release**：按用户要求用 JDK 17 与 `EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1` 完成 `assembleRelease`。产物 `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`（71,603,559 bytes，SHA-256 `cac85b9e998c3ece715c277b7f0bd302e458abc7bdad37771647ccd039e8f740`）；包内含 `0903-1` 和 HTTPS API，旧 HTTP IP API 计数为 0，Manifest `usesCleartextTraffic=false`。本次仅本机打包，未上传 `/apk/` 下载页。
 
 ### 2026-09-03 · 客户端 HTTPS 强制收口
 
