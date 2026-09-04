@@ -12,6 +12,13 @@
 
 ## 更新日志（Change Log）
 
+### 2026-09-04 · 前端发布（Web 重发布 + APK 打包并分发）
+
+- **录音音量条修复上线**：09-04 修复 `useAudioRecorder` 未启用 metering（`isMeteringEnabled:true` + 轮询 100ms，commit `35201bd`）随本次发布生效。Web 端 expo-audio 不返回 metering（库限制，仍静态），Android/iOS 真机装包后音量条随声音起伏。
+- **Web 重发布**：本机 `EXPO_PUBLIC_API_BASE_URL=https://maxpeking.top/api/v1 npx expo export --platform web` → 部署到 `/opt/psy_auto_ast/web`（清空旧文件再解压，保留目录勿 rm-rf）→ `nginx -s reload`；首页 HTTP 200，bundle 确认含 `maxpeking.top/api/v1`。
+- **本机 Android release + 分发**：JDK17（`corretto-17.0.15`）+ `ANDROID_HOME` 完成 `assembleRelease`，产物 `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`（71,603,527 bytes）。已 scp 到 `/opt/psy_auto_ast/apk/` 覆盖旧包；`https://maxpeking.top/apk/app-release.apk` HEAD 验证 HTTP 200 / Content-Length 71603527 / octet-stream / no-store。APK 内 bundle 经 `grep isMeteringEnabled` 确认含 09-04 修复。
+- **未变**：录音多片段改造仍在设计稿 `docs/recording-redesign.md`，本次无功能新增，仅部署既有 bug 修复。
+
 ### 2026-09-03 · 录音转写支持最长 2 小时（base64→minio_url）
 
 - **转写接口层切换**：生产 `.env` `RECORDING_AUDIO_INPUT_MODE` 由 `base64`（qwen3-asr-flash 实时端点，5 分钟/10MB 硬上限）切换为 `minio_url`（fun-asr 文件异步识别，支持长音频 + 说话人分离）。2 小时录音（≈115MB）现已可正常转写。
