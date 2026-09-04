@@ -316,7 +316,7 @@ function renderUser(user) {
   const statusClass = user.status === "active" ? "" : "bad";
   const billing = user.billing?.status || "-";
   return `<tr>
-    <td><strong>${escapeHtml(user.display_name)}</strong><br><span class="muted">${escapeHtml(user.email)}</span><br><span class="pill">${escapeHtml(user.role)}</span></td>
+    <td><strong>${escapeHtml(user.display_name)}</strong><br><span class="muted">${escapeHtml(user.email || user.phone || "未设置登录账号")}</span><br><span class="pill">${escapeHtml(user.role)}</span></td>
     <td><span class="pill ${statusClass}">${escapeHtml(user.status)}</span></td>
     <td>${escapeHtml(user.plan_code)}</td>
     <td>${escapeHtml(billing)}</td>
@@ -335,7 +335,7 @@ function resetSelectedUser() {
   $("userEditorEmpty").classList.add("hidden");
   $("userEditorForm").classList.remove("hidden");
   $("editName").textContent = user.display_name;
-  $("editEmail").textContent = user.email;
+  $("editEmail").textContent = user.email || user.phone || "未设置登录账号";
   $("editRole").value = user.role;
   $("editStatus").value = user.status;
   $("editPlan").value = user.plan_code;

@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""  # 发件人；留空则用 smtp_username
     smtp_use_ssl: bool = True  # True=SMTP_SSL(465)；False=SMTP+STARTTLS(587)
+    # 短信验证码 / 阿里云短信（用于手机号注册、验证码登录、重置密码）。
+    # 未配置 access_key 等时：开发环境会在响应中回传 dev_code 便于本地联调，生产环境直接报错。
+    sms_access_key_id: str = ""
+    sms_access_key_secret: str = ""
+    sms_sign_name: str = ""  # 阿里云短信签名（需审核通过）
+    sms_template_register: str = ""  # 注册验证码模板 CODE
+    sms_template_login: str = ""  # 验证码登录模板 CODE
+    sms_template_reset_password: str = ""  # 重置密码模板 CODE
+    sms_endpoint: str = "dysmsapi.aliyuncs.com"
     verification_code_length: int = 6
     verification_code_minutes: int = 10
     verification_code_retry_seconds: int = 60

@@ -13,3 +13,7 @@ PyJWT==2.10.1
 pwdlib[argon2]==0.3.0
 reportlab==4.4.5
 python-docx==1.2.0
+# 阿里云短信（手机号验证码发送）：仅在生产配置 SMS_* 时由 sms_service 懒加载，未配置不影响本地开发
+alibabacloud_dysmsapi20170525==3.1.2
+alibabacloud_tea_openapi==0.3.13
+alibabacloud_tea_util==0.3.13

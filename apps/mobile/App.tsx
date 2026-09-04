@@ -540,11 +540,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   ]);
 }
 
-function optimisticUser(email: string, displayName = "咨询师"): CurrentUser {
+function optimisticUser(identity: string, displayName = "咨询师", kind: "email" | "phone" = "email"): CurrentUser {
   const now = new Date().toISOString();
   return {
     id: "pending",
-    email,
+    email: kind === "email" ? identity : null,
+    phone: kind === "phone" ? identity : null,
     display_name: displayName,
     created_at: now,
     updated_at: now,
@@ -1515,6 +1516,31 @@ export default function App() {
             void authService.me().then(setCurrentUser).catch(() => undefined);
           }}
           onSendCode={(email, purpose) => authService.sendCode(email, purpose)}
+          onPhoneLogin={async (phone, password) => {
+            await authService.loginPhone(phone, password);
+            setCurrentUser(optimisticUser(phone, "咨询师", "phone"));
+            setAuthStatus("authenticated");
+            void authService.me().then(setCurrentUser).catch(() => undefined);
+          }}
+          onPhoneCodeLogin={async (phone, code) => {
+            await authService.loginPhoneWithCode(phone, code);
+            setCurrentUser(optimisticUser(phone, "咨询师", "phone"));
+            setAuthStatus("authenticated");
+            void authService.me().then(setCurrentUser).catch(() => undefined);
+          }}
+          onPhoneRegister={async (phone, password, displayName, code) => {
+            await authService.registerPhone({ phone, password, displayName, code });
+            setCurrentUser(optimisticUser(phone, displayName, "phone"));
+            setAuthStatus("authenticated");
+            void authService.me().then(setCurrentUser).catch(() => undefined);
+          }}
+          onPhoneResetPassword={async (phone, code, newPassword) => {
+            await authService.resetPhonePassword(phone, code, newPassword);
+            setCurrentUser(optimisticUser(phone, "咨询师", "phone"));
+            setAuthStatus("authenticated");
+            void authService.me().then(setCurrentUser).catch(() => undefined);
+          }}
+          onSendPhoneCode={(phone, purpose) => authService.sendPhoneCode(phone, purpose)}
         />
       </SafeAreaProvider>
     );
@@ -2411,14 +2437,26 @@ function AuthScreen({
   onRegister,
   onResetPassword,
   onSendCode,
+  onPhoneLogin,
+  onPhoneCodeLogin,
+  onPhoneRegister,
+  onPhoneResetPassword,
+  onSendPhoneCode,
 }: {
   onLogin: (email: string, password: string) => Promise<void>;
   onRegister: (email: string, password: string, displayName: string, code: string) => Promise<void>;
   onResetPassword: (email: string, code: string, newPassword: string) => Promise<void>;
   onSendCode: (email: string, purpose: "register" | "reset_password") => Promise<VerificationCodeResult>;
+  onPhoneLogin: (phone: string, password: string) => Promise<void>;
+  onPhoneCodeLogin: (phone: string, code: string) => Promise<void>;
+  onPhoneRegister: (phone: string, password: string, displayName: string, code: string) => Promise<void>;
+  onPhoneResetPassword: (phone: string, code: string, newPassword: string) => Promise<void>;
+  onSendPhoneCode: (phone: string, purpose: "register" | "login" | "reset_password") => Promise<VerificationCodeResult>;
 }) {
-  const [mode, setMode] = useState<"login" | "register" | "reset">("login");
+  const [channel, setChannel] = useState<"email" | "phone">("email");
+  const [mode, setMode] = useState<"login" | "codeLogin" | "register" | "reset">("login");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [code, setCode] = useState("");
@@ -2437,34 +2475,48 @@ function AuthScreen({
   }, [cooldown]);
 
   const emailValid = email.trim().includes("@");
+  const phoneValid = /^(?:\+?86|0086)?1[3-9]\d{9}$/.test(phone.replace(/[\s-]/g, ""));
   const passwordValid = password.length >= 6;
   const codeValid = code.trim().length >= 4;
-  const canSubmit = emailValid
-    && passwordValid
+  const identityValid = channel === "email" ? emailValid : phoneValid;
+  const canSubmit = identityValid
+    && (mode === "codeLogin" ? codeValid : passwordValid)
     && (mode === "login" || codeValid)
     && (mode !== "register" || displayName.trim().length > 0);
 
-  const switchMode = (next: "login" | "register" | "reset") => {
+  const switchMode = (next: "login" | "codeLogin" | "register" | "reset") => {
     setMode(next);
     setError(null);
     setInfo(null);
     setCode("");
   };
 
+  const switchChannel = (next: "email" | "phone") => {
+    setChannel(next);
+    setMode("login");
+    setPassword("");
+    setCode("");
+    setError(null);
+    setInfo(null);
+    setCooldown(0);
+  };
+
   const sendCode = async () => {
     if (sendingCode || cooldown > 0) return;
-    if (!emailValid) {
-      setError("请先填写正确的邮箱。");
+    if (!identityValid) {
+      setError(channel === "email" ? "请先填写正确的邮箱。" : "请先填写正确的中国大陆手机号。");
       return;
     }
     setSendingCode(true);
     setError(null);
     setInfo(null);
     try {
-      const purpose = mode === "register" ? "register" : "reset_password";
-      const result = await onSendCode(email.trim().toLowerCase(), purpose);
+      const purpose = mode === "register" ? "register" : mode === "codeLogin" ? "login" : "reset_password";
+      const result = channel === "email"
+        ? await onSendCode(email.trim().toLowerCase(), purpose as "register" | "reset_password")
+        : await onSendPhoneCode(phone.trim(), purpose);
       setCooldown(result.retry_seconds || 60);
-      setInfo(result.dev_code ? `开发环境验证码：${result.dev_code}` : "验证码已发送到你的邮箱，请查收。");
+      setInfo(result.dev_code ? `开发环境验证码：${result.dev_code}` : `验证码已发送到你的${channel === "email" ? "邮箱" : "手机"}，请查收。`);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "验证码发送失败，请稍后重试。");
     } finally {
@@ -2477,12 +2529,18 @@ function AuthScreen({
     setSubmitting(true);
     setError(null);
     try {
-      if (mode === "login") {
-        await onLogin(email.trim().toLowerCase(), password);
+      if (channel === "email") {
+        if (mode === "login") await onLogin(email.trim().toLowerCase(), password);
+        else if (mode === "register") await onRegister(email.trim().toLowerCase(), password, displayName.trim(), code.trim());
+        else await onResetPassword(email.trim().toLowerCase(), code.trim(), password);
+      } else if (mode === "login") {
+        await onPhoneLogin(phone.trim(), password);
+      } else if (mode === "codeLogin") {
+        await onPhoneCodeLogin(phone.trim(), code.trim());
       } else if (mode === "register") {
-        await onRegister(email.trim().toLowerCase(), password, displayName.trim(), code.trim());
+        await onPhoneRegister(phone.trim(), password, displayName.trim(), code.trim());
       } else {
-        await onResetPassword(email.trim().toLowerCase(), code.trim(), password);
+        await onPhoneResetPassword(phone.trim(), code.trim(), password);
       }
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "登录服务暂不可用，请稍后重试。");
@@ -2491,9 +2549,11 @@ function AuthScreen({
     }
   };
 
-  const titleCopy = mode === "login" ? "欢迎回来" : mode === "register" ? "创建安全工作空间" : "重置密码";
+  const titleCopy = mode === "login" || mode === "codeLogin" ? "欢迎回来" : mode === "register" ? "创建安全工作空间" : "重置密码";
   const subCopy = mode === "login"
     ? "登录后访问你的档案、录音、报告与督导记录。"
+    : mode === "codeLogin"
+      ? "验证码登录无需密码，首次使用的手机号会自动创建账号。"
     : mode === "register"
       ? "账号数据存储在后端，档案访问密码按类型独立保护。"
       : "通过邮箱验证码设置新密码。";
@@ -2510,6 +2570,19 @@ function AuthScreen({
           <Text style={styles.authCopy}>{subCopy}</Text>
         </View>
         <View style={styles.authCard}>
+          <View style={styles.authChannelTabs}>
+            {(["email", "phone"] as const).map((item) => (
+              <TouchableOpacity
+                key={item}
+                style={[styles.authChannelTab, channel === item && styles.authChannelTabActive]}
+                onPress={() => switchChannel(item)}
+              >
+                <Text style={[styles.authChannelTabText, channel === item && styles.authChannelTabTextActive]}>
+                  {item === "email" ? "邮箱" : "手机号"}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
           {mode === "register" ? (
             <TextInput
               value={displayName}
@@ -2522,23 +2595,23 @@ function AuthScreen({
             />
           ) : null}
           <TextInput
-            value={email}
-            onChangeText={setEmail}
-            placeholder="邮箱"
+            value={channel === "email" ? email : phone}
+            onChangeText={channel === "email" ? setEmail : setPhone}
+            placeholder={channel === "email" ? "邮箱" : "手机号"}
             placeholderTextColor={colors.subtle}
             style={styles.profileFormInput}
-            keyboardType="email-address"
+            keyboardType={channel === "email" ? "email-address" : "phone-pad"}
             autoCapitalize="none"
             autoCorrect={false}
-            textContentType="emailAddress"
-            maxLength={INPUT_LIMITS.email}
+            textContentType={channel === "email" ? "emailAddress" : "telephoneNumber"}
+            maxLength={channel === "email" ? INPUT_LIMITS.email : 32}
           />
           {mode !== "login" ? (
             <View style={styles.authCodeRow}>
               <TextInput
                 value={code}
                 onChangeText={setCode}
-                placeholder="邮箱验证码"
+                placeholder={`${channel === "email" ? "邮箱" : "短信"}验证码`}
                 placeholderTextColor={colors.subtle}
                 style={[styles.profileFormInput, styles.authCodeInput]}
                 keyboardType="number-pad"
@@ -2548,10 +2621,10 @@ function AuthScreen({
               <TouchableOpacity
                 style={[
                   styles.authSendButton,
-                  (!emailValid || sendingCode || cooldown > 0) && styles.authSendButtonDisabled,
+                  (!identityValid || sendingCode || cooldown > 0) && styles.authSendButtonDisabled,
                 ]}
                 activeOpacity={0.8}
-                disabled={!emailValid || sendingCode || cooldown > 0}
+                disabled={!identityValid || sendingCode || cooldown > 0}
                 onPress={() => void sendCode()}
               >
                 <Text style={styles.authSendButtonText}>
@@ -2560,7 +2633,7 @@ function AuthScreen({
               </TouchableOpacity>
             </View>
           ) : null}
-          <TextInput
+          {mode !== "codeLogin" ? <TextInput
             value={password}
             onChangeText={setPassword}
             placeholder={mode === "login" ? "密码" : mode === "register" ? "密码（至少 6 位）" : "新密码（至少 6 位）"}
@@ -2569,11 +2642,12 @@ function AuthScreen({
             secureTextEntry
             textContentType={mode === "login" ? "password" : "newPassword"}
             maxLength={INPUT_LIMITS.password}
-          />
+          /> : null}
           {mode === "login" ? (
-            <TouchableOpacity activeOpacity={0.7} onPress={() => switchMode("reset")} style={{ alignSelf: "flex-end" }}>
-              <Text style={styles.authForgot}>忘记密码？</Text>
-            </TouchableOpacity>
+            <View style={styles.authSecondaryActions}>
+              {channel === "phone" ? <TouchableOpacity activeOpacity={0.7} onPress={() => switchMode("codeLogin")}><Text style={styles.authForgot}>验证码登录</Text></TouchableOpacity> : <View />}
+              <TouchableOpacity activeOpacity={0.7} onPress={() => switchMode("reset")}><Text style={styles.authForgot}>忘记密码？</Text></TouchableOpacity>
+            </View>
           ) : null}
           {error ? <Text style={styles.authError}>{error}</Text> : null}
           {info ? <Text style={styles.authInfo}>{info}</Text> : null}
@@ -2585,7 +2659,7 @@ function AuthScreen({
           >
             {submitting ? <ActivityIndicator color="#FFF9F3" /> : <LockKeyhole size={18} color="#FFF9F3" />}
             <Text style={styles.primaryButtonText}>
-              {submitting ? "正在验证..." : mode === "login" ? "安全登录" : mode === "register" ? "创建账号" : "重置并登录"}
+              {submitting ? "正在验证..." : mode === "login" ? "安全登录" : mode === "codeLogin" ? "验证码登录" : mode === "register" ? "创建账号" : "重置并登录"}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -2593,11 +2667,11 @@ function AuthScreen({
             onPress={() => switchMode(mode === "login" ? "register" : "login")}
           >
             <Text style={styles.authSwitch}>
-              {mode === "reset" ? "返回登录" : mode === "login" ? "还没有账号？创建账号" : "已有账号？返回登录"}
+              {mode === "reset" || mode === "codeLogin" ? "返回密码登录" : mode === "login" ? "还没有账号？创建账号" : "已有账号？返回登录"}
             </Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.authFootnote}>开发演示账号：user@163.com / 123456</Text>
+        <Text style={styles.authFootnote}>{channel === "email" ? "开发演示账号：user@163.com / 123456" : "手机号与邮箱账号相互独立"}</Text>
       </View>
     </SafeAreaView>
   );
@@ -6508,14 +6582,14 @@ function AccountScreen({
         </View>
         <View style={styles.listBody}>
           <Text style={styles.accountName}>{displayName}</Text>
-          <Text style={styles.listMeta}>{user?.email ?? "个人版"}</Text>
+          <Text style={styles.listMeta}>{user?.email ?? user?.phone ?? "个人版"}</Text>
         </View>
         <Edit3 size={20} color={colors.subtle} />
       </TouchableOpacity>
       {editingProfile ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formPreviewTitle}>编辑个人资料</Text>
-          <Text style={styles.listMeta}>邮箱作为登录账号不可在此修改；展示名称保存到后端账号资料。</Text>
+          <Text style={styles.listMeta}>登录账号不可在此修改；展示名称保存到后端账号资料。</Text>
           <TextInput
             value={displayNameDraft}
             onChangeText={setDisplayNameDraft}
@@ -6614,7 +6688,7 @@ function AccountScreen({
           value={`${calendarSummary.calendarSync} · ${calendarSummary.privacyTitle}`}
           onPress={() => onOpenSecurity("calendar")}
         />
-        <SettingsRow icon={ShieldCheck} title="账号安全" value="邮箱登录" onPress={() => onOpenSecurity("account")} />
+        <SettingsRow icon={ShieldCheck} title="账号安全" value={user?.phone ? "手机号登录" : "邮箱登录"} onPress={() => onOpenSecurity("account")} />
         <SettingsRow icon={LogOut} title="退出登录" value="清除本机安全会话" onPress={() => void onLogout()} />
       </View>
       <Text style={styles.buildTag}>
@@ -8172,6 +8246,31 @@ const styles = StyleSheet.create({
     gap: 12,
     ...shadow.soft,
   },
+  authChannelTabs: {
+    flexDirection: "row",
+    padding: 3,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+  },
+  authChannelTab: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 9,
+    borderRadius: radius.sm,
+  },
+  authChannelTabActive: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  authChannelTabText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  authChannelTabTextActive: {
+    color: colors.clayDark,
+  },
   authError: {
     color: colors.danger,
     fontSize: 13,
@@ -8189,6 +8288,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     paddingVertical: 2,
+  },
+  authSecondaryActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
   authCodeRow: {
     flexDirection: "row",

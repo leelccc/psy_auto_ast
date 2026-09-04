@@ -2,7 +2,8 @@ import { ApiClient, type TokenPair } from "./apiClient";
 
 export type CurrentUser = {
   id: string;
-  email: string;
+  email: string | null;
+  phone: string | null;
   display_name: string;
   created_at: string;
   updated_at: string;
@@ -37,6 +38,29 @@ export function createAuthService(client: ApiClient) {
     async resetPassword(email: string, code: string, newPassword: string) {
       return applyTokens(await client.post<TokenPair>("/auth/reset-password", {
         email,
+        code,
+        new_password: newPassword,
+      }));
+    },
+    async registerPhone(input: { phone: string; password: string; displayName: string; code: string }) {
+      return applyTokens(await client.post<TokenPair>("/auth/phone/register", {
+        phone: input.phone,
+        password: input.password,
+        display_name: input.displayName,
+        code: input.code,
+      }));
+    },
+    async loginPhone(phone: string, password: string) {
+      return applyTokens(await client.post<TokenPair>("/auth/phone/login", { phone, password }));
+    },
+    async loginPhoneWithCode(phone: string, code: string) {
+      return applyTokens(await client.post<TokenPair>("/auth/phone/login-code", { phone, code }));
+    },
+    sendPhoneCode: (phone: string, purpose: "register" | "login" | "reset_password") =>
+      client.post<VerificationCodeResult>("/auth/phone/verification-code", { phone, purpose }),
+    async resetPhonePassword(phone: string, code: string, newPassword: string) {
+      return applyTokens(await client.post<TokenPair>("/auth/phone/reset-password", {
+        phone,
         code,
         new_password: newPassword,
       }));

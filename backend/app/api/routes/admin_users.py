@@ -33,6 +33,7 @@ def serialize_admin_user(user: User) -> dict[str, object]:
     return {
         "id": user.id,
         "email": user.email,
+        "phone": user.phone,
         "display_name": user.display_name,
         "role": user.role,
         "role_options": sorted(USER_ROLES),
@@ -73,7 +74,11 @@ def list_admin_users(
     query = select(User)
     if keyword:
         like = f"%{keyword.strip().lower()}%"
-        query = query.where(or_(func.lower(User.email).like(like), func.lower(User.display_name).like(like)))
+        query = query.where(or_(
+            func.lower(User.email).like(like),
+            User.phone.like(like),
+            func.lower(User.display_name).like(like),
+        ))
     if status:
         if status not in USER_STATUSES:
             raise ApiError(422, "user_status_invalid", "不支持的用户状态。")

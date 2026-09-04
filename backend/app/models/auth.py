@@ -61,6 +61,24 @@ class EmailVerificationCode(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class PhoneVerificationCode(Base):
+    """短信验证码（注册 / 登录 / 重置密码）。只存哈希，不存明文。"""
+
+    __tablename__ = "phone_verification_codes"
+    __table_args__ = (
+        Index("phone_verification_phone_purpose_idx", "phone", "purpose"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    phone: Mapped[str] = mapped_column(String(32), index=True)
+    purpose: Mapped[str] = mapped_column(String(24))
+    code_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ExternalAccount(Base):
     """第三方账号绑定（如微信）。provider+provider_user_id 唯一。"""
 

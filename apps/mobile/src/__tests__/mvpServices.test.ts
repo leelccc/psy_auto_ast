@@ -107,6 +107,37 @@ test("account profile updates are sent to the authenticated backend user", async
   });
 });
 
+test("phone auth service uses the dedicated phone endpoints and payloads", async () => {
+  const requests: Array<{ method: string; path: string; body: unknown }> = [];
+  const tokens = {
+    access_token: "access-phone",
+    refresh_token: "refresh-phone",
+    token_type: "bearer",
+    expires_in: 900,
+  };
+  const client = clientWithRoutes({
+    "POST /auth/phone/verification-code": { sent: true, expire_seconds: 600, retry_seconds: 60 },
+    "POST /auth/phone/login-code": tokens,
+  }, requests);
+  const service = createAuthService(client);
+
+  await service.sendPhoneCode("13800138000", "login");
+  await service.loginPhoneWithCode("13800138000", "123456");
+
+  assert.deepEqual(requests.slice(0, 2), [
+    {
+      method: "POST",
+      path: "/auth/phone/verification-code",
+      body: { phone: "13800138000", purpose: "login" },
+    },
+    {
+      method: "POST",
+      path: "/auth/phone/login-code",
+      body: { phone: "13800138000", code: "123456" },
+    },
+  ]);
+});
+
 
 test("report, privacy and job services preserve command payloads", async () => {
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
