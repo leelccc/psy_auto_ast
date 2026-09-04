@@ -2737,8 +2737,8 @@ function RecordingScreen({
   onSave: (audio: RecordedLocalAudio) => Promise<void>;
   onNotice: (title: string, detail: string) => void;
 }) {
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(recorder);
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const recorderState = useAudioRecorderState(recorder, 100);
   const controller = useMemo(
     () => createAudioRecordingController(createExpoAudioDriver(
       recorder,
