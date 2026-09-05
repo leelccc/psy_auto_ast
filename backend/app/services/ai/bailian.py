@@ -240,7 +240,11 @@ class BailianRecordingAIProvider:
             if status == "SUCCEEDED":
                 break
             if status in {"FAILED", "CANCELED", "UNKNOWN"}:
-                raise BailianAIError(f"百炼语音识别任务失败：{status}")
+                output = task.get("output", {})
+                detail = str(output.get("message") or output.get("code") or status)
+                if detail == "ASR_RESPONSE_HAVE_NO_WORDS":
+                    detail = "录音中未识别到有效语音，请确认麦克风输入后重新录制"
+                raise BailianAIError(f"百炼语音识别任务失败：{detail}")
             time.sleep(self.poll_interval_seconds)
         else:
             raise BailianAIError("百炼语音识别任务等待超时。")

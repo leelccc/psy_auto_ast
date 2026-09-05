@@ -174,3 +174,98 @@ export function createExpoAudioDriver(
     },
   };
 }
+
+export function createWebAudioDriver(onMeter: (level: number) => void): AudioRecordingDriver {
+  let stream: MediaStream | null = null;
+  let mediaRecorder: MediaRecorder | null = null;
+  let chunks: Blob[] = [];
+  let startedAt = 0;
+  let accumulatedMillis = 0;
+  let audioContext: AudioContext | null = null;
+  let animationFrame = 0;
+
+  const stopMeter = () => {
+    if (animationFrame) cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+    void audioContext?.close();
+    audioContext = null;
+    onMeter(0);
+  };
+
+  const startMeter = (activeStream: MediaStream) => {
+    const AudioContextConstructor = window.AudioContext
+      ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return;
+    audioContext = new AudioContextConstructor();
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 1024;
+    audioContext.createMediaStreamSource(activeStream).connect(analyser);
+    const samples = new Uint8Array(analyser.fftSize);
+    let lastUpdate = 0;
+    const tick = (now: number) => {
+      analyser.getByteTimeDomainData(samples);
+      let sum = 0;
+      for (const sample of samples) {
+        const normalized = (sample - 128) / 128;
+        sum += normalized * normalized;
+      }
+      if (now - lastUpdate >= 80) {
+        onMeter(Math.min(100, Math.round(Math.sqrt(sum / samples.length) * 320)));
+        lastUpdate = now;
+      }
+      animationFrame = requestAnimationFrame(tick);
+    };
+    animationFrame = requestAnimationFrame(tick);
+  };
+
+  return {
+    async requestPermission() {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      return stream.getAudioTracks().some((track) => track.readyState === "live");
+    },
+    async prepare() {
+      if (!stream) throw new Error("浏览器麦克风尚未就绪。");
+      chunks = [];
+      accumulatedMillis = 0;
+      const preferredType = "audio/webm;codecs=opus";
+      mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported(preferredType) ? preferredType : "audio/webm",
+        audioBitsPerSecond: 128000,
+      });
+      mediaRecorder.addEventListener("dataavailable", (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      });
+      startMeter(stream);
+    },
+    start() {
+      if (!mediaRecorder) throw new Error("浏览器录音器尚未就绪。");
+      if (mediaRecorder.state === "paused") mediaRecorder.resume();
+      else mediaRecorder.start(250);
+      startedAt = Date.now();
+    },
+    pause() {
+      if (mediaRecorder?.state !== "recording") return;
+      accumulatedMillis += Date.now() - startedAt;
+      mediaRecorder.pause();
+    },
+    async stop() {
+      if (!mediaRecorder || !stream) throw new Error("当前没有可保存的浏览器录音。");
+      if (mediaRecorder.state === "recording") accumulatedMillis += Date.now() - startedAt;
+      const stopped = new Promise<void>((resolve) => mediaRecorder?.addEventListener("stop", () => resolve(), { once: true }));
+      mediaRecorder.stop();
+      await stopped;
+      stopMeter();
+      stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      mediaRecorder = null;
+      const blob = new Blob(chunks, { type: "audio/webm" });
+      chunks = [];
+      if (blob.size < 2048) throw new Error("未录到有效声音，请确认浏览器麦克风权限和输入设备后重试。");
+      return {
+        uri: URL.createObjectURL(blob),
+        durationMillis: accumulatedMillis,
+        mimeType: "audio/webm",
+      };
+    },
+  };
+}

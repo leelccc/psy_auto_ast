@@ -105,6 +105,7 @@ import { downloadAndShareFile, uploadLocalFile } from "./src/native/fileTransfer
 import {
   createAudioRecordingController,
   createExpoAudioDriver,
+  createWebAudioDriver,
   recordingMimeType,
   toRecordedLocalFile,
   type RecordedLocalAudio,
@@ -2813,11 +2814,13 @@ function RecordingScreen({
 }) {
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const recorderState = useAudioRecorderState(recorder, 100);
+  const [webMeterLevel, setWebMeterLevel] = useState(0);
   const controller = useMemo(
-    () => createAudioRecordingController(createExpoAudioDriver(
-      recorder,
-      recordingMimeType(Platform.OS),
-    )),
+    () => createAudioRecordingController(
+      Platform.OS === "web"
+        ? createWebAudioDriver(setWebMeterLevel)
+        : createExpoAudioDriver(recorder, recordingMimeType(Platform.OS)),
+    ),
     [recorder],
   );
   const [recordingState, setRecordingState] = useState<"starting" | "recording" | "paused" | "saving" | "failed">("starting");
@@ -2829,6 +2832,11 @@ function RecordingScreen({
   useEffect(() => {
     onNoticeRef.current = onNotice;
   }, [onNotice]);
+
+  const meterPct =
+    Platform.OS === "web"
+      ? Math.max(2, webMeterLevel)
+      : Math.max(3, Math.min(100, Math.round(((recorderState?.metering ?? -160) + 50) / 50 * 100)));
 
   const beginRecording = useCallback((isActive: () => boolean = () => true) => {
     setRecordingState("starting");
@@ -2887,13 +2895,7 @@ function RecordingScreen({
                 style={[
                   styles.recorderMeterFill,
                   {
-                    width: `${Math.max(
-                      3,
-                      Math.min(
-                        100,
-                        Math.round(((recorderState?.metering ?? -160) + 50) / 50 * 100),
-                      ),
-                    )}%`,
+                    width: `${meterPct}%`,
                   },
                 ]}
               />
@@ -2939,7 +2941,8 @@ function RecordingScreen({
                 await onSave(await controller.stop());
                 onNotice("录音已保存", "已写入云端归档队列，可在录音记录中查看并处理；若归档失败会在此提示。");
               } catch (error) {
-                setRecordingState("paused");
+                setRecordingState("failed");
+                setRecordingError(error instanceof Error ? error.message : "录音保存失败，请重新录制。");
                 onNotice(
                   "录音保存失败",
                   error instanceof Error ? error.message : "请稍后重试。",
