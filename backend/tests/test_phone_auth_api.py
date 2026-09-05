@@ -4,8 +4,13 @@
 """
 import secrets
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
+from app.core.config import Settings
+from app.db.session import SessionLocal
 from app.main import create_app
+from app.models import PhoneVerificationCode
+from app.services.phone_verification import issue_verification_code
 
 
 def client() -> TestClient:
@@ -220,3 +225,18 @@ def test_phone_code_cooldown_and_wrong_code() -> None:
     )
     assert reg.status_code == 400
     assert reg.json()["error"]["code"] == "verification_code_invalid"
+
+
+def test_production_without_sms_credentials_does_not_create_a_cooldown_code() -> None:
+    phone = fresh_phone()
+    settings = Settings(environment="production", jwt_secret_key="test-secret-that-is-long-enough")
+    with SessionLocal() as database:
+        try:
+            issue_verification_code(database, phone, "login", settings)
+            raise AssertionError("production without SMS credentials must fail")
+        except Exception as error:
+            assert getattr(error, "detail", {}).get("code") == "sms_not_configured"
+        count = database.scalar(select(func.count()).select_from(PhoneVerificationCode).where(
+            PhoneVerificationCode.phone == phone,
+        ))
+        assert count == 0

@@ -30,6 +30,10 @@ def issue_verification_code(
     settings = settings or get_settings()
     if purpose not in VALID_PURPOSES:
         raise ApiError(422, "verification_purpose_invalid", "不支持的验证码用途。")
+    sms_configured = is_sms_configured(settings)
+    if settings.environment == "production" and not sms_configured:
+        # 配置未就绪时不生成、不落库验证码，避免用户再次点击命中冷却期。
+        raise ApiError(503, "sms_not_configured", "短信服务暂不可用，待短信资质开通后启用。")
 
     now = utc_now()
     cooldown_before = now - timedelta(seconds=settings.verification_code_retry_seconds)
@@ -71,7 +75,7 @@ def issue_verification_code(
     ))
     database.commit()
 
-    if is_sms_configured(settings):
+    if sms_configured:
         send_verification_sms(phone, code, purpose, settings)
         return {
             "sent": True,
@@ -80,8 +84,6 @@ def issue_verification_code(
         }
 
     # 未配置短信：生产环境不允许明文回传，开发环境回传 dev_code 便于联调
-    if settings.environment == "production":
-        raise ApiError(503, "sms_not_configured", "短信服务未配置，请联系管理员。")
     return {
         "sent": False,
         "dev_code": code,

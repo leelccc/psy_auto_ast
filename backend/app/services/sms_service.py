@@ -39,7 +39,7 @@ def send_verification_sms(
 ) -> None:
     settings = settings or get_settings()
     if not is_sms_configured(settings):
-        raise ApiError(503, "sms_not_configured", "短信服务未配置，请联系管理员。")
+        raise ApiError(503, "sms_not_configured", "短信服务暂不可用，待短信资质开通后启用。")
 
     template_code = _template_for(purpose, settings)
     purpose_text = {
