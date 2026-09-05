@@ -13,6 +13,7 @@ import {
 
 test("recording destination follows archive and processing state", () => {
   assert.equal(getRecordingDestination({ status: "可查看", archive: "待归档" }), "archive");
+  assert.equal(getRecordingDestination({ status: "待处理", archive: "待归档" }), "processing");
   assert.equal(getRecordingDestination({ status: "生成中", archive: "已归档" }), "processing");
   assert.equal(getRecordingDestination({ status: "待处理", archive: "已归档" }), "processing");
   assert.equal(getRecordingDestination({ status: "处理失败", archive: "已归档" }), "processing");

@@ -8,8 +8,8 @@ export function getRecordingDestination({
   status: string;
   archive: string;
 }): RecordingDestination {
-  if (archive === "待归档") return "archive";
   if (["生成中", "上传中", "待处理", "处理失败"].includes(status)) return "processing";
+  if (archive === "待归档") return "archive";
   return "detail";
 }
 

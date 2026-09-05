@@ -180,7 +180,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0905-1";
+const BUILD_TAG = "0905-2";
 
 const INPUT_LIMITS = {
   email: 254,
@@ -1633,8 +1633,8 @@ export default function App() {
                   await refreshRecording(recording.id);
                   setQuickView("recordingProcessing");
                 } else {
-                  setArchiveReturn("recording");
-                  setQuickView("archive");
+                  await refreshRecording(recording.id);
+                  setQuickView("recordingProcessing");
                 }
               } catch (error) {
                 showNotice("录音保存失败", errorMessage(error));
@@ -2110,33 +2110,6 @@ export default function App() {
                     activeMaterialCategory === "recording" ? "recording" : "attachment",
                   );
                   if (!uploaded?.stored.fileId) return;
-                  if (activeMaterialCategory === "recording") {
-                    const recording = await recordingService.create(
-                      uploaded.picked.name.replace(/\.[^.]+$/, ""),
-                      "uploaded_audio",
-                    );
-                    await recordingService.bindAudio(
-                      recording.id,
-                      uploaded.stored.fileId,
-                      await getLocalAudioDurationSeconds(uploaded.picked).catch(() => null),
-                    );
-                    await recordingService.archive(recording.id, {
-                      profileType: archiveKindForLabel(activeProfile.kindLabel),
-                      profileId: activeProfileId,
-                      sessionId: activeSessionId,
-                    });
-                    await recordingService.process(recording.id, "archived_context");
-                    const response = await recordingService.list({ pageSize: 100 });
-                    const recordingRows = response.items.map(mapRecordingItem);
-                    setRecordingItems(recordingRows);
-                    await loadProfileData(activeProfileId, recordingRows);
-                    showNotice("录音已上传并处理", "原始录音已归档，转写和纪要已由后端生成。");
-                    const createdRecording = recordingRows.find((item) => item.id === recording.id);
-                    if (createdRecording) {
-                      await openRecording(createdRecording);
-                    }
-                    return;
-                  }
                   const material = await attachmentService.create({
                     sessionId: activeSessionId,
                     category: activeMaterialCategory,
@@ -2156,12 +2129,11 @@ export default function App() {
                     profileId: activeProfileId,
                     sessionId: activeSessionId,
                   });
-                  void recordingService.process(recordingId, "archived_context").catch(() => undefined);
                   const response = await recordingService.list({ pageSize: 100 });
                   const recordingRows = response.items.map(mapRecordingItem);
                   setRecordingItems(recordingRows);
                   await loadProfileData(activeProfileId, recordingRows);
-                  showNotice("录音已归入本次记录", "转写和纪要正在后台生成，可在录音记录中查看进度。");
+                  showNotice("录音已归入本次记录", "请确认片段和顺序，再手动开始全部转写。");
                   const archivedRecording = recordingRows.find((item) => item.id === recordingId);
                   if (archivedRecording) {
                     await openRecording(archivedRecording);
@@ -2171,10 +2143,7 @@ export default function App() {
                   throw error;
                 }
               }}
-              onStartRecording={() => {
-                setRecordingTargetSessionId(activeSessionId);
-                setQuickView("recording");
-              }}
+              onOpenRecordingRecords={() => setQuickView("recordingRecords")}
               onAuthorize={() => openPrivacy("sessionMaterials")}
             />
           ) : null}
@@ -5220,7 +5189,7 @@ function SessionMaterialsScreen({
   onAdd,
   onAuthorize,
   onSelectUnarchived,
-  onStartRecording,
+  onOpenRecordingRecords,
 }: {
   category: MaterialCategory;
   materials: SessionMaterial[];
@@ -5229,7 +5198,7 @@ function SessionMaterialsScreen({
   onAdd: (fileType: string) => Promise<void>;
   onAuthorize: () => void;
   onSelectUnarchived: (recordingId: string) => Promise<void>;
-  onStartRecording: () => void;
+  onOpenRecordingRecords: () => void;
 }) {
   const [showUpload, setShowUpload] = useState(false);
   const [fileType, setFileType] = useState(category === "recording" ? "音频" : category === "homework" || category === "other" ? "PDF" : "图片");
@@ -5280,7 +5249,8 @@ function SessionMaterialsScreen({
             <View style={styles.emptySearchCard}>
               <Mic size={20} color={colors.subtle} />
               <Text style={styles.emptySearchTitle}>没有未归档录音</Text>
-              <Text style={styles.emptySearchCopy}>可以直接开始录音，或从本地上传音频文件。</Text>
+              <Text style={styles.emptySearchCopy}>请先前往录音记录，创建现场录音或上传已有音频。</Text>
+              <GhostButton icon={Mic} label="前往录音记录" onPress={onOpenRecordingRecords} />
             </View>
           ) : null}
           {unarchived.map((item) => (
@@ -5315,12 +5285,16 @@ function SessionMaterialsScreen({
         </View>
       ) : null}
 
-      <SectionHeader title={`当前资料 · ${materials.length} 项`} action={showUpload ? "收起" : isRecording ? "上传本地音频" : copy.uploadLabel} onAction={() => setShowUpload((current) => !current)} />
-      {showUpload ? (
+      <SectionHeader
+        title={`当前资料 · ${materials.length} 项`}
+        action={isRecording ? undefined : showUpload ? "收起" : copy.uploadLabel}
+        onAction={isRecording ? undefined : () => setShowUpload((current) => !current)}
+      />
+      {showUpload && !isRecording ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formHelp}>点击后将打开系统文件选择器，文件名和类型以真实文件为准。</Text>
           <View style={styles.segmented}>
-            {(category === "recording" ? ["音频"] : ["PDF", "图片"]).map((type) => (
+            {["PDF", "图片"].map((type) => (
               <TouchableOpacity key={type} style={[styles.segmentButton, fileType === type && styles.segmentActive]} onPress={() => setFileType(type)}>
                 <Text style={[styles.segmentText, fileType === type && styles.segmentTextActive]}>{type}</Text>
               </TouchableOpacity>
@@ -5367,7 +5341,6 @@ function SessionMaterialsScreen({
       )}
 
       {category !== "recording" && materials.length > 0 ? <GhostButton icon={ShieldCheck} label="选择资料长期保存" onPress={onAuthorize} /> : null}
-      {category === "recording" ? <GhostButton icon={Mic} label="开始新录音" onPress={onStartRecording} /> : null}
     </View>
   );
 }
