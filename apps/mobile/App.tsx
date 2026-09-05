@@ -180,7 +180,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0905-2";
+const BUILD_TAG = "0905-3";
 
 const INPUT_LIMITS = {
   email: 254,
@@ -3328,6 +3328,8 @@ function RecordingProcessingScreen({
   const segments = recording.segments ?? [];
   const totalSize = segments.reduce((sum, segment) => sum + segment.sizeBytes, 0);
   const totalDuration = segments.reduce((sum, segment) => sum + segment.durationSeconds, 0);
+  const totalSizeMb = totalSize / 1024 / 1024;
+  const canStartTranscription = segments.length >= 1 && segments.length <= 5 && totalSizeMb <= 300;
   if (pending) {
     const moveSegment = async (index: number, direction: -1 | 1) => {
       const target = index + direction;
@@ -3348,13 +3350,13 @@ function RecordingProcessingScreen({
         <View style={styles.poster}>
           <Mic size={25} color={colors.clayDark} />
           <Text style={styles.posterTitle}>整理录音片段</Text>
-          <Text style={styles.posterCopy}>添加完成后调整顺序，再统一开始转写。开始后录音将永久锁定。</Text>
+          <Text style={styles.posterCopy}>添加 1–5 个片段即可开始转写，无需集齐 5 个。开始后录音将永久锁定。</Text>
         </View>
         <View style={styles.noticeCard}>
           <Clock3 size={21} color={colors.clayDark} />
           <View style={styles.listBody}>
-            <Text style={styles.listTitle}>{segments.length}/5 个片段</Text>
-            <Text style={styles.listMeta}>{formatDuration(totalDuration)} · {(totalSize / 1024 / 1024).toFixed(1)}MB/300MB</Text>
+            <Text style={styles.listTitle}>已添加 {segments.length} 个片段 · 最多 5 个</Text>
+            <Text style={styles.listMeta}>{formatDuration(totalDuration)} · 总大小 {totalSizeMb.toFixed(1)}MB / 300MB</Text>
           </View>
         </View>
         <View style={styles.cardStack}>
@@ -3408,8 +3410,8 @@ function RecordingProcessingScreen({
         ) : null}
         <PrimaryButton
           icon={Sparkles}
-          label="完成并转写"
-          disabled={segments.length === 0 || segmentBusy}
+          label={segments.length > 0 ? `开始转写（${segments.length} 个片段）` : "添加片段后即可开始转写"}
+          disabled={!canStartTranscription || segmentBusy}
           onPress={() => setShowLockConfirm(true)}
           wide
         />
