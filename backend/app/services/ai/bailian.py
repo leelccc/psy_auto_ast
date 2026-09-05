@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from app.services.ai.base import RecordingAIResult, RecordingSummaryResult
+from app.services.ai.base import RecordingAIResult, RecordingSummaryResult, RecordingTranscriptionResult
 
 
 MAX_BASE64_AUDIO_BYTES = 10 * 1024 * 1024
@@ -92,6 +92,36 @@ class BailianRecordingAIProvider:
             summary=summary_payload["main_summary"],
             chapters=summary_payload["chapters"],
         )
+
+    def transcribe_recording(
+        self,
+        *,
+        duration_seconds: int,
+        audio_bytes: bytes | None = None,
+        audio_url: str | None = None,
+        mime_type: str = "audio/mp4",
+    ) -> RecordingTranscriptionResult:
+        if bool(audio_bytes) == bool(audio_url):
+            raise ValueError("必须且只能提供音频字节或音频 URL。")
+        if audio_bytes is not None and duration_seconds > MAX_SYNC_AUDIO_SECONDS:
+            raise ValueError("当前同步语音识别单次最多支持 5 分钟录音。")
+        if audio_bytes is not None and len(audio_bytes) > MAX_BASE64_AUDIO_BYTES:
+            raise ValueError("当前 Base64 语音识别单文件不能超过 10MB。")
+        if duration_seconds > MAX_AUDIO_SECONDS:
+            raise ValueError("录音时长超过 2 小时，当前暂不支持转写。")
+        if audio_url:
+            _, speakers, segments = self._transcribe_url(audio_url, duration_seconds)
+        else:
+            audio = f"data:{mime_type};base64,{base64.b64encode(audio_bytes or b'').decode('ascii')}"
+            transcript = self._transcribe_base64(audio)
+            speakers = {"speaker_1": "发言人"}
+            segments = [{
+                "start_ms": 0,
+                "end_ms": max(duration_seconds, 1) * 1000,
+                "speaker_key": "speaker_1",
+                "text": transcript,
+            }]
+        return RecordingTranscriptionResult(speakers=speakers, segments=segments)
 
     def summarize_transcript(
         self,

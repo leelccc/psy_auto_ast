@@ -1,10 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Annotated, Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,7 @@ from app.models import (
     AIJob,
     Profile,
     Recording,
+    RecordingSegment,
     RecordingDurationEntry,
     RecordingSummary,
     RecordingTranscript,
@@ -48,6 +50,15 @@ class CreateRecordingRequest(BaseModel):
 class BindAudioRequest(BaseModel):
     file_id: str
     duration_seconds: int | None = Field(default=None, gt=0, le=24 * 60 * 60)
+
+
+class AddRecordingSegmentRequest(BaseModel):
+    file_id: str
+    duration_seconds: int = Field(gt=0, le=2 * 60 * 60)
+
+
+class ReorderRecordingSegmentsRequest(BaseModel):
+    segment_ids: list[str] = Field(min_length=1, max_length=5)
 
 
 class ProcessRecordingRequest(BaseModel):
@@ -153,6 +164,16 @@ def serialize_recording(database: Session, recording: Recording) -> dict[str, ob
         )
         if session:
             profile = database.scalar(select(Profile).where(Profile.id == session.profile_id))
+    recording_segments = database.scalars(
+        select(RecordingSegment)
+        .where(RecordingSegment.recording_id == recording.id)
+        .order_by(RecordingSegment.segment_index)
+    ).all()
+    files_by_id = {
+        item.id: item for item in database.scalars(
+            select(StoredFile).where(StoredFile.id.in_([segment.file_id for segment in recording_segments]))
+        ).all()
+    } if recording_segments else {}
     return {
         "id": recording.id,
         "title": recording.title,
@@ -162,6 +183,21 @@ def serialize_recording(database: Session, recording: Recording) -> dict[str, ob
         "ai_status": recording.ai_status,
         "processing_error": recording.processing_error,
         "audio_file_id": recording.audio_file_id,
+        "segments": [
+            {
+                "id": segment.id,
+                "file_id": segment.file_id,
+                "segment_index": segment.segment_index,
+                "filename": files_by_id[segment.file_id].filename if segment.file_id in files_by_id else "录音片段",
+                "duration_seconds": segment.duration_seconds,
+                "size_bytes": segment.size_bytes,
+                "status": segment.status,
+                "processing_error": segment.processing_error,
+                "expires_at": files_by_id[segment.file_id].expires_at.isoformat() if segment.file_id in files_by_id else None,
+                "destroyed_at": files_by_id[segment.file_id].destroyed_at.isoformat() if segment.file_id in files_by_id and files_by_id[segment.file_id].destroyed_at else None,
+            }
+            for segment in recording_segments
+        ],
         "audio_expires_at": (
             recording.audio_expires_at.isoformat() if recording.audio_expires_at else None
         ),
@@ -193,6 +229,22 @@ def process_recording(
     provider: RecordingAIProvider,
     audio_input_mode: str,
 ) -> AIJob:
+    recording_segments = database.scalars(
+        select(RecordingSegment)
+        .where(RecordingSegment.recording_id == recording.id)
+        .order_by(RecordingSegment.segment_index)
+    ).all()
+    if recording_segments:
+        return process_segmented_recording(
+            database,
+            recording,
+            recording_segments=recording_segments,
+            user_id=user_id,
+            allow_overwrite=allow_overwrite,
+            storage=storage,
+            provider=provider,
+            audio_input_mode=audio_input_mode,
+        )
     if (
         recording.audio_file_id is None
         or recording.audio_destroyed_at is not None
@@ -356,6 +408,236 @@ def process_recording(
         job,
         {"transcript_id": transcript.id, "summary_id": summary.id},
     )
+    database.commit()
+    return job
+
+
+def process_segmented_recording(
+    database: Session,
+    recording: Recording,
+    *,
+    recording_segments: list[RecordingSegment],
+    user_id: str,
+    allow_overwrite: bool,
+    storage: Storage,
+    provider: RecordingAIProvider,
+    audio_input_mode: str,
+) -> AIJob:
+    if allow_overwrite:
+        if recording.ai_status != "failed":
+            raise ApiError(409, "recording_retry_not_allowed", "只有处理失败的录音可以重新转写。")
+    elif recording.ai_status != "pending":
+        raise ApiError(409, "recording_segments_locked", "转写已开始，片段顺序和内容已锁定。")
+    if not 1 <= len(recording_segments) <= 5:
+        raise ApiError(422, "recording_segment_count_invalid", "请添加 1 至 5 个录音片段。")
+    if sum(segment.size_bytes for segment in recording_segments) > 300 * 1024 * 1024:
+        raise ApiError(422, "recording_total_size_exceeded", "录音片段总大小不能超过 300MB。")
+
+    files = {
+        item.id: item
+        for item in database.scalars(
+            select(StoredFile).where(
+                StoredFile.user_id == user_id,
+                StoredFile.id.in_([segment.file_id for segment in recording_segments]),
+            )
+        ).all()
+    }
+    now = utc_now()
+    for segment in recording_segments:
+        stored_file = files.get(segment.file_id)
+        if (
+            stored_file is None
+            or stored_file.destroyed_at is not None
+            or stored_file.expires_at <= now
+            or not stored_file.storage_key
+        ):
+            raise ApiError(400, "recording_audio_destroyed", "有录音片段已销毁或过期，无法生成。")
+
+    existing = database.scalar(
+        select(AIJob).where(
+            AIJob.user_id == user_id,
+            AIJob.target_type == "recording",
+            AIJob.target_id == recording.id,
+            AIJob.job_type == "recording_processing",
+            AIJob.status == "running",
+        ).order_by(AIJob.created_at.desc())
+    )
+    if existing is not None:
+        raise ApiError(409, "job_already_running", "该录音已有处理任务。")
+
+    job = create_job(
+        database,
+        user_id=user_id,
+        job_type="recording_processing",
+        target_type="recording",
+        target_id=recording.id,
+    )
+    recording.ai_status = "processing"
+    recording.processing_error = None
+    for segment in recording_segments:
+        segment.status = "uploaded"
+        segment.transcript_json = None
+        segment.processing_error = None
+        segment.updated_at = now
+    database.commit()
+
+    merged_speakers: dict[str, str] = {}
+    merged_segments: list[dict[str, object]] = []
+    offset_ms = 0
+    try:
+        inputs: list[tuple[RecordingSegment, StoredFile, bytes | None, str | None]] = []
+        for segment in recording_segments:
+            stored_file = files[segment.file_id]
+            segment.status = "transcribing"
+            segment.updated_at = utc_now()
+            audio_bytes = None
+            audio_url = None
+            if audio_input_mode == "minio_url":
+                audio_url = storage.create_download_url(stored_file.storage_key or "")
+            else:
+                audio_bytes = storage.read_object(stored_file.storage_key or "")
+            inputs.append((segment, stored_file, audio_bytes, audio_url))
+        database.commit()
+
+        def transcribe_one(item: tuple[RecordingSegment, StoredFile, bytes | None, str | None]):
+            segment, stored_file, audio_bytes, audio_url = item
+            transcriber = getattr(provider, "transcribe_recording", None)
+            if callable(transcriber):
+                return transcriber(
+                    duration_seconds=segment.duration_seconds,
+                    audio_bytes=audio_bytes,
+                    audio_url=audio_url,
+                    mime_type=stored_file.mime_type,
+                )
+            return provider.process_recording(
+                title=f"{recording.title} - 片段 {segment.segment_index}",
+                duration_seconds=segment.duration_seconds,
+                audio_bytes=audio_bytes,
+                audio_url=audio_url,
+                mime_type=stored_file.mime_type,
+            )
+
+        with ThreadPoolExecutor(max_workers=len(inputs)) as executor:
+            results = list(executor.map(transcribe_one, inputs))
+
+        for processed_index, (segment, result) in enumerate(zip(recording_segments, results), 1):
+            local_segments: list[dict[str, object]] = []
+            for item in result.segments:
+                original_key = str(item["speaker_key"])
+                merged_key = f"segment_{segment.segment_index}_{original_key}"
+                merged_speakers[merged_key] = result.speakers.get(original_key, "发言人")
+                merged_item = {
+                    **item,
+                    "speaker_key": merged_key,
+                    "start_ms": int(item.get("start_ms", 0)) + offset_ms,
+                    "end_ms": int(item.get("end_ms", 0)) + offset_ms,
+                }
+                local_segments.append(merged_item)
+                merged_segments.append(merged_item)
+            segment.transcript_json = {
+                "speakers": {
+                    f"segment_{segment.segment_index}_{key}": value
+                    for key, value in result.speakers.items()
+                },
+                "segments": local_segments,
+            }
+            segment.status = "transcribed"
+            segment.updated_at = utc_now()
+            offset_ms += segment.duration_seconds * 1000
+            job.progress = round(processed_index / len(recording_segments) * 90)
+            database.commit()
+
+        transcript_text = "\n".join(
+            f"{merged_speakers[str(item['speaker_key'])]}：{str(item.get('text', '')).strip()}"
+            for item in merged_segments
+            if str(item.get("text", "")).strip()
+        )
+        summary_result = provider.summarize_transcript(
+            title=recording.title,
+            duration_seconds=recording.duration_seconds or 60,
+            transcript=transcript_text,
+        )
+    except (ValueError, BailianAIError) as error:
+        failing = next((item for item in recording_segments if item.status == "transcribing"), None)
+        if failing:
+            failing.status = "failed"
+            failing.processing_error = str(error)
+            failing.updated_at = utc_now()
+        recording.ai_status = "failed"
+        recording.processing_error = str(error)
+        fail_job(
+            database,
+            job,
+            code="recording_ai_input_invalid" if isinstance(error, ValueError) else "recording_ai_service_failed",
+            message=str(error),
+            retryable=not isinstance(error, ValueError),
+        )
+        database.commit()
+        status_code = 422 if isinstance(error, ValueError) else 502
+        code = "recording_ai_input_invalid" if isinstance(error, ValueError) else "recording_ai_service_failed"
+        raise ApiError(status_code, code, str(error)) from error
+
+    completed_at = utc_now()
+    expires_at = completed_at + timedelta(days=14)
+    transcript = database.scalar(
+        select(RecordingTranscript).where(RecordingTranscript.recording_id == recording.id)
+    )
+    final_segments = [{
+        "id": str(uuid4()),
+        **item,
+        "speaker_label": merged_speakers[str(item["speaker_key"])],
+    } for item in merged_segments]
+    if transcript is None:
+        transcript = RecordingTranscript(
+            id=str(uuid4()), user_id=user_id, recording_id=recording.id,
+            speakers_json=merged_speakers, segments_json=final_segments, manual_edited=False,
+            generated_at=completed_at, expires_at=expires_at, destroyed_at=None,
+            created_at=completed_at, updated_at=completed_at,
+        )
+        database.add(transcript)
+    else:
+        transcript.speakers_json = merged_speakers
+        transcript.segments_json = final_segments
+        transcript.manual_edited = False
+        transcript.generated_at = completed_at
+        transcript.expires_at = expires_at
+        transcript.destroyed_at = None
+        transcript.updated_at = completed_at
+    summary = database.scalar(
+        select(RecordingSummary).where(RecordingSummary.recording_id == recording.id)
+    )
+    if summary is None:
+        summary = RecordingSummary(
+            id=str(uuid4()), user_id=user_id, recording_id=recording.id,
+            main_summary=summary_result.summary, chapter_overview=summary_result.chapters,
+            manual_edited=False, generated_at=completed_at, expires_at=expires_at,
+            destroyed_at=None, created_at=completed_at, updated_at=completed_at,
+        )
+        database.add(summary)
+    else:
+        summary.main_summary = summary_result.summary
+        summary.chapter_overview = summary_result.chapters
+        summary.manual_edited = False
+        summary.generated_at = completed_at
+        summary.expires_at = expires_at
+        summary.destroyed_at = None
+        summary.updated_at = completed_at
+    database.flush()
+    register_sensitive_resource(
+        database, user_id=user_id, resource_type="transcript", resource_id=transcript.id,
+        display_name=f"{recording.title} 转写", expires_at=expires_at,
+        can_long_term_preserve=True, owner_type="recording", owner_id=recording.id,
+    )
+    register_sensitive_resource(
+        database, user_id=user_id, resource_type="recording_summary", resource_id=summary.id,
+        display_name=f"{recording.title} 纪要", expires_at=expires_at,
+        can_long_term_preserve=True, owner_type="recording", owner_id=recording.id,
+    )
+    recording.ai_status = "completed"
+    recording.processing_error = None
+    recording.updated_at = completed_at
+    job.progress = 100
+    complete_job(database, job, {"transcript_id": transcript.id, "summary_id": summary.id})
     database.commit()
     return job
 
@@ -555,7 +837,15 @@ def create_recordings_router(
             "archive_status": recording.archive_status,
             "ai_status": recording.ai_status,
             "processing_error": recording.processing_error,
-            "audio_ready": bool(recording.audio_file_id) and recording.audio_destroyed_at is None,
+            "audio_ready": (
+                (bool(recording.audio_file_id) and recording.audio_destroyed_at is None)
+                or any(
+                    segment.status != "destroyed"
+                    for segment in database.scalars(
+                        select(RecordingSegment).where(RecordingSegment.recording_id == recording.id)
+                    ).all()
+                )
+            ),
             "transcript_ready": transcript is not None,
             "summary_ready": summary is not None,
             "updated_at": recording.updated_at.isoformat(),
@@ -632,6 +922,139 @@ def create_recordings_router(
             "audio_expires_at": expires_at.isoformat(),
             "can_long_term_preserve_audio": False,
         }
+
+    @router.post("/recordings/{recording_id}/segments", status_code=201)
+    def add_recording_segment(
+        recording_id: str,
+        payload: AddRecordingSegmentRequest,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[Session, Depends(get_db)],
+    ) -> dict[str, object]:
+        recording = get_recording(database, recording_id, user_id)
+        if recording.ai_status != "pending":
+            raise ApiError(409, "recording_segments_locked", "转写已开始，片段顺序和内容已锁定。")
+        stored_file = get_owned_file(database, payload.file_id, user_id)
+        if stored_file.upload_status != "uploaded" or stored_file.destroyed_at is not None:
+            raise ApiError(409, "file_not_uploaded", "音频文件尚未上传完成。")
+        if stored_file.purpose != "recording" or not stored_file.mime_type.startswith("audio/"):
+            raise ApiError(422, "recording_file_invalid", "只能添加已上传的音频文件。")
+        if stored_file.size_bytes > 200 * 1024 * 1024:
+            raise ApiError(422, "recording_file_too_large", "单个录音片段不能超过 200MB。")
+        segments = database.scalars(
+            select(RecordingSegment)
+            .where(RecordingSegment.recording_id == recording.id)
+            .order_by(RecordingSegment.segment_index)
+        ).all()
+        if len(segments) >= 5:
+            raise ApiError(422, "recording_segment_limit_exceeded", "一次历程最多添加 5 个录音片段。")
+        if any(item.file_id == stored_file.id for item in segments):
+            raise ApiError(409, "recording_segment_file_duplicate", "该音频文件已经添加。")
+        if sum(item.size_bytes for item in segments) + stored_file.size_bytes > 300 * 1024 * 1024:
+            raise ApiError(422, "recording_total_size_exceeded", "录音片段总大小不能超过 300MB。")
+        now = utc_now()
+        expires_at = now + timedelta(days=14)
+        segment = RecordingSegment(
+            id=str(uuid4()), recording_id=recording.id, file_id=stored_file.id,
+            segment_index=len(segments) + 1, duration_seconds=payload.duration_seconds,
+            size_bytes=stored_file.size_bytes, status="uploaded", transcript_json=None,
+            processing_error=None, created_at=now, updated_at=now,
+        )
+        database.add(segment)
+        recording.duration_seconds = sum(item.duration_seconds for item in segments) + payload.duration_seconds
+        recording.uploaded_at = now
+        existing_files = database.scalars(
+            select(StoredFile).where(StoredFile.id.in_([part.file_id for part in segments]))
+        ).all() if segments else []
+        recording.audio_expires_at = min(
+            [item.expires_at for item in existing_files] + [expires_at]
+        )
+        recording.updated_at = now
+        stored_file.expires_at = expires_at
+        stored_file.can_long_term_preserve = False
+        register_sensitive_resource(
+            database,
+            user_id=user_id,
+            resource_type="audio",
+            resource_id=segment.id,
+            display_name=stored_file.filename,
+            expires_at=expires_at,
+            can_long_term_preserve=False,
+            owner_type="recording",
+            owner_id=recording.id,
+        )
+        upsert_duration_entry(database, recording)
+        database.commit()
+        return serialize_recording(database, recording)
+
+    @router.put("/recordings/{recording_id}/segments/reorder")
+    def reorder_recording_segments(
+        recording_id: str,
+        payload: ReorderRecordingSegmentsRequest,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[Session, Depends(get_db)],
+    ) -> dict[str, object]:
+        recording = get_recording(database, recording_id, user_id)
+        if recording.ai_status != "pending":
+            raise ApiError(409, "recording_segments_locked", "转写已开始，片段顺序和内容已锁定。")
+        segments = database.scalars(
+            select(RecordingSegment).where(RecordingSegment.recording_id == recording.id)
+        ).all()
+        by_id = {segment.id: segment for segment in segments}
+        if len(payload.segment_ids) != len(segments) or set(payload.segment_ids) != set(by_id):
+            raise ApiError(422, "recording_segment_order_invalid", "片段顺序必须包含当前全部片段且不能重复。")
+        for position, segment_id in enumerate(payload.segment_ids, 1):
+            by_id[segment_id].segment_index = -position
+        database.flush()
+        now = utc_now()
+        for position, segment_id in enumerate(payload.segment_ids, 1):
+            by_id[segment_id].segment_index = position
+            by_id[segment_id].updated_at = now
+        recording.updated_at = now
+        database.commit()
+        return serialize_recording(database, recording)
+
+    @router.delete("/recordings/{recording_id}/segments/{segment_id}")
+    def delete_recording_segment(
+        recording_id: str,
+        segment_id: str,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[Session, Depends(get_db)],
+    ) -> dict[str, object]:
+        recording = get_recording(database, recording_id, user_id)
+        if recording.ai_status != "pending":
+            raise ApiError(409, "recording_segments_locked", "转写已开始，片段顺序和内容已锁定。")
+        segment = database.scalar(select(RecordingSegment).where(
+            RecordingSegment.id == segment_id, RecordingSegment.recording_id == recording.id,
+        ))
+        if segment is None:
+            raise ApiError(404, "recording_segment_not_found", "录音片段不存在。")
+        stored_file = get_owned_file(database, segment.file_id, user_id)
+        if stored_file.destroyed_at is None:
+            destroy_file(database, storage, stored_file)
+        database.execute(delete(SensitiveResource).where(
+            SensitiveResource.resource_type == "audio",
+            SensitiveResource.resource_id == segment.id,
+        ))
+        database.delete(segment)
+        database.flush()
+        remaining = database.scalars(
+            select(RecordingSegment).where(RecordingSegment.recording_id == recording.id)
+            .order_by(RecordingSegment.segment_index)
+        ).all()
+        for position, item in enumerate(remaining, 1):
+            item.segment_index = position
+        recording.duration_seconds = sum(item.duration_seconds for item in remaining) or None
+        remaining_files = database.scalars(
+            select(StoredFile).where(StoredFile.id.in_([item.file_id for item in remaining]))
+        ).all() if remaining else []
+        recording.audio_expires_at = min(
+            (item.expires_at for item in remaining_files),
+            default=None,
+        )
+        recording.updated_at = utc_now()
+        upsert_duration_entry(database, recording)
+        database.commit()
+        return serialize_recording(database, recording)
 
     @router.get("/recording-duration-statistics")
     def recording_duration_statistics(
@@ -1016,6 +1439,8 @@ def create_recordings_router(
         x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, bool]:
         recording = get_recording(database, recording_id, user_id)
+        if recording.ai_status != "pending":
+            raise ApiError(409, "recording_audio_locked", "转写开始后录音不可单独删除，请删除整个历程。")
         require_recording_access(
             database,
             recording_id=recording_id,

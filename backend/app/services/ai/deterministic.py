@@ -1,8 +1,25 @@
-from app.services.ai.base import RecordingAIResult, RecordingSummaryResult
+from app.services.ai.base import RecordingAIResult, RecordingSummaryResult, RecordingTranscriptionResult
 from app.services.ai.report_prompts import ReportPrompt, get_report_prompt_spec
 
 
 class DeterministicAIProvider:
+    def transcribe_recording(
+        self,
+        *,
+        duration_seconds: int,
+        audio_bytes: bytes | None = None,
+        audio_url: str | None = None,
+        mime_type: str = "audio/mp4",
+    ) -> RecordingTranscriptionResult:
+        result = self.process_recording(
+            title="录音片段",
+            duration_seconds=duration_seconds,
+            audio_bytes=audio_bytes,
+            audio_url=audio_url,
+            mime_type=mime_type,
+        )
+        return RecordingTranscriptionResult(speakers=result.speakers, segments=result.segments)
+
     def process_recording(
         self,
         *,

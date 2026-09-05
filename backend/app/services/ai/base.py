@@ -16,7 +16,22 @@ class RecordingSummaryResult:
     chapters: list[dict[str, object]]
 
 
+@dataclass(frozen=True)
+class RecordingTranscriptionResult:
+    speakers: dict[str, str]
+    segments: list[dict[str, object]]
+
+
 class RecordingAIProvider(Protocol):
+    def transcribe_recording(
+        self,
+        *,
+        duration_seconds: int,
+        audio_bytes: bytes | None = None,
+        audio_url: str | None = None,
+        mime_type: str = "audio/mp4",
+    ) -> RecordingTranscriptionResult: ...
+
     def process_recording(
         self,
         *,

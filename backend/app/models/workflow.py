@@ -38,6 +38,28 @@ class Recording(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class RecordingSegment(Base):
+    __tablename__ = "recording_segments"
+    __table_args__ = (
+        UniqueConstraint("recording_id", "segment_index", name="recording_segments_position_unique"),
+        UniqueConstraint("file_id", name="recording_segments_file_unique"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    recording_id: Mapped[str] = mapped_column(
+        ForeignKey("recordings.id", ondelete="CASCADE"), index=True
+    )
+    file_id: Mapped[str] = mapped_column(ForeignKey("files.id"), index=True)
+    segment_index: Mapped[int] = mapped_column(Integer)
+    duration_seconds: Mapped[int] = mapped_column(Integer)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="uploaded")
+    transcript_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class RecordingDurationEntry(Base):
     __tablename__ = "recording_duration_entries"
     __table_args__ = (UniqueConstraint("recording_id", name="recording_duration_entries_recording_unique"),)

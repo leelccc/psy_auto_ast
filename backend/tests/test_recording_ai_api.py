@@ -53,6 +53,19 @@ class FailingRecordingProvider:
         raise BailianAIError("模型服务暂时不可用。")
 
 
+class ToggleRecordingProvider(CapturingRecordingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failing = True
+        self.attempts = 0
+
+    def process_recording(self, **kwargs: object) -> RecordingAIResult:
+        self.attempts += 1
+        if self.failing:
+            raise BailianAIError("模拟片段识别失败。")
+        return super().process_recording(**kwargs)
+
+
 def create_bound_recording(
     api: TestClient,
     storage: FakeStorage,
@@ -82,6 +95,36 @@ def create_bound_recording(
         json={"file_id": created["file_id"], "duration_seconds": 60},
     )
     return recording_id
+
+
+def add_segment(
+    api: TestClient,
+    storage: FakeStorage,
+    recording_id: str,
+    *,
+    filename: str,
+    duration_seconds: int,
+    audio: bytes,
+) -> dict[str, object]:
+    created = api.post(
+        "/api/v1/files",
+        headers=auth_headers(),
+        json={
+            "filename": filename,
+            "mime_type": "audio/mp4",
+            "size_bytes": len(audio),
+            "purpose": "recording",
+        },
+    ).json()
+    storage.objects[storage.last_upload_key] = audio
+    api.post(f"/api/v1/files/{created['file_id']}/complete", headers=auth_headers())
+    response = api.post(
+        f"/api/v1/recordings/{recording_id}/segments",
+        headers=auth_headers(),
+        json={"file_id": created["file_id"], "duration_seconds": duration_seconds},
+    )
+    assert response.status_code == 201
+    return response.json()
 
 
 def test_recording_processing_reads_minio_bytes_for_bailian_base64_mode() -> None:
@@ -404,3 +447,109 @@ def test_uploaded_audio_can_bind_before_duration_is_known() -> None:
     )
 
     assert response.status_code == 200
+
+
+def test_multiple_segments_can_reorder_then_transcribe_as_one_recording() -> None:
+    storage = FakeStorage()
+    provider = CapturingRecordingProvider()
+    api = TestClient(create_app(
+        storage=storage,
+        recording_ai_provider=provider,
+        recording_audio_input_mode="base64",
+    ))
+    recording_id = api.post(
+        "/api/v1/recordings",
+        headers=auth_headers(),
+        json={"title": "多片段咨询", "source_type": "uploaded_audio"},
+    ).json()["id"]
+    first = add_segment(
+        api, storage, recording_id, filename="first.m4a", duration_seconds=60, audio=b"first"
+    )
+    second = add_segment(
+        api, storage, recording_id, filename="second.m4a", duration_seconds=90, audio=b"second"
+    )
+    segment_ids = [item["id"] for item in second["segments"]]
+    reordered = api.put(
+        f"/api/v1/recordings/{recording_id}/segments/reorder",
+        headers=auth_headers(),
+        json={"segment_ids": list(reversed(segment_ids))},
+    )
+    assert reordered.status_code == 200
+    assert [item["filename"] for item in reordered.json()["segments"]] == ["second.m4a", "first.m4a"]
+
+    processed = api.post(
+        f"/api/v1/recordings/{recording_id}/processing",
+        headers=auth_headers(),
+        json={"mode": "generic"},
+    )
+    assert processed.status_code == 202
+    assert {call["audio_bytes"] for call in provider.calls} == {b"second", b"first"}
+    assert len(provider.summary_calls) == 1
+    transcript = api.get(
+        f"/api/v1/recordings/{recording_id}/transcript",
+        headers=auth_headers(),
+    ).json()
+    assert len(transcript["segments"]) == 2
+    assert transcript["segments"][0]["speaker_key"].startswith("segment_1_")
+    assert transcript["segments"][1]["start_ms"] == 90_000
+    locked = api.delete(
+        f"/api/v1/recordings/{recording_id}/segments/{segment_ids[0]}",
+        headers=auth_headers(),
+    )
+    assert locked.status_code == 409
+
+
+def test_segment_processing_requires_at_least_one_segment() -> None:
+    storage = FakeStorage()
+    api = TestClient(create_app(storage=storage))
+    recording_id = api.post(
+        "/api/v1/recordings",
+        headers=auth_headers(),
+        json={"title": "空录音", "source_type": "uploaded_audio"},
+    ).json()["id"]
+    response = api.post(
+        f"/api/v1/recordings/{recording_id}/processing",
+        headers=auth_headers(),
+        json={"mode": "generic"},
+    )
+    assert response.status_code == 400
+
+
+def test_failed_multi_segment_retry_retranscribes_every_segment() -> None:
+    storage = FakeStorage()
+    provider = ToggleRecordingProvider()
+    api = TestClient(create_app(
+        storage=storage,
+        recording_ai_provider=provider,
+        recording_audio_input_mode="base64",
+    ))
+    recording_id = api.post(
+        "/api/v1/recordings",
+        headers=auth_headers(),
+        json={"title": "失败重试", "source_type": "uploaded_audio"},
+    ).json()["id"]
+    add_segment(api, storage, recording_id, filename="one.m4a", duration_seconds=30, audio=b"one")
+    add_segment(api, storage, recording_id, filename="two.m4a", duration_seconds=30, audio=b"two")
+
+    failed = api.post(
+        f"/api/v1/recordings/{recording_id}/processing",
+        headers=auth_headers(),
+        json={"mode": "generic"},
+    )
+    assert failed.status_code == 502
+    failed_attempts = provider.attempts
+    assert failed_attempts >= 1
+
+    provider.failing = False
+    retried = api.post(
+        f"/api/v1/recordings/{recording_id}/processing/retry",
+        headers=auth_headers(),
+    )
+    assert retried.status_code == 202
+    assert provider.attempts == failed_attempts + 2
+    current = next(
+        item for item in api.get("/api/v1/recordings", headers=auth_headers()).json()["items"]
+        if item["id"] == recording_id
+    )
+    assert current["ai_status"] == "completed"
+    assert [item["status"] for item in current["segments"]] == ["transcribed", "transcribed"]

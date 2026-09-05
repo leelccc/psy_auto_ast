@@ -27,6 +27,7 @@ import {
   Eye,
   FileText,
   FolderOpen,
+  GripVertical,
   History,
   Home,
   LockKeyhole,
@@ -53,6 +54,7 @@ import {
   ActivityIndicator,
   Image,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -85,7 +87,7 @@ import { createAttachmentService, type ProfileAttachment } from "./src/api/attac
 import { createBackendFileService } from "./src/api/fileService";
 import { createProfileAccessService } from "./src/api/profileAccessService";
 import { createProfileService } from "./src/api/profileService";
-import { createRecordingService, type Recording, type RecordingDurationStatistics } from "./src/api/recordingService";
+import { createRecordingService, type Recording, type RecordingDurationStatistics, type RecordingSegment } from "./src/api/recordingService";
 import { createJobService, type AIJob } from "./src/api/jobService";
 import { createReportService, type Report, type ReportSource } from "./src/api/reportService";
 import {
@@ -178,7 +180,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0903-1";
+const BUILD_TAG = "0905-1";
 
 const INPUT_LIMITS = {
   email: 254,
@@ -285,6 +287,7 @@ type RecordingItem = {
   recordLabel: string | null;
   processingError?: string | null;
   audioFileId?: string | null;
+  segments?: RecordingSegment[];
 };
 type PreviewFile = {
   id: string;
@@ -505,6 +508,7 @@ function mapRecordingItem(recording: Recording): RecordingItem {
     recordLabel: recording.session ? `第 ${recording.session.sequenceNo} 次${recordNoun}` : null,
     processingError: recording.processingError,
     audioFileId: recording.audioFileId,
+    segments: recording.segments,
   };
 }
 
@@ -613,6 +617,8 @@ export default function App() {
   const [archiveRecordingId, setArchiveRecordingId] = useState<string | null>(null);
   const [archiveAudioFileId, setArchiveAudioFileId] = useState<string | null>(null);
   const [archiveReturn, setArchiveReturn] = useState<QuickView>("recording");
+  const [addingRecordingSegment, setAddingRecordingSegment] = useState(false);
+  const [recordingTargetSessionId, setRecordingTargetSessionId] = useState<string | null>(null);
   const [activeRecording, setActiveRecording] = useState<RecordingItem>(recordings[0]);
   const [recordingItems, setRecordingItems] = useState<RecordingItem[]>([]);
   const [recordingsLoading, setRecordingsLoading] = useState(false);
@@ -1249,7 +1255,7 @@ export default function App() {
         setQuickView(recordingDetailReturn);
         return;
       }
-      setQuickView("recordingRecords");
+      setQuickView(quickView === "recordingProcessing" ? recordingDetailReturn : "recordingRecords");
       return;
     }
     if (quickView === "profileDetail" || quickView === "profileCreate") {
@@ -1568,13 +1574,19 @@ export default function App() {
             />
           ) : null}
           {quickView === "recording" ? <RecordingScreen
-            onCancel={() => setQuickView("overview")}
+            onCancel={() => {
+              setQuickView(addingRecordingSegment ? "recordingProcessing" : "overview");
+              setAddingRecordingSegment(false);
+              if (!addingRecordingSegment) setRecordingTargetSessionId(null);
+            }}
             onSave={async (audio) => {
               try {
                 const localFile = await toRecordedLocalFile(audio, Platform.OS);
                 const title = `新录音 ${new Date().toLocaleDateString("zh-CN")}`;
+                const extension = localFile.name.toLowerCase().endsWith(".webm") ? ".webm" : ".m4a";
+                const segmentFilename = `录音片段 ${addingRecordingSegment ? (activeRecording.segments?.length ?? 0) + 1 : 1}${extension}`;
                 const upload = await fileService.createUpload({
-                  filename: localFile.name,
+                  filename: segmentFilename,
                   mimeType: audio.mimeType,
                   sizeBytes: localFile.sizeBytes,
                   purpose: "recording",
@@ -1582,20 +1594,48 @@ export default function App() {
                 await uploadLocalFile(localFile, upload.upload_url, upload.upload_headers);
                 const stored = await fileService.completeUpload(upload.file_id);
                 if (!stored.fileId) throw new Error("录音文件未完成上传。");
-                const recording = await recordingService.create(title, "in_app_recording");
-                await recordingService.bindAudio(
-                  recording.id,
-                  stored.fileId,
-                  audio.durationSeconds,
-                );
+                const recording = addingRecordingSegment && archiveRecordingId
+                  ? await recordingService.addSegment(
+                    archiveRecordingId,
+                    stored.fileId,
+                    audio.durationSeconds,
+                  )
+                  : await recordingService.create(title, "in_app_recording");
+                if (!addingRecordingSegment) {
+                  await recordingService.addSegment(
+                    recording.id,
+                    stored.fileId,
+                    audio.durationSeconds,
+                  );
+                }
                 setArchiveRecordingId(recording.id);
-                setArchiveAudioFileId(stored.fileId);
+                setArchiveAudioFileId(null);
                 setArchiveRecording({
                   title,
                   duration: formatDuration(audio.durationSeconds),
                 });
-                setArchiveReturn("recording");
-                setQuickView("archive");
+                if (addingRecordingSegment) {
+                  setAddingRecordingSegment(false);
+                  await refreshRecording(recording.id);
+                  setQuickView("recordingProcessing");
+                } else if (recordingTargetSessionId) {
+                  const profileType: ArchiveKind = activeProfile.kindLabel === "来访者"
+                    ? "client"
+                    : activeProfile.kindLabel === "督导师"
+                      ? "supervisor"
+                      : "supervisee";
+                  await recordingService.archive(recording.id, {
+                    profileType,
+                    profileId: activeProfileId,
+                    sessionId: recordingTargetSessionId,
+                  });
+                  setRecordingTargetSessionId(null);
+                  await refreshRecording(recording.id);
+                  setQuickView("recordingProcessing");
+                } else {
+                  setArchiveReturn("recording");
+                  setQuickView("archive");
+                }
               } catch (error) {
                 showNotice("录音保存失败", errorMessage(error));
               }
@@ -1616,7 +1656,8 @@ export default function App() {
                     "uploaded_audio",
                   );
                   const durationSeconds = await getLocalAudioDurationSeconds(uploaded.picked).catch(() => null);
-                  await recordingService.bindAudio(recording.id, uploaded.stored.fileId, durationSeconds);
+                  if (!durationSeconds) throw new Error("无法读取音频时长，请选择包含有效时长信息的音频文件。");
+                  await recordingService.addSegment(recording.id, uploaded.stored.fileId, durationSeconds);
                   await loadRecordings();
                   showNotice(
                     "录音已上传",
@@ -1651,6 +1692,36 @@ export default function App() {
                   activeRecording.status === "处理失败",
                 );
               }}
+              onRecordSegment={() => {
+                setAddingRecordingSegment(true);
+                setQuickView("recording");
+              }}
+              onUploadSegment={async () => {
+                if (!activeRecording.id) return;
+                const uploaded = await pickAndUploadFile("音频", "recording");
+                if (!uploaded?.stored.fileId) return;
+                const durationSeconds = await getLocalAudioDurationSeconds(uploaded.picked).catch(() => null);
+                if (!durationSeconds) throw new Error("无法读取音频时长，请选择有效的音频文件。");
+                const updated = await recordingService.addSegment(
+                  activeRecording.id,
+                  uploaded.stored.fileId,
+                  durationSeconds,
+                );
+                setActiveRecording(mapRecordingItem(updated));
+                await loadRecordings();
+              }}
+              onDeleteSegment={async (segmentId) => {
+                if (!activeRecording.id) return;
+                const updated = await recordingService.deleteSegment(activeRecording.id, segmentId);
+                setActiveRecording(mapRecordingItem(updated));
+                await loadRecordings();
+              }}
+              onReorderSegments={async (segmentIds) => {
+                if (!activeRecording.id) return;
+                const updated = await recordingService.reorderSegments(activeRecording.id, segmentIds);
+                setActiveRecording(mapRecordingItem(updated));
+              }}
+              onNotice={showNotice}
               onOpenResult={() => void openRecording(activeRecording)}
             />
           ) : null}
@@ -1674,10 +1745,6 @@ export default function App() {
                   createSession: { summary: input.note },
                 },
               );
-              // 转写与纪要在后端异步处理，这里刻意不 await：
-              // 过去要等整条 AI 流水线跑完才跳转，点击「归档到 XXX」要卡几十秒。
-              // 归档完成页会轮询真实状态，处理进度对用户仍然可见。
-              void runRecordingProcessing(archiveRecordingId, false).catch(() => undefined);
               await loadProfiles();
               const profileName = input.newProfileName
                 ?? profileItems.find((item) => item.id === archived.profile_id)?.name
@@ -1703,7 +1770,13 @@ export default function App() {
             }}
             onComplete={(result) => {
               setArchiveResult(result);
-              setQuickView("archiveComplete");
+              if (!result.recordingId) {
+                setQuickView("recordingRecords");
+                return;
+              }
+              void refreshRecording(result.recordingId).finally(() => {
+                setQuickView("recordingProcessing");
+              });
             }}
           /> : null}
           {quickView === "archiveComplete" && archiveResult ? (
@@ -2098,7 +2171,10 @@ export default function App() {
                   throw error;
                 }
               }}
-              onStartRecording={() => setQuickView("recording")}
+              onStartRecording={() => {
+                setRecordingTargetSessionId(activeSessionId);
+                setQuickView("recording");
+              }}
               onAuthorize={() => openPrivacy("sessionMaterials")}
             />
           ) : null}
@@ -2344,7 +2420,10 @@ export default function App() {
           ) : null}
           {quickView === "articleDetail" ? <ArticleDetailScreen article={activeArticle} /> : null}
           {quickView === "statistics" ? <StatisticsScreen durationStats={recordingDurationStats} /> : null}
-          {quickView === "schedule" ? <ScheduleScreen onStartRecording={() => setQuickView("recording")} onNotice={showNotice} /> : null}
+          {quickView === "schedule" ? <ScheduleScreen onStartRecording={() => {
+            setRecordingTargetSessionId(null);
+            setQuickView("recording");
+          }} onNotice={showNotice} /> : null}
           {quickView === "securitySettings" ? (
             <SecuritySettingsScreen
               initialSection={securityInitialSection}
@@ -3252,6 +3331,11 @@ function RecordingProcessingScreen({
   busy,
   onRefresh,
   onRetry,
+  onRecordSegment,
+  onUploadSegment,
+  onDeleteSegment,
+  onReorderSegments,
+  onNotice,
   onOpenResult,
 }: {
   recording: RecordingItem;
@@ -3259,12 +3343,125 @@ function RecordingProcessingScreen({
   busy: boolean;
   onRefresh: () => Promise<void>;
   onRetry: () => Promise<void>;
+  onRecordSegment: () => void;
+  onUploadSegment: () => Promise<void>;
+  onDeleteSegment: (segmentId: string) => Promise<void>;
+  onReorderSegments: (segmentIds: string[]) => Promise<void>;
+  onNotice: (title: string, detail: string) => void;
   onOpenResult: () => void;
 }) {
+  const [showLockConfirm, setShowLockConfirm] = useState(false);
+  const [segmentBusy, setSegmentBusy] = useState(false);
   const failed = recording.status === "处理失败" || job?.status === "failed";
   const completed = recording.status === "可查看" || job?.status === "completed";
   const pending = recording.status === "待处理";
   const audioAvailable = recordingAudioCanProcess(recording.ttl);
+  const segments = recording.segments ?? [];
+  const totalSize = segments.reduce((sum, segment) => sum + segment.sizeBytes, 0);
+  const totalDuration = segments.reduce((sum, segment) => sum + segment.durationSeconds, 0);
+  if (pending) {
+    const moveSegment = async (index: number, direction: -1 | 1) => {
+      const target = index + direction;
+      if (target < 0 || target >= segments.length || segmentBusy) return;
+      const reordered = [...segments];
+      [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+      setSegmentBusy(true);
+      try {
+        await onReorderSegments(reordered.map((segment) => segment.id));
+      } catch (error) {
+        onNotice("顺序调整失败", error instanceof Error ? error.message : "请稍后重试。");
+      } finally {
+        setSegmentBusy(false);
+      }
+    };
+    return (
+      <View style={styles.stack}>
+        <View style={styles.poster}>
+          <Mic size={25} color={colors.clayDark} />
+          <Text style={styles.posterTitle}>整理录音片段</Text>
+          <Text style={styles.posterCopy}>添加完成后调整顺序，再统一开始转写。开始后录音将永久锁定。</Text>
+        </View>
+        <View style={styles.noticeCard}>
+          <Clock3 size={21} color={colors.clayDark} />
+          <View style={styles.listBody}>
+            <Text style={styles.listTitle}>{segments.length}/5 个片段</Text>
+            <Text style={styles.listMeta}>{formatDuration(totalDuration)} · {(totalSize / 1024 / 1024).toFixed(1)}MB/300MB</Text>
+          </View>
+        </View>
+        <View style={styles.cardStack}>
+          {segments.map((segment, index) => (
+            <View key={segment.id} style={styles.recordingCard}>
+              <View style={styles.recordingIcon}><Text style={styles.listTitle}>{index + 1}</Text></View>
+              <View style={styles.listBody}>
+                <Text style={styles.listTitle}>{segment.filename || `录音片段 ${index + 1}`}</Text>
+                <Text style={styles.listMeta}>{formatDuration(segment.durationSeconds)} · {(segment.sizeBytes / 1024 / 1024).toFixed(1)}MB</Text>
+                <RecordingAudioPlayer
+                  fileId={segment.fileId}
+                  available={segment.status !== "destroyed"}
+                  title={`片段 ${index + 1}`}
+                  fallbackDuration={formatDuration(segment.durationSeconds)}
+                  onNotice={onNotice}
+                />
+              </View>
+              <View style={styles.segmentOrderActions}>
+                <SegmentDragHandle
+                  disabled={segmentBusy}
+                  onMove={(direction) => void moveSegment(index, direction)}
+                />
+                <TouchableOpacity disabled={index === 0 || segmentBusy} onPress={() => void moveSegment(index, -1)} accessibilityLabel="片段上移">
+                  <ChevronUp size={20} color={index === 0 ? colors.line : colors.clayDark} />
+                </TouchableOpacity>
+                <TouchableOpacity disabled={index === segments.length - 1 || segmentBusy} onPress={() => void moveSegment(index, 1)} accessibilityLabel="片段下移">
+                  <ChevronDown size={20} color={index === segments.length - 1 ? colors.line : colors.clayDark} />
+                </TouchableOpacity>
+                <TouchableOpacity disabled={segmentBusy} onPress={() => {
+                  setSegmentBusy(true);
+                  void onDeleteSegment(segment.id)
+                    .catch((error) => onNotice("片段删除失败", error instanceof Error ? error.message : "请稍后重试。"))
+                    .finally(() => setSegmentBusy(false));
+                }} accessibilityLabel="删除片段">
+                  <Trash2 size={19} color={colors.danger} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </View>
+        {segments.length < 5 ? (
+          <View style={styles.actionGrid}>
+            <GhostButton icon={Mic} label="录制片段" onPress={onRecordSegment} />
+            <GhostButton icon={Upload} label="上传片段" onPress={() => {
+              setSegmentBusy(true);
+              void onUploadSegment()
+                .catch((error) => onNotice("片段上传失败", error instanceof Error ? error.message : "请稍后重试。"))
+                .finally(() => setSegmentBusy(false));
+            }} />
+          </View>
+        ) : null}
+        <PrimaryButton
+          icon={Sparkles}
+          label="完成并转写"
+          disabled={segments.length === 0 || segmentBusy}
+          onPress={() => setShowLockConfirm(true)}
+          wide
+        />
+        <Modal transparent visible={showLockConfirm} animationType="fade" onRequestClose={() => setShowLockConfirm(false)}>
+          <View style={styles.datePickerBackdrop}>
+            <View style={styles.confirmCard}>
+              <Text style={styles.confirmTitle}>确认锁定并开始转写？</Text>
+              <Text style={styles.confirmCopy}>将按当前顺序转写 {segments.length} 段（合计 {formatDuration(totalDuration)} / {(totalSize / 1024 / 1024).toFixed(1)}MB）。开始后无法增删、替换或调整顺序。</Text>
+              <View style={styles.confirmActions}>
+                <GhostButton icon={X} label="取消" onPress={() => setShowLockConfirm(false)} />
+                <PrimaryButton icon={Sparkles} label="开始转写" onPress={() => {
+                  setShowLockConfirm(false);
+                  void onRetry();
+                }} />
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    );
+  }
   const title = failed
     ? "录音处理失败"
     : completed
@@ -3303,6 +3500,19 @@ function RecordingProcessingScreen({
         <Text style={styles.processingHeroTitle}>{title}</Text>
         <Text style={styles.processingHeroCopy}>{detail}</Text>
       </View>
+      {segments.length > 0 ? (
+        <View style={styles.processingList}>
+          {segments.map((segment, index) => (
+            <ProcessingRow
+              key={segment.id}
+              title={`录音片段 ${index + 1}`}
+              detail={segment.processingError ?? `${segment.filename} · ${formatDuration(segment.durationSeconds)}`}
+              status={segment.status === "failed" ? "失败" : segment.status === "transcribed" ? "完成" : "处理中"}
+              complete={segment.status === "transcribed"}
+            />
+          ))}
+        </View>
+      ) : null}
       <View style={styles.processingList}>
         <ProcessingRow
           title="原始录音"
@@ -3356,6 +3566,27 @@ function RecordingProcessingScreen({
             : "当前原始录音不可用，无法重新识别；已生成的转写和纪要仍按各自保存期限管理。"}
         </Text>
       </View>
+    </View>
+  );
+}
+
+function SegmentDragHandle({
+  disabled,
+  onMove,
+}: {
+  disabled: boolean;
+  onMove: (direction: -1 | 1) => void;
+}) {
+  const responder = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, gesture) => !disabled && Math.abs(gesture.dy) > 6,
+    onPanResponderRelease: (_, gesture) => {
+      if (gesture.dy <= -20) onMove(-1);
+      if (gesture.dy >= 20) onMove(1);
+    },
+  }), [disabled, onMove]);
+  return (
+    <View {...responder.panHandlers} accessibilityLabel="拖动调整片段顺序">
+      <GripVertical size={20} color={disabled ? colors.line : colors.muted} />
     </View>
   );
 }
@@ -4762,13 +4993,24 @@ function RecordingDetailScreen({
           <Text style={styles.listMeta}>{recording.duration} · {recording.archive} · {recording.ttl}</Text>
         </View>
       </View>
-      <RecordingAudioPlayer
-        fileId={recording.audioFileId ?? null}
-        available={recordingAudioCanProcess(recording.ttl)}
-        title={recording.title}
-        fallbackDuration={recording.duration}
-        onNotice={onNotice}
-      />
+      {(recording.segments?.length ?? 0) > 0 ? recording.segments!.map((segment, index) => (
+        <RecordingAudioPlayer
+          key={segment.id}
+          fileId={segment.fileId}
+          available={!segment.destroyedAt && (!segment.expiresAt || new Date(segment.expiresAt).getTime() > Date.now())}
+          title={`片段 ${index + 1} · ${segment.filename}`}
+          fallbackDuration={formatDuration(segment.durationSeconds)}
+          onNotice={onNotice}
+        />
+      )) : (
+        <RecordingAudioPlayer
+          fileId={recording.audioFileId ?? null}
+          available={recordingAudioCanProcess(recording.ttl)}
+          title={recording.title}
+          fallbackDuration={recording.duration}
+          onNotice={onNotice}
+        />
+      )}
 
       <View style={styles.summaryCard}>
         <View style={styles.summaryHeader}>
@@ -8717,6 +8959,17 @@ const styles = StyleSheet.create({
     backgroundColor: "#F2D9CD",
     alignItems: "center",
     justifyContent: "center",
+  },
+  segmentOrderActions: {
+    width: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+  },
+  actionGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
   },
   badgeRow: {
     flexDirection: "row",

@@ -9,6 +9,7 @@ from app.models import (
     AIJob,
     CalendarEvent,
     Recording,
+    RecordingSegment,
     RecordingSummary,
     RecordingTranscript,
     Report,
@@ -70,10 +71,10 @@ def test_session_delete_cascades_generated_resources_and_storage_objects() -> No
         json={"title": "待删除咨询录音", "source_type": "uploaded_audio"},
     ).json()
     assert api.post(
-        f"/api/v1/recordings/{recording['id']}/audio",
+        f"/api/v1/recordings/{recording['id']}/segments",
         headers=auth_headers(),
         json={"file_id": audio_file_id, "duration_seconds": 120},
-    ).status_code == 200
+    ).status_code == 201
     archived = api.post(
         f"/api/v1/recordings/{recording['id']}/archive",
         headers=auth_headers(),
@@ -131,6 +132,9 @@ def test_session_delete_cascades_generated_resources_and_storage_objects() -> No
     assert export_key in storage.deleted_keys
     with SessionLocal() as database:
         assert database.get(Recording, recording["id"]) is None
+        assert database.scalar(
+            select(RecordingSegment).where(RecordingSegment.recording_id == recording["id"])
+        ) is None
         assert database.get(Report, report_id) is None
         assert database.scalar(
             select(RecordingTranscript).where(

@@ -9,6 +9,7 @@ from app.models import (
     CalendarEvent,
     Profile,
     Recording,
+    RecordingSegment,
     RecordingSummary,
     RecordingTranscript,
     Report,
@@ -63,6 +64,13 @@ def cleanup_session_resources(
         )
     ).all()
     recording_ids = [recording.id for recording in recordings]
+    recording_segments = (
+        database.scalars(
+            select(RecordingSegment).where(RecordingSegment.recording_id.in_(recording_ids))
+        ).all()
+        if recording_ids
+        else []
+    )
     transcripts = (
         database.scalars(
             select(RecordingTranscript).where(
@@ -113,6 +121,7 @@ def cleanup_session_resources(
         file_ids=[
             *(attachment.file_id for attachment in attachments),
             *(recording.audio_file_id for recording in recordings),
+            *(segment.file_id for segment in recording_segments),
             *_export_file_ids(jobs),
         ],
     )

@@ -13,6 +13,7 @@ from app.models import (
     Attachment,
     Profile,
     Recording,
+    RecordingSegment,
     RecordingSummary,
     RecordingTranscript,
     Report,
@@ -98,7 +99,18 @@ def destroy_sensitive_content(
                 Recording.user_id == resource.user_id,
             )
         )
-        if recording and recording.audio_file_id:
+        segment = database.scalar(
+            select(RecordingSegment).where(
+                RecordingSegment.id == resource.resource_id,
+            )
+        )
+        if segment:
+            stored_file = get_owned_file(database, segment.file_id, resource.user_id)
+            if stored_file.destroyed_at is None:
+                destroy_file(database, storage, stored_file)
+            segment.status = "destroyed"
+            segment.updated_at = now
+        elif recording and recording.audio_file_id:
             stored_file = get_owned_file(database, recording.audio_file_id, resource.user_id)
             if stored_file.destroyed_at is None:
                 destroy_file(database, storage, stored_file)

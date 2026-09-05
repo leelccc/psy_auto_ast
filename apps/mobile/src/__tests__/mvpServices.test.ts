@@ -85,6 +85,52 @@ test("recording service maps duration statistics", async () => {
 });
 
 
+test("recording service maps and reorders recording segments", async () => {
+  const requests: Array<{ method: string; path: string; body: unknown }> = [];
+  const backendRecording = {
+    id: "recording-1",
+    title: "多片段咨询",
+    source_type: "uploaded_audio",
+    duration_seconds: 180,
+    archive_status: "archived",
+    ai_status: "pending",
+    processing_error: null,
+    audio_file_id: null,
+    audio_expires_at: "2026-06-23T10:00:00Z",
+    audio_destroyed_at: null,
+    segments: [{
+      id: "segment-1",
+      file_id: "file-1",
+      segment_index: 1,
+      filename: "第一段.m4a",
+      duration_seconds: 180,
+      size_bytes: 1024,
+      status: "uploaded",
+      processing_error: null,
+      expires_at: "2026-06-23T10:00:00Z",
+      destroyed_at: null,
+    }],
+    session: null,
+    profile: null,
+    created_at: "2026-06-09T10:00:00Z",
+    updated_at: "2026-06-09T10:00:00Z",
+  };
+  const client = clientWithRoutes({
+    "PUT /recordings/recording-1/segments/reorder": backendRecording,
+  }, requests);
+
+  const result = await createRecordingService(client).reorderSegments("recording-1", ["segment-1"]);
+
+  assert.equal(result.segments[0].filename, "第一段.m4a");
+  assert.equal(result.segments[0].expiresAt, "2026-06-23T10:00:00Z");
+  assert.deepEqual(requests[0], {
+    method: "PUT",
+    path: "/recordings/recording-1/segments/reorder",
+    body: { segment_ids: ["segment-1"] },
+  });
+});
+
+
 test("account profile updates are sent to the authenticated backend user", async () => {
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
   const client = clientWithRoutes({

@@ -13,10 +13,24 @@ export type Recording = {
   audioFileId: string | null;
   audioExpiresAt: string | null;
   audioDestroyedAt: string | null;
+  segments: RecordingSegment[];
   session: { id: string; sequenceNo: number; sessionType: string } | null;
   profile: { id: string; name: string; type: ArchiveKind } | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type RecordingSegment = {
+  id: string;
+  fileId: string;
+  segmentIndex: number;
+  filename: string;
+  durationSeconds: number;
+  sizeBytes: number;
+  status: "uploaded" | "transcribing" | "transcribed" | "failed" | "destroyed";
+  processingError: string | null;
+  expiresAt: string | null;
+  destroyedAt: string | null;
 };
 
 export type RecordingDurationStatistics = {
@@ -39,6 +53,18 @@ type BackendRecording = {
   audio_file_id: string | null;
   audio_expires_at: string | null;
   audio_destroyed_at: string | null;
+  segments?: Array<{
+    id: string;
+    file_id: string;
+    segment_index: number;
+    filename: string;
+    duration_seconds: number;
+    size_bytes: number;
+    status: RecordingSegment["status"];
+    processing_error: string | null;
+    expires_at: string | null;
+    destroyed_at: string | null;
+  }>;
   session: { id: string; sequence_no: number; session_type: string } | null;
   profile: { id: string; name: string; type: ArchiveKind } | null;
   created_at: string;
@@ -84,6 +110,18 @@ function mapRecording(recording: BackendRecording): Recording {
     audioFileId: recording.audio_file_id,
     audioExpiresAt: recording.audio_expires_at,
     audioDestroyedAt: recording.audio_destroyed_at,
+    segments: (recording.segments ?? []).map((segment) => ({
+      id: segment.id,
+      fileId: segment.file_id,
+      segmentIndex: segment.segment_index,
+      filename: segment.filename,
+      durationSeconds: segment.duration_seconds,
+      sizeBytes: segment.size_bytes,
+      status: segment.status,
+      processingError: segment.processing_error,
+      expiresAt: segment.expires_at,
+      destroyedAt: segment.destroyed_at,
+    })),
     session: recording.session ? {
       id: recording.session.id,
       sequenceNo: recording.session.sequence_no,
@@ -159,6 +197,22 @@ export function createRecordingService(client: ApiClient) {
         file_id: fileId,
         duration_seconds: durationSeconds,
       });
+    },
+    async addSegment(recordingId: string, fileId: string, durationSeconds: number): Promise<Recording> {
+      return mapRecording(await client.post<BackendRecording>(`/recordings/${recordingId}/segments`, {
+        file_id: fileId,
+        duration_seconds: durationSeconds,
+      }));
+    },
+    async reorderSegments(recordingId: string, segmentIds: string[]): Promise<Recording> {
+      return mapRecording(await client.put<BackendRecording>(`/recordings/${recordingId}/segments/reorder`, {
+        segment_ids: segmentIds,
+      }));
+    },
+    async deleteSegment(recordingId: string, segmentId: string): Promise<Recording> {
+      return mapRecording(await client.delete<BackendRecording>(
+        `/recordings/${recordingId}/segments/${segmentId}`,
+      ));
     },
     async durationStatistics(): Promise<RecordingDurationStatistics> {
       const response = await client.get<{

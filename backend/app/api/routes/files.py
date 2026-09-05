@@ -37,7 +37,7 @@ ALLOWED_MIME_TYPES = {
 }
 MAX_FILE_SIZE_BYTES = {
     "attachment": 20 * 1024 * 1024,
-    "recording": 500 * 1024 * 1024,
+    "recording": 200 * 1024 * 1024,
     "export": 50 * 1024 * 1024,
 }
 
