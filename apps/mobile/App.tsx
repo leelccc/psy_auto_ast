@@ -2467,7 +2467,8 @@ function AuthScreen({
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const { width } = useWindowDimensions();
-  const authShellWidth = Math.max(280, Math.min(width - 48, 430));
+  const authShellWidth = Math.min(Math.max(width - 32, 0), 430);
+  const compactAuthForm = width < 360;
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -2608,7 +2609,7 @@ function AuthScreen({
             maxLength={channel === "email" ? INPUT_LIMITS.email : 32}
           />
           {mode !== "login" ? (
-            <View style={styles.authCodeRow}>
+            <View style={[styles.authCodeRow, compactAuthForm && styles.authCodeRowCompact]}>
               <TextInput
                 value={code}
                 onChangeText={setCode}
@@ -2622,6 +2623,7 @@ function AuthScreen({
               <TouchableOpacity
                 style={[
                   styles.authSendButton,
+                  compactAuthForm && styles.authSendButtonCompact,
                   (!identityValid || sendingCode || cooldown > 0) && styles.authSendButtonDisabled,
                 ]}
                 activeOpacity={0.8}
@@ -8302,8 +8304,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
+  authCodeRowCompact: {
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
   authCodeInput: {
     flex: 1,
+    minWidth: 0,
   },
   authSendButton: {
     minWidth: 96,
@@ -8318,6 +8325,9 @@ const styles = StyleSheet.create({
   },
   authSendButtonDisabled: {
     opacity: 0.45,
+  },
+  authSendButtonCompact: {
+    width: "100%",
   },
   authSendButtonText: {
     color: colors.clayDark,
