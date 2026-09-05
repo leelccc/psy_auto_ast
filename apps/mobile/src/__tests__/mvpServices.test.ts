@@ -130,6 +130,49 @@ test("recording service maps and reorders recording segments", async () => {
   });
 });
 
+test("recording service archives one to five independent recordings as a session selection", async () => {
+  const requests: Array<{ method: string; path: string; body: unknown }> = [];
+  const backendRecording = {
+    id: "recording-1",
+    title: "咨询录音 1",
+    source_type: "in_app_recording",
+    duration_seconds: 300,
+    archive_status: "archived",
+    ai_status: "pending",
+    processing_error: null,
+    audio_file_id: null,
+    audio_expires_at: "2026-06-23T10:00:00Z",
+    audio_destroyed_at: null,
+    segments: [],
+    session: { id: "session-1", sequence_no: 3, session_type: "consultation" },
+    profile: { id: "profile-1", name: "测试来访者", type: "client" },
+    created_at: "2026-06-09T10:00:00Z",
+    updated_at: "2026-06-09T10:00:00Z",
+  };
+  const client = clientWithRoutes({
+    "POST /recordings/archive-batch": backendRecording,
+  }, requests);
+
+  const result = await createRecordingService(client).archiveBatch({
+    recordingIds: ["recording-1", "recording-2"],
+    profileType: "client",
+    profileId: "profile-1",
+    sessionId: "session-1",
+  });
+
+  assert.equal(result.session?.id, "session-1");
+  assert.deepEqual(requests[0], {
+    method: "POST",
+    path: "/recordings/archive-batch",
+    body: {
+      recording_ids: ["recording-1", "recording-2"],
+      profile_type: "client",
+      profile_id: "profile-1",
+      session_id: "session-1",
+    },
+  });
+});
+
 
 test("account profile updates are sent to the authenticated backend user", async () => {
   const requests: Array<{ method: string; path: string; body: unknown }> = [];

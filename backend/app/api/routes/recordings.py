@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -87,6 +87,13 @@ class ArchiveRecordingRequest(BaseModel):
     create_session: CreateSessionInline | None = None
 
 
+class ArchiveRecordingBatchRequest(BaseModel):
+    recording_ids: list[str] = Field(min_length=1, max_length=5)
+    profile_type: str
+    profile_id: str
+    session_id: str
+
+
 class UpdateSpeakerRequest(BaseModel):
     speaker_key: str = Field(min_length=1, max_length=40)
     speaker_label: str = Field(min_length=1, max_length=80)
@@ -155,6 +162,28 @@ def get_recording(database: Session, recording_id: str, user_id: str) -> Recordi
     return recording
 
 
+def recording_group(database: Session, recording: Recording) -> list[Recording]:
+    if not recording.session_id:
+        return [recording]
+    return list(database.scalars(
+        select(Recording)
+        .where(Recording.session_id == recording.session_id, Recording.user_id == recording.user_id)
+        .order_by(Recording.session_index, Recording.created_at, Recording.id)
+    ).all())
+
+
+def group_segments(database: Session, recording: Recording) -> list[RecordingSegment]:
+    members = recording_group(database, recording)
+    by_recording = {item.id: index for index, item in enumerate(members, 1)}
+    segments = list(database.scalars(
+        select(RecordingSegment).where(
+            RecordingSegment.recording_id.in_([item.id for item in members])
+        )
+    ).all())
+    segments.sort(key=lambda item: (by_recording[item.recording_id], item.segment_index))
+    return segments
+
+
 def serialize_recording(database: Session, recording: Recording) -> dict[str, object]:
     profile = None
     session = None
@@ -164,11 +193,7 @@ def serialize_recording(database: Session, recording: Recording) -> dict[str, ob
         )
         if session:
             profile = database.scalar(select(Profile).where(Profile.id == session.profile_id))
-    recording_segments = database.scalars(
-        select(RecordingSegment)
-        .where(RecordingSegment.recording_id == recording.id)
-        .order_by(RecordingSegment.segment_index)
-    ).all()
+    recording_segments = group_segments(database, recording)
     files_by_id = {
         item.id: item for item in database.scalars(
             select(StoredFile).where(StoredFile.id.in_([segment.file_id for segment in recording_segments]))
@@ -178,7 +203,7 @@ def serialize_recording(database: Session, recording: Recording) -> dict[str, ob
         "id": recording.id,
         "title": recording.title,
         "source_type": recording.source_type,
-        "duration_seconds": recording.duration_seconds,
+        "duration_seconds": sum(segment.duration_seconds for segment in recording_segments) or recording.duration_seconds,
         "archive_status": recording.archive_status,
         "ai_status": recording.ai_status,
         "processing_error": recording.processing_error,
@@ -187,7 +212,8 @@ def serialize_recording(database: Session, recording: Recording) -> dict[str, ob
             {
                 "id": segment.id,
                 "file_id": segment.file_id,
-                "segment_index": segment.segment_index,
+                "segment_index": index,
+                "source_recording_id": segment.recording_id,
                 "filename": files_by_id[segment.file_id].filename if segment.file_id in files_by_id else "录音片段",
                 "duration_seconds": segment.duration_seconds,
                 "size_bytes": segment.size_bytes,
@@ -196,11 +222,12 @@ def serialize_recording(database: Session, recording: Recording) -> dict[str, ob
                 "expires_at": files_by_id[segment.file_id].expires_at.isoformat() if segment.file_id in files_by_id else None,
                 "destroyed_at": files_by_id[segment.file_id].destroyed_at.isoformat() if segment.file_id in files_by_id and files_by_id[segment.file_id].destroyed_at else None,
             }
-            for segment in recording_segments
+            for index, segment in enumerate(recording_segments, 1)
         ],
-        "audio_expires_at": (
-            recording.audio_expires_at.isoformat() if recording.audio_expires_at else None
-        ),
+        "audio_expires_at": min(
+            (item.expires_at for item in files_by_id.values()),
+            default=recording.audio_expires_at,
+        ).isoformat() if (files_by_id or recording.audio_expires_at) else None,
         "audio_destroyed_at": (
             recording.audio_destroyed_at.isoformat() if recording.audio_destroyed_at else None
         ),
@@ -229,11 +256,7 @@ def process_recording(
     provider: RecordingAIProvider,
     audio_input_mode: str,
 ) -> AIJob:
-    recording_segments = database.scalars(
-        select(RecordingSegment)
-        .where(RecordingSegment.recording_id == recording.id)
-        .order_by(RecordingSegment.segment_index)
-    ).all()
+    recording_segments = group_segments(database, recording)
     if recording_segments:
         return process_segmented_recording(
             database,
@@ -485,8 +508,8 @@ def process_segmented_recording(
     merged_segments: list[dict[str, object]] = []
     offset_ms = 0
     try:
-        inputs: list[tuple[RecordingSegment, StoredFile, bytes | None, str | None]] = []
-        for segment in recording_segments:
+        inputs: list[tuple[int, RecordingSegment, StoredFile, bytes | None, str | None]] = []
+        for group_index, segment in enumerate(recording_segments, 1):
             stored_file = files[segment.file_id]
             segment.status = "transcribing"
             segment.updated_at = utc_now()
@@ -496,11 +519,11 @@ def process_segmented_recording(
                 audio_url = storage.create_download_url(stored_file.storage_key or "")
             else:
                 audio_bytes = storage.read_object(stored_file.storage_key or "")
-            inputs.append((segment, stored_file, audio_bytes, audio_url))
+            inputs.append((group_index, segment, stored_file, audio_bytes, audio_url))
         database.commit()
 
-        def transcribe_one(item: tuple[RecordingSegment, StoredFile, bytes | None, str | None]):
-            segment, stored_file, audio_bytes, audio_url = item
+        def transcribe_one(item: tuple[int, RecordingSegment, StoredFile, bytes | None, str | None]):
+            group_index, segment, stored_file, audio_bytes, audio_url = item
             transcriber = getattr(provider, "transcribe_recording", None)
             if callable(transcriber):
                 return transcriber(
@@ -510,7 +533,7 @@ def process_segmented_recording(
                     mime_type=stored_file.mime_type,
                 )
             return provider.process_recording(
-                title=f"{recording.title} - 片段 {segment.segment_index}",
+                title=f"{recording.title} - 片段 {group_index}",
                 duration_seconds=segment.duration_seconds,
                 audio_bytes=audio_bytes,
                 audio_url=audio_url,
@@ -524,7 +547,7 @@ def process_segmented_recording(
             local_segments: list[dict[str, object]] = []
             for item in result.segments:
                 original_key = str(item["speaker_key"])
-                merged_key = f"segment_{segment.segment_index}_{original_key}"
+                merged_key = f"segment_{processed_index}_{original_key}"
                 merged_speakers[merged_key] = result.speakers.get(original_key, "发言人")
                 merged_item = {
                     **item,
@@ -536,7 +559,7 @@ def process_segmented_recording(
                 merged_segments.append(merged_item)
             segment.transcript_json = {
                 "speakers": {
-                    f"segment_{segment.segment_index}_{key}": value
+                    f"segment_{processed_index}_{key}": value
                     for key, value in result.speakers.items()
                 },
                 "segments": local_segments,
@@ -554,7 +577,7 @@ def process_segmented_recording(
         )
         summary_result = provider.summarize_transcript(
             title=recording.title,
-            duration_seconds=recording.duration_seconds or 60,
+            duration_seconds=sum(segment.duration_seconds for segment in recording_segments) or 60,
             transcript=transcript_text,
         )
     except (ValueError, BailianAIError) as error:
@@ -788,7 +811,10 @@ def create_recordings_router(
         page: Annotated[int, Query(ge=1)] = 1,
         page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> dict[str, object]:
-        query = select(Recording).where(Recording.user_id == user_id)
+        query = select(Recording).where(
+            Recording.user_id == user_id,
+            or_(Recording.session_id.is_(None), Recording.session_index == 1),
+        )
         if archive_status:
             query = query.where(Recording.archive_status == archive_status)
         if ai_status:
@@ -841,9 +867,7 @@ def create_recordings_router(
                 (bool(recording.audio_file_id) and recording.audio_destroyed_at is None)
                 or any(
                     segment.status != "destroyed"
-                    for segment in database.scalars(
-                        select(RecordingSegment).where(RecordingSegment.recording_id == recording.id)
-                    ).all()
+                    for segment in group_segments(database, recording)
                 )
             ),
             "transcript_ready": transcript is not None,
@@ -864,6 +888,7 @@ def create_recordings_router(
             id=str(uuid4()),
             user_id=user_id,
             session_id=None,
+            session_index=None,
             title=payload.title.strip(),
             source_type=payload.source_type,
             audio_file_id=None,
@@ -945,8 +970,8 @@ def create_recordings_router(
             .where(RecordingSegment.recording_id == recording.id)
             .order_by(RecordingSegment.segment_index)
         ).all()
-        if len(segments) >= 5:
-            raise ApiError(422, "recording_segment_limit_exceeded", "一次历程最多添加 5 个录音片段。")
+        if segments:
+            raise ApiError(409, "recording_audio_already_bound", "每条录音只能对应一个音频文件。")
         if any(item.file_id == stored_file.id for item in segments):
             raise ApiError(409, "recording_segment_file_duplicate", "该音频文件已经添加。")
         if sum(item.size_bytes for item in segments) + stored_file.size_bytes > 300 * 1024 * 1024:
@@ -996,22 +1021,24 @@ def create_recordings_router(
         recording = get_recording(database, recording_id, user_id)
         if recording.ai_status != "pending":
             raise ApiError(409, "recording_segments_locked", "转写已开始，片段顺序和内容已锁定。")
-        segments = database.scalars(
-            select(RecordingSegment).where(RecordingSegment.recording_id == recording.id)
-        ).all()
+        members = recording_group(database, recording)
+        segments = group_segments(database, recording)
         by_id = {segment.id: segment for segment in segments}
         if len(payload.segment_ids) != len(segments) or set(payload.segment_ids) != set(by_id):
             raise ApiError(422, "recording_segment_order_invalid", "片段顺序必须包含当前全部片段且不能重复。")
+        member_by_id = {item.id: item for item in members}
         for position, segment_id in enumerate(payload.segment_ids, 1):
-            by_id[segment_id].segment_index = -position
+            member_by_id[by_id[segment_id].recording_id].session_index = -position
         database.flush()
         now = utc_now()
         for position, segment_id in enumerate(payload.segment_ids, 1):
-            by_id[segment_id].segment_index = position
-            by_id[segment_id].updated_at = now
+            member = member_by_id[by_id[segment_id].recording_id]
+            member.session_index = position
+            member.updated_at = now
         recording.updated_at = now
         database.commit()
-        return serialize_recording(database, recording)
+        ordered_members = sorted(members, key=lambda item: item.session_index or 0)
+        return serialize_recording(database, ordered_members[0])
 
     @router.delete("/recordings/{recording_id}/segments/{segment_id}")
     def delete_recording_segment(
@@ -1024,37 +1051,29 @@ def create_recordings_router(
         if recording.ai_status != "pending":
             raise ApiError(409, "recording_segments_locked", "转写已开始，片段顺序和内容已锁定。")
         segment = database.scalar(select(RecordingSegment).where(
-            RecordingSegment.id == segment_id, RecordingSegment.recording_id == recording.id,
+            RecordingSegment.id == segment_id,
+            RecordingSegment.recording_id.in_([item.id for item in recording_group(database, recording)]),
         ))
         if segment is None:
             raise ApiError(404, "recording_segment_not_found", "录音片段不存在。")
-        stored_file = get_owned_file(database, segment.file_id, user_id)
-        if stored_file.destroyed_at is None:
-            destroy_file(database, storage, stored_file)
-        database.execute(delete(SensitiveResource).where(
-            SensitiveResource.resource_type == "audio",
-            SensitiveResource.resource_id == segment.id,
-        ))
-        database.delete(segment)
+        session_id = recording.session_id
+        removed = get_recording(database, segment.recording_id, user_id)
+        removed.session_id = None
+        removed.session_index = None
+        removed.archive_status = "unarchived"
+        removed.updated_at = utc_now()
         database.flush()
-        remaining = database.scalars(
-            select(RecordingSegment).where(RecordingSegment.recording_id == recording.id)
-            .order_by(RecordingSegment.segment_index)
-        ).all()
-        for position, item in enumerate(remaining, 1):
-            item.segment_index = position
-        recording.duration_seconds = sum(item.duration_seconds for item in remaining) or None
-        remaining_files = database.scalars(
-            select(StoredFile).where(StoredFile.id.in_([item.file_id for item in remaining]))
-        ).all() if remaining else []
-        recording.audio_expires_at = min(
-            (item.expires_at for item in remaining_files),
-            default=None,
-        )
-        recording.updated_at = utc_now()
-        upsert_duration_entry(database, recording)
+        remaining_members = list(database.scalars(
+            select(Recording)
+            .where(Recording.session_id == session_id, Recording.user_id == user_id)
+            .order_by(Recording.session_index)
+        ).all()) if session_id else []
+        for position, item in enumerate(remaining_members, 1):
+            item.session_index = position
         database.commit()
-        return serialize_recording(database, recording)
+        if not remaining_members:
+            return serialize_recording(database, removed)
+        return serialize_recording(database, remaining_members[0])
 
     @router.get("/recording-duration-statistics")
     def recording_duration_statistics(
@@ -1215,6 +1234,7 @@ def create_recordings_router(
             database.flush()
             resequence_profile_sessions(database, profile=profile, user_id=user_id)
         recording.session_id = session.id
+        recording.session_index = 1
         recording.archive_status = "archived"
         recording.updated_at = utc_now()
         upsert_duration_entry(database, recording, profile_type=profile.type)
@@ -1231,6 +1251,57 @@ def create_recordings_router(
             "sequence_no": session.sequence_no,
             "recommended_speaker_roles": recommended_roles(profile.type),
         }
+
+    @router.post("/recordings/archive-batch")
+    def archive_recordings_batch(
+        payload: ArchiveRecordingBatchRequest,
+        user_id: Annotated[str, Depends(current_user_id)],
+        database: Annotated[Session, Depends(get_db)],
+    ) -> dict[str, object]:
+        if len(set(payload.recording_ids)) != len(payload.recording_ids):
+            raise ApiError(422, "recording_selection_duplicate", "录音选择不能重复。")
+        profile = database.scalar(select(Profile).where(
+            Profile.id == payload.profile_id,
+            Profile.user_id == user_id,
+            Profile.type == payload.profile_type,
+        ))
+        if profile is None:
+            raise ApiError(404, "profile_not_found", "档案不存在。")
+        session = database.scalar(select(SessionRecord).where(
+            SessionRecord.id == payload.session_id,
+            SessionRecord.user_id == user_id,
+            SessionRecord.profile_id == profile.id,
+        ))
+        if session is None:
+            raise ApiError(404, "session_not_found", "记录不存在。")
+        if database.scalar(select(Recording.id).where(Recording.session_id == session.id)):
+            raise ApiError(409, "session_recording_already_exists", "该次记录已有录音。")
+        recordings = list(database.scalars(select(Recording).where(
+            Recording.id.in_(payload.recording_ids),
+            Recording.user_id == user_id,
+        )).all())
+        by_id = {item.id: item for item in recordings}
+        if len(by_id) != len(payload.recording_ids):
+            raise ApiError(404, "recording_not_found", "有录音不存在。")
+        ordered = [by_id[item_id] for item_id in payload.recording_ids]
+        if any(item.archive_status != "unarchived" or item.session_id is not None for item in ordered):
+            raise ApiError(409, "recording_already_archived", "有录音已被归档，请刷新后重选。")
+        if any(item.ai_status != "pending" for item in ordered):
+            raise ApiError(409, "recording_not_pending", "只能选择尚未开始转写的录音。")
+        segments = [group_segments(database, item) for item in ordered]
+        if any(len(items) != 1 for items in segments):
+            raise ApiError(422, "recording_single_file_required", "每条录音必须且只能包含一个音频文件。")
+        if sum(items[0].size_bytes for items in segments) > 300 * 1024 * 1024:
+            raise ApiError(422, "recording_total_size_exceeded", "所选录音总大小不能超过 300MB。")
+        now = utc_now()
+        for position, item in enumerate(ordered, 1):
+            item.session_id = session.id
+            item.session_index = position
+            item.archive_status = "archived"
+            item.updated_at = now
+            upsert_duration_entry(database, item, profile_type=profile.type)
+        database.commit()
+        return serialize_recording(database, ordered[0])
 
     @router.get("/recordings/{recording_id}/transcript")
     def get_transcript(

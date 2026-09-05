@@ -180,7 +180,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0905-3";
+const BUILD_TAG = "0905-4";
 
 const INPUT_LIMITS = {
   email: 254,
@@ -1633,8 +1633,9 @@ export default function App() {
                   await refreshRecording(recording.id);
                   setQuickView("recordingProcessing");
                 } else {
-                  await refreshRecording(recording.id);
-                  setQuickView("recordingProcessing");
+                  await loadRecordings();
+                  setQuickView("recordingRecords");
+                  showNotice("录音已保存", "已进入未归档录音列表，可在咨询历程中选择使用。");
                 }
               } catch (error) {
                 showNotice("录音保存失败", errorMessage(error));
@@ -1647,6 +1648,11 @@ export default function App() {
               items={recordingItems}
               loading={recordingsLoading}
               onOpen={(recording) => void openRecording(recording)}
+              onRecord={() => {
+                setAddingRecordingSegment(false);
+                setRecordingTargetSessionId(null);
+                setQuickView("recording");
+              }}
               onUpload={async () => {
                 try {
                   const uploaded = await pickAndUploadFile("音频", "recording");
@@ -1691,24 +1697,6 @@ export default function App() {
                   activeRecording.id,
                   activeRecording.status === "处理失败",
                 );
-              }}
-              onRecordSegment={() => {
-                setAddingRecordingSegment(true);
-                setQuickView("recording");
-              }}
-              onUploadSegment={async () => {
-                if (!activeRecording.id) return;
-                const uploaded = await pickAndUploadFile("音频", "recording");
-                if (!uploaded?.stored.fileId) return;
-                const durationSeconds = await getLocalAudioDurationSeconds(uploaded.picked).catch(() => null);
-                if (!durationSeconds) throw new Error("无法读取音频时长，请选择有效的音频文件。");
-                const updated = await recordingService.addSegment(
-                  activeRecording.id,
-                  uploaded.stored.fileId,
-                  durationSeconds,
-                );
-                setActiveRecording(mapRecordingItem(updated));
-                await loadRecordings();
               }}
               onDeleteSegment={async (segmentId) => {
                 if (!activeRecording.id) return;
@@ -2122,9 +2110,10 @@ export default function App() {
                   showNotice("资料上传失败", errorMessage(error));
                 }
               }}
-              onSelectUnarchived={async (recordingId) => {
+              onSelectUnarchived={async (recordingIds) => {
                 try {
-                  await recordingService.archive(recordingId, {
+                  const archived = await recordingService.archiveBatch({
+                    recordingIds,
                     profileType: archiveKindForLabel(activeProfile.kindLabel),
                     profileId: activeProfileId,
                     sessionId: activeSessionId,
@@ -2133,11 +2122,8 @@ export default function App() {
                   const recordingRows = response.items.map(mapRecordingItem);
                   setRecordingItems(recordingRows);
                   await loadProfileData(activeProfileId, recordingRows);
-                  showNotice("录音已归入本次记录", "请确认片段和顺序，再手动开始全部转写。");
-                  const archivedRecording = recordingRows.find((item) => item.id === recordingId);
-                  if (archivedRecording) {
-                    await openRecording(archivedRecording);
-                  }
+                  showNotice("录音已归入本次记录", `已选择 ${recordingIds.length} 条录音，请确认顺序后开始转写。`);
+                  await openRecording(mapRecordingItem(archived), "sessionMaterials");
                 } catch (error) {
                   showNotice("录音归档失败", errorMessage(error));
                   throw error;
@@ -3072,12 +3058,14 @@ function RecordingRecordsScreen({
   items,
   loading,
   onOpen,
+  onRecord,
   onUpload,
   onNotice,
 }: {
   items: RecordingItem[];
   loading: boolean;
   onOpen: (recording: RecordingItem) => void;
+  onRecord: () => void;
   onUpload: () => Promise<void>;
   onNotice: (title: string, detail: string) => void;
 }) {
@@ -3090,7 +3078,11 @@ function RecordingRecordsScreen({
         <Text style={styles.posterTitle}>录音记录</Text>
         <Text style={styles.posterCopy}>集中查看待归档、生成中和可查看的录音，不和正在录音流程混在一起。</Text>
       </View>
-      <SectionHeader title="录音列表" action={showUpload ? "收起" : "上传"} onAction={() => setShowUpload((current) => !current)} />
+      <View style={styles.actionGrid}>
+        <GhostButton icon={Mic} label="开始录音" onPress={onRecord} />
+        <GhostButton icon={Upload} label={showUpload ? "收起上传" : "上传录音"} onPress={() => setShowUpload((current) => !current)} />
+      </View>
+      <SectionHeader title="录音列表" />
       {showUpload ? (
         <View style={styles.inlineCreateCard}>
           <Text style={styles.formPreviewTitle}>上传已有录音</Text>
@@ -3128,8 +3120,10 @@ function RecordingRecordsScreen({
             <Text style={styles.emptySearchCopy}>可以开始现场录音，或上传已有音频。</Text>
           </View>
         ) : null}
-        {items.map((item) => (
-          <TouchableOpacity key={item.id ?? item.title} style={styles.recordingCard} activeOpacity={0.78} onPress={() => onOpen(item)}>
+        {items.map((item) => {
+          const canOpen = item.archive === "已归档";
+          return (
+          <TouchableOpacity key={item.id ?? item.title} style={styles.recordingCard} activeOpacity={canOpen ? 0.78 : 1} disabled={!canOpen} onPress={() => onOpen(item)}>
             <View style={styles.recordingIcon}>
               <FileText size={20} color={colors.clayDark} />
             </View>
@@ -3141,9 +3135,9 @@ function RecordingRecordsScreen({
                 <Badge label={item.archive} tone={formatBadge(item.archive)} />
               </View>
             </View>
-            <ChevronRight size={18} color={colors.subtle} />
+            {canOpen ? <ChevronRight size={18} color={colors.subtle} /> : <Badge label="等待选择" tone="warm" />}
           </TouchableOpacity>
-        ))}
+        )})}
       </View>
     </View>
   );
@@ -3300,8 +3294,6 @@ function RecordingProcessingScreen({
   busy,
   onRefresh,
   onRetry,
-  onRecordSegment,
-  onUploadSegment,
   onDeleteSegment,
   onReorderSegments,
   onNotice,
@@ -3312,8 +3304,6 @@ function RecordingProcessingScreen({
   busy: boolean;
   onRefresh: () => Promise<void>;
   onRetry: () => Promise<void>;
-  onRecordSegment: () => void;
-  onUploadSegment: () => Promise<void>;
   onDeleteSegment: (segmentId: string) => Promise<void>;
   onReorderSegments: (segmentIds: string[]) => Promise<void>;
   onNotice: (title: string, detail: string) => void;
@@ -3397,17 +3387,6 @@ function RecordingProcessingScreen({
             </View>
           ))}
         </View>
-        {segments.length < 5 ? (
-          <View style={styles.actionGrid}>
-            <GhostButton icon={Mic} label="录制片段" onPress={onRecordSegment} />
-            <GhostButton icon={Upload} label="上传片段" onPress={() => {
-              setSegmentBusy(true);
-              void onUploadSegment()
-                .catch((error) => onNotice("片段上传失败", error instanceof Error ? error.message : "请稍后重试。"))
-                .finally(() => setSegmentBusy(false));
-            }} />
-          </View>
-        ) : null}
         <PrimaryButton
           icon={Sparkles}
           label={segments.length > 0 ? `开始转写（${segments.length} 个片段）` : "添加片段后即可开始转写"}
@@ -5199,16 +5178,17 @@ function SessionMaterialsScreen({
   onPreview: (material: SessionMaterial) => void;
   onAdd: (fileType: string) => Promise<void>;
   onAuthorize: () => void;
-  onSelectUnarchived: (recordingId: string) => Promise<void>;
+  onSelectUnarchived: (recordingIds: string[]) => Promise<void>;
   onOpenRecordingRecords: () => void;
 }) {
   const [showUpload, setShowUpload] = useState(false);
   const [fileType, setFileType] = useState(category === "recording" ? "音频" : category === "homework" || category === "other" ? "PDF" : "图片");
   const copy = materialCategoryCopy[category];
   const isRecording = category === "recording";
-  const [unarchived, setUnarchived] = useState<Array<{ id: string; title: string; meta: string }>>([]);
+  const [unarchived, setUnarchived] = useState<Array<{ id: string; title: string; meta: string; sizeBytes: number }>>([]);
   const [loadingUnarchived, setLoadingUnarchived] = useState(false);
-  const [selectingId, setSelectingId] = useState<string | null>(null);
+  const [selectedRecordingIds, setSelectedRecordingIds] = useState<string[]>([]);
+  const [selecting, setSelecting] = useState(false);
 
   const loadUnarchived = useCallback(async () => {
     if (!isRecording) return;
@@ -5217,11 +5197,12 @@ function SessionMaterialsScreen({
       const response = await recordingService.list({ archiveStatus: "unarchived", pageSize: 50 });
       setUnarchived(
         response.items
-          .filter((item) => Boolean(item.audioFileId))
+          .filter((item) => item.segments.length === 1)
           .map((item) => ({
             id: item.id,
             title: item.title,
-            meta: `${item.sourceType === "uploaded_audio" ? "上传音频" : "应用内录音"} · ${formatDuration(item.durationSeconds ?? 0)}`,
+            meta: `${item.sourceType === "uploaded_audio" ? "上传音频" : "应用内录音"} · ${formatDuration(item.durationSeconds ?? 0)} · ${(item.segments[0].sizeBytes / 1024 / 1024).toFixed(1)}MB`,
+            sizeBytes: item.segments[0].sizeBytes,
           })),
       );
     } catch {
@@ -5245,7 +5226,8 @@ function SessionMaterialsScreen({
 
       {isRecording ? (
         <View style={styles.cardStack}>
-          <Text style={styles.formFieldLabel}>选择未归档录音归入本次记录</Text>
+          <Text style={styles.formFieldLabel}>选择 1–5 条未归档录音</Text>
+          <Text style={styles.formHelp}>所选录音总大小不能超过 300MB。确认后可在下一页试听、排序或移除。</Text>
           {loadingUnarchived ? <Text style={styles.listMeta}>正在读取未归档录音...</Text> : null}
           {!loadingUnarchived && unarchived.length === 0 ? (
             <View style={styles.emptySearchCard}>
@@ -5258,20 +5240,19 @@ function SessionMaterialsScreen({
           {unarchived.map((item) => (
             <TouchableOpacity
               key={item.id}
-              style={styles.recordingCard}
+              style={[styles.recordingCard, selectedRecordingIds.includes(item.id) && styles.archiveTargetCardReady]}
               activeOpacity={0.78}
-              disabled={selectingId !== null}
-              onPress={async () => {
-                if (selectingId) return;
-                setSelectingId(item.id);
-                try {
-                  await onSelectUnarchived(item.id);
-                  await loadUnarchived();
-                } catch {
-                  // 父级已提示具体失败原因。
-                } finally {
-                  setSelectingId(null);
-                }
+              disabled={selecting}
+              onPress={() => {
+                setSelectedRecordingIds((current) => {
+                  if (current.includes(item.id)) return current.filter((id) => id !== item.id);
+                  if (current.length >= 5) return current;
+                  const nextSize = unarchived
+                    .filter((recording) => [...current, item.id].includes(recording.id))
+                    .reduce((sum, recording) => sum + recording.sizeBytes, 0);
+                  if (nextSize > 300 * 1024 * 1024) return current;
+                  return [...current, item.id];
+                });
               }}
             >
               <View style={styles.recordingIcon}>
@@ -5281,9 +5262,26 @@ function SessionMaterialsScreen({
                 <Text style={styles.listTitle}>{truncateMiddle(item.title)}</Text>
                 <Text style={styles.listMeta}>{item.meta}</Text>
               </View>
-              {selectingId === item.id ? <Clock3 size={18} color={colors.clayDark} /> : <ChevronRight size={18} color={colors.subtle} />}
+              {selectedRecordingIds.includes(item.id)
+                ? <CheckCircle2 size={20} color={colors.sageDark} />
+                : <View style={styles.selectionCircle} />}
             </TouchableOpacity>
           ))}
+          {unarchived.length > 0 ? (
+            <PrimaryButton
+              icon={ChevronRight}
+              label={selecting ? "正在归入咨询历程..." : `下一步：整理 ${selectedRecordingIds.length} 条录音`}
+              disabled={selectedRecordingIds.length === 0 || selecting}
+              onPress={() => {
+                if (selectedRecordingIds.length === 0 || selecting) return;
+                setSelecting(true);
+                void onSelectUnarchived(selectedRecordingIds)
+                  .catch(() => undefined)
+                  .finally(() => setSelecting(false));
+              }}
+              wide
+            />
+          ) : null}
         </View>
       ) : null}
 
@@ -8934,6 +8932,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#F2D9CD",
     alignItems: "center",
     justifyContent: "center",
+  },
+  selectionCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: colors.line,
   },
   segmentOrderActions: {
     width: 28,

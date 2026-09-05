@@ -17,13 +17,16 @@ from app.db.base import Base
 
 class Recording(Base):
     __tablename__ = "recordings"
-    __table_args__ = (UniqueConstraint("session_id", name="recordings_session_unique"),)
+    __table_args__ = (
+        UniqueConstraint("session_id", "session_index", name="recordings_session_position_unique"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     session_id: Mapped[str | None] = mapped_column(
         ForeignKey("sessions.id", ondelete="CASCADE"), nullable=True
     )
+    session_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(String(160))
     source_type: Mapped[str] = mapped_column(String(32))
     audio_file_id: Mapped[str | None] = mapped_column(ForeignKey("files.id"), nullable=True)

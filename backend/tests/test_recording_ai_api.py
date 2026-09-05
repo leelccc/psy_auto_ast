@@ -5,7 +5,7 @@ from app.main import create_app
 from app.seed import CHEN_PROFILE_ID, seed_demo_data
 from app.services.ai import BailianAIError, RecordingAIResult, RecordingSummaryResult
 from tests.fake_storage import FakeStorage
-from tests.helpers import auth_headers
+from tests.helpers import auth_headers, profile_access_headers
 
 
 class CapturingRecordingProvider:
@@ -125,6 +125,42 @@ def add_segment(
     )
     assert response.status_code == 201
     return response.json()
+
+
+def create_single_file_recording(
+    api: TestClient,
+    storage: FakeStorage,
+    *,
+    title: str,
+    filename: str,
+    duration_seconds: int,
+    audio: bytes,
+) -> tuple[str, dict[str, object]]:
+    recording_id = api.post(
+        "/api/v1/recordings",
+        headers=auth_headers(),
+        json={"title": title, "source_type": "uploaded_audio"},
+    ).json()["id"]
+    return recording_id, add_segment(
+        api,
+        storage,
+        recording_id,
+        filename=filename,
+        duration_seconds=duration_seconds,
+        audio=audio,
+    )
+
+
+def create_empty_client_session(api: TestClient) -> str:
+    with SessionLocal() as database:
+        seed_demo_data(database)
+    response = api.post(
+        f"/api/v1/profiles/{CHEN_PROFILE_ID}/sessions",
+        headers=profile_access_headers(api),
+        json={"session_type": "counseling", "title": "多录音测试咨询"},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
 
 
 def test_recording_processing_reads_minio_bytes_for_bailian_base64_mode() -> None:
@@ -457,24 +493,34 @@ def test_multiple_segments_can_reorder_then_transcribe_as_one_recording() -> Non
         recording_ai_provider=provider,
         recording_audio_input_mode="base64",
     ))
-    recording_id = api.post(
-        "/api/v1/recordings",
+    session_id = create_empty_client_session(api)
+    first_id, first = create_single_file_recording(
+        api, storage, title="第一条录音", filename="first.m4a", duration_seconds=60, audio=b"first"
+    )
+    second_id, second = create_single_file_recording(
+        api, storage, title="第二条录音", filename="second.m4a", duration_seconds=90, audio=b"second"
+    )
+    archived = api.post(
+        "/api/v1/recordings/archive-batch",
         headers=auth_headers(),
-        json={"title": "多片段咨询", "source_type": "uploaded_audio"},
-    ).json()["id"]
-    first = add_segment(
-        api, storage, recording_id, filename="first.m4a", duration_seconds=60, audio=b"first"
+        json={
+            "recording_ids": [first_id, second_id],
+            "profile_type": "client",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": session_id,
+        },
     )
-    second = add_segment(
-        api, storage, recording_id, filename="second.m4a", duration_seconds=90, audio=b"second"
-    )
-    segment_ids = [item["id"] for item in second["segments"]]
+    assert archived.status_code == 200
+    recording_id = archived.json()["id"]
+    assert [item["filename"] for item in archived.json()["segments"]] == ["first.m4a", "second.m4a"]
+    segment_ids = [item["id"] for item in archived.json()["segments"]]
     reordered = api.put(
         f"/api/v1/recordings/{recording_id}/segments/reorder",
         headers=auth_headers(),
         json={"segment_ids": list(reversed(segment_ids))},
     )
     assert reordered.status_code == 200
+    recording_id = reordered.json()["id"]
     assert [item["filename"] for item in reordered.json()["segments"]] == ["second.m4a", "first.m4a"]
 
     processed = api.post(
@@ -487,7 +533,7 @@ def test_multiple_segments_can_reorder_then_transcribe_as_one_recording() -> Non
     assert len(provider.summary_calls) == 1
     transcript = api.get(
         f"/api/v1/recordings/{recording_id}/transcript",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
     ).json()
     assert len(transcript["segments"]) == 2
     assert transcript["segments"][0]["speaker_key"].startswith("segment_1_")
@@ -523,13 +569,25 @@ def test_failed_multi_segment_retry_retranscribes_every_segment() -> None:
         recording_ai_provider=provider,
         recording_audio_input_mode="base64",
     ))
-    recording_id = api.post(
-        "/api/v1/recordings",
+    session_id = create_empty_client_session(api)
+    first_id, _ = create_single_file_recording(
+        api, storage, title="失败重试一", filename="one.m4a", duration_seconds=30, audio=b"one"
+    )
+    second_id, _ = create_single_file_recording(
+        api, storage, title="失败重试二", filename="two.m4a", duration_seconds=30, audio=b"two"
+    )
+    archived = api.post(
+        "/api/v1/recordings/archive-batch",
         headers=auth_headers(),
-        json={"title": "失败重试", "source_type": "uploaded_audio"},
-    ).json()["id"]
-    add_segment(api, storage, recording_id, filename="one.m4a", duration_seconds=30, audio=b"one")
-    add_segment(api, storage, recording_id, filename="two.m4a", duration_seconds=30, audio=b"two")
+        json={
+            "recording_ids": [first_id, second_id],
+            "profile_type": "client",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": session_id,
+        },
+    )
+    assert archived.status_code == 200
+    recording_id = archived.json()["id"]
 
     failed = api.post(
         f"/api/v1/recordings/{recording_id}/processing",

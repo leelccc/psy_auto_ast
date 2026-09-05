@@ -24,6 +24,7 @@ export type RecordingSegment = {
   id: string;
   fileId: string;
   segmentIndex: number;
+  sourceRecordingId?: string;
   filename: string;
   durationSeconds: number;
   sizeBytes: number;
@@ -57,6 +58,7 @@ type BackendRecording = {
     id: string;
     file_id: string;
     segment_index: number;
+    source_recording_id?: string;
     filename: string;
     duration_seconds: number;
     size_bytes: number;
@@ -114,6 +116,7 @@ function mapRecording(recording: BackendRecording): Recording {
       id: segment.id,
       fileId: segment.file_id,
       segmentIndex: segment.segment_index,
+      sourceRecordingId: segment.source_recording_id,
       filename: segment.filename,
       durationSeconds: segment.duration_seconds,
       sizeBytes: segment.size_bytes,
@@ -277,6 +280,19 @@ export function createRecordingService(client: ApiClient) {
           summary: input.createSession.summary ?? "",
         } : undefined,
       });
+    },
+    async archiveBatch(input: {
+      recordingIds: string[];
+      profileType: ArchiveKind;
+      profileId: string;
+      sessionId: string;
+    }): Promise<Recording> {
+      return mapRecording(await client.post<BackendRecording>("/recordings/archive-batch", {
+        recording_ids: input.recordingIds,
+        profile_type: input.profileType,
+        profile_id: input.profileId,
+        session_id: input.sessionId,
+      }));
     },
     async transcript(recordingId: string): Promise<RecordingTranscript> {
       const value = await client.get<{
