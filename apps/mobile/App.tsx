@@ -180,7 +180,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0905-4";
+const BUILD_TAG = "0906-1";
 
 const INPUT_LIMITS = {
   email: 254,
@@ -1709,6 +1709,26 @@ export default function App() {
                 const updated = await recordingService.reorderSegments(activeRecording.id, segmentIds);
                 setActiveRecording(mapRecordingItem(updated));
               }}
+              onLoadAvailableRecordings={async () => {
+                const response = await recordingService.list({ archiveStatus: "unarchived", pageSize: 100 });
+                return response.items.filter((item) => item.segments.length === 1).map(mapRecordingItem);
+              }}
+              onAddRecordings={async (recordingIds) => {
+                if (!activeRecording.sessionId || !activeProfileId) {
+                  throw new Error("当前咨询历程信息不完整，请返回后重新进入。");
+                }
+                const updated = await recordingService.archiveBatch({
+                  recordingIds,
+                  profileType: archiveKindForLabel(activeProfile.kindLabel),
+                  profileId: activeProfileId,
+                  sessionId: activeRecording.sessionId,
+                });
+                const mapped = mapRecordingItem(updated);
+                setActiveRecording(mapped);
+                await loadRecordings();
+                await loadProfileData(activeProfileId);
+                return mapped;
+              }}
               onNotice={showNotice}
               onOpenResult={() => void openRecording(activeRecording)}
             />
@@ -3135,7 +3155,11 @@ function RecordingRecordsScreen({
                 <Badge label={item.archive} tone={formatBadge(item.archive)} />
               </View>
             </View>
-            {canOpen ? <ChevronRight size={18} color={colors.subtle} /> : <Badge label="等待选择" tone="warm" />}
+            {canOpen ? <ChevronRight size={18} color={colors.subtle} /> : (
+              <View style={styles.waitingChoiceBadge}>
+                <Text style={styles.waitingChoiceText}>等待选择</Text>
+              </View>
+            )}
           </TouchableOpacity>
         )})}
       </View>
@@ -3148,12 +3172,14 @@ function RecordingAudioPlayer({
   available,
   title,
   fallbackDuration,
+  compact = false,
   onNotice,
 }: {
   fileId: string | null;
   available: boolean;
   title: string;
   fallbackDuration: string;
+  compact?: boolean;
   onNotice: (title: string, detail: string) => void;
 }) {
   const player = useAudioPlayer(null, { updateInterval: 250 });
@@ -3214,6 +3240,31 @@ function RecordingAudioPlayer({
   }, [fileId, canPlay]);
 
   if (Platform.OS === "web") {
+    if (compact) {
+      return (
+        <View style={styles.compactAudioPlayer}>
+          {playbackUrl && canPlay
+            ? createElement("audio", {
+                key: playbackUrl,
+                controls: true,
+                preload: "metadata",
+                src: playbackUrl,
+                style: { width: "100%", height: 34, display: "block" },
+                onError: () => {
+                  fileService.getDownloadUrl(fileId!)
+                    .then((r) => setPlaybackUrl(r.download_url))
+                    .catch(() => {});
+                },
+              })
+            : (
+              <View style={styles.compactAudioUnavailable}>
+                {loading ? <ActivityIndicator color={colors.clayDark} /> : <CircleAlert size={16} color={colors.subtle} />}
+                <Text style={styles.audioPlayerMeta}>{loading ? "正在加载录音..." : "原始录音不可用"}</Text>
+              </View>
+            )}
+        </View>
+      );
+    }
     return (
       <View style={styles.audioPlayerCard}>
         <View style={styles.audioPlayerBody}>
@@ -3296,6 +3347,8 @@ function RecordingProcessingScreen({
   onRetry,
   onDeleteSegment,
   onReorderSegments,
+  onLoadAvailableRecordings,
+  onAddRecordings,
   onNotice,
   onOpenResult,
 }: {
@@ -3306,11 +3359,17 @@ function RecordingProcessingScreen({
   onRetry: () => Promise<void>;
   onDeleteSegment: (segmentId: string) => Promise<void>;
   onReorderSegments: (segmentIds: string[]) => Promise<void>;
+  onLoadAvailableRecordings: () => Promise<RecordingItem[]>;
+  onAddRecordings: (recordingIds: string[]) => Promise<RecordingItem>;
   onNotice: (title: string, detail: string) => void;
   onOpenResult: () => void;
 }) {
   const [showLockConfirm, setShowLockConfirm] = useState(false);
   const [segmentBusy, setSegmentBusy] = useState(false);
+  const [showRecordingPicker, setShowRecordingPicker] = useState(false);
+  const [availableRecordings, setAvailableRecordings] = useState<RecordingItem[]>([]);
+  const [selectedRecordingIds, setSelectedRecordingIds] = useState<string[]>([]);
+  const [pickerLoading, setPickerLoading] = useState(false);
   const failed = recording.status === "处理失败" || job?.status === "failed";
   const completed = recording.status === "可查看" || job?.status === "completed";
   const pending = recording.status === "待处理";
@@ -3320,6 +3379,10 @@ function RecordingProcessingScreen({
   const totalDuration = segments.reduce((sum, segment) => sum + segment.durationSeconds, 0);
   const totalSizeMb = totalSize / 1024 / 1024;
   const canStartTranscription = segments.length >= 1 && segments.length <= 5 && totalSizeMb <= 300;
+  const remainingSlots = Math.max(0, 5 - segments.length);
+  const selectedSize = availableRecordings
+    .filter((item) => item.id && selectedRecordingIds.includes(item.id))
+    .reduce((sum, item) => sum + (item.segments?.[0]?.sizeBytes ?? 0), 0);
   if (pending) {
     const moveSegment = async (index: number, direction: -1 | 1) => {
       const target = index + direction;
@@ -3349,6 +3412,29 @@ function RecordingProcessingScreen({
             <Text style={styles.listMeta}>{formatDuration(totalDuration)} · 总大小 {totalSizeMb.toFixed(1)}MB / 300MB</Text>
           </View>
         </View>
+        {remainingSlots > 0 ? (
+          <TouchableOpacity
+            style={styles.addExistingRecordingButton}
+            activeOpacity={0.78}
+            disabled={segmentBusy}
+            onPress={() => {
+              setShowRecordingPicker(true);
+              setSelectedRecordingIds([]);
+              setPickerLoading(true);
+              void onLoadAvailableRecordings()
+                .then(setAvailableRecordings)
+                .catch((error) => {
+                  setShowRecordingPicker(false);
+                  onNotice("录音列表加载失败", error instanceof Error ? error.message : "请稍后重试。");
+                })
+                .finally(() => setPickerLoading(false));
+            }}
+          >
+            <Plus size={18} color={colors.clayDark} />
+            <Text style={styles.addExistingRecordingText}>从未归档录音中添加</Text>
+            <Text style={styles.addExistingRecordingMeta}>还可添加 {remainingSlots} 条</Text>
+          </TouchableOpacity>
+        ) : null}
         <View style={styles.cardStack}>
           {segments.map((segment, index) => (
             <View key={segment.id} style={styles.recordingCard}>
@@ -3361,6 +3447,7 @@ function RecordingProcessingScreen({
                   available={segment.status !== "destroyed"}
                   title={`片段 ${index + 1}`}
                   fallbackDuration={formatDuration(segment.durationSeconds)}
+                  compact
                   onNotice={onNotice}
                 />
               </View>
@@ -3405,6 +3492,84 @@ function RecordingProcessingScreen({
                   setShowLockConfirm(false);
                   void onRetry();
                 }} />
+              </View>
+            </View>
+          </View>
+        </Modal>
+        <Modal transparent visible={showRecordingPicker} animationType="fade" onRequestClose={() => setShowRecordingPicker(false)}>
+          <View style={styles.datePickerBackdrop}>
+            <View style={[styles.confirmCard, styles.recordingPickerCard]}>
+              <View style={styles.recordingPickerHeader}>
+                <View style={styles.listBody}>
+                  <Text style={styles.confirmTitle}>添加已有录音</Text>
+                  <Text style={styles.confirmCopy}>可再选 {remainingSlots} 条，加入后仍可调整顺序或删除。</Text>
+                </View>
+                <TouchableOpacity onPress={() => setShowRecordingPicker(false)} accessibilityLabel="关闭录音选择">
+                  <X size={20} color={colors.muted} />
+                </TouchableOpacity>
+              </View>
+              {pickerLoading ? (
+                <View style={styles.recordingPickerEmpty}>
+                  <ActivityIndicator color={colors.clayDark} />
+                  <Text style={styles.listMeta}>正在加载未归档录音...</Text>
+                </View>
+              ) : availableRecordings.length === 0 ? (
+                <View style={styles.recordingPickerEmpty}>
+                  <FileText size={21} color={colors.subtle} />
+                  <Text style={styles.emptySearchTitle}>暂无可添加的录音</Text>
+                  <Text style={styles.emptySearchCopy}>请先到最外层“录音记录”中录制或上传。</Text>
+                </View>
+              ) : (
+                <ScrollView style={styles.recordingPickerList} contentContainerStyle={styles.recordingPickerListContent}>
+                  {availableRecordings.map((item) => {
+                    const itemId = item.id!;
+                    const selected = selectedRecordingIds.includes(itemId);
+                    const itemSize = item.segments?.[0]?.sizeBytes ?? 0;
+                    const disabled = !selected && (
+                      selectedRecordingIds.length >= remainingSlots
+                      || totalSize + selectedSize + itemSize > 300 * 1024 * 1024
+                    );
+                    return (
+                      <TouchableOpacity
+                        key={itemId}
+                        style={[styles.recordingPickerItem, selected && styles.recordingPickerItemSelected, disabled && styles.recordingPickerItemDisabled]}
+                        activeOpacity={0.78}
+                        disabled={disabled}
+                        onPress={() => setSelectedRecordingIds((current) => (
+                          selected ? current.filter((id) => id !== itemId) : [...current, itemId]
+                        ))}
+                      >
+                        <View style={[styles.selectionCircle, selected && styles.recordingPickerCheck]}>
+                          {selected ? <CheckCircle2 size={18} color={colors.clayDark} /> : null}
+                        </View>
+                        <View style={styles.listBody}>
+                          <Text style={styles.listTitle} numberOfLines={1}>{item.title}</Text>
+                          <Text style={styles.listMeta}>{item.duration} · {(itemSize / 1024 / 1024).toFixed(1)}MB</Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+              <Text style={styles.recordingPickerSummary}>已选 {selectedRecordingIds.length} 条 · 加入后总大小 {((totalSize + selectedSize) / 1024 / 1024).toFixed(1)}MB / 300MB</Text>
+              <View style={styles.confirmActions}>
+                <GhostButton icon={X} label="取消" onPress={() => setShowRecordingPicker(false)} />
+                <PrimaryButton
+                  icon={Plus}
+                  label={pickerLoading ? "加载中" : `添加${selectedRecordingIds.length ? `（${selectedRecordingIds.length}）` : ""}`}
+                  disabled={pickerLoading || selectedRecordingIds.length === 0}
+                  onPress={() => {
+                    setPickerLoading(true);
+                    void onAddRecordings(selectedRecordingIds)
+                      .then(() => {
+                        setShowRecordingPicker(false);
+                        setSelectedRecordingIds([]);
+                        onNotice("录音已添加", "可以继续调整顺序，确认后再开始转写。");
+                      })
+                      .catch((error) => onNotice("录音添加失败", error instanceof Error ? error.message : "请稍后重试。"))
+                      .finally(() => setPickerLoading(false));
+                  }}
+                />
               </View>
             </View>
           </View>
@@ -8933,6 +9098,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  waitingChoiceBadge: {
+    flexShrink: 0,
+    alignSelf: "center",
+    minHeight: 28,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: "#F5DED5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  waitingChoiceText: {
+    color: colors.clayDark,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "700",
+  },
   selectionCircle: {
     width: 20,
     height: 20,
@@ -8945,6 +9126,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 12,
+  },
+  addExistingRecordingButton: {
+    minHeight: 48,
+    paddingHorizontal: 14,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  addExistingRecordingText: {
+    flex: 1,
+    color: colors.clayDark,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  addExistingRecordingMeta: {
+    color: colors.muted,
+    fontSize: 11,
+    fontWeight: "700",
   },
   actionGrid: {
     flexDirection: "row",
@@ -9342,6 +9545,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
     ...shadow.soft,
+  },
+  compactAudioPlayer: {
+    width: "100%",
+    marginTop: 7,
+    overflow: "hidden",
+  },
+  compactAudioUnavailable: {
+    minHeight: 34,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSoft,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   audioPlayButton: {
     width: 48,
@@ -10645,6 +10862,54 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     gap: 12,
     ...shadow.soft,
+  },
+  recordingPickerCard: {
+    maxHeight: "82%",
+  },
+  recordingPickerHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  recordingPickerList: {
+    maxHeight: 320,
+  },
+  recordingPickerListContent: {
+    gap: 8,
+  },
+  recordingPickerItem: {
+    minHeight: 58,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: "transparent",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  recordingPickerItemSelected: {
+    backgroundColor: "#F7EDE4",
+    borderColor: "#E7B9A8",
+  },
+  recordingPickerItemDisabled: {
+    opacity: 0.42,
+  },
+  recordingPickerCheck: {
+    borderWidth: 0,
+  },
+  recordingPickerEmpty: {
+    minHeight: 116,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  recordingPickerSummary: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
   },
   confirmHeader: {
     flexDirection: "row",

@@ -545,6 +545,43 @@ def test_multiple_segments_can_reorder_then_transcribe_as_one_recording() -> Non
     assert locked.status_code == 409
 
 
+def test_pending_recording_group_can_append_an_unarchived_recording() -> None:
+    storage = FakeStorage()
+    api = TestClient(create_app(storage=storage))
+    session_id = create_empty_client_session(api)
+    first_id, _ = create_single_file_recording(
+        api, storage, title="第一条录音", filename="first.m4a", duration_seconds=60, audio=b"first"
+    )
+    second_id, _ = create_single_file_recording(
+        api, storage, title="后补录音", filename="second.m4a", duration_seconds=30, audio=b"second"
+    )
+    first_archive = api.post(
+        "/api/v1/recordings/archive-batch",
+        headers=auth_headers(),
+        json={
+            "recording_ids": [first_id],
+            "profile_type": "client",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": session_id,
+        },
+    )
+    assert first_archive.status_code == 200
+
+    appended = api.post(
+        "/api/v1/recordings/archive-batch",
+        headers=auth_headers(),
+        json={
+            "recording_ids": [second_id],
+            "profile_type": "client",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": session_id,
+        },
+    )
+
+    assert appended.status_code == 200
+    assert [item["filename"] for item in appended.json()["segments"]] == ["first.m4a", "second.m4a"]
+
+
 def test_segment_processing_requires_at_least_one_segment() -> None:
     storage = FakeStorage()
     api = TestClient(create_app(storage=storage))

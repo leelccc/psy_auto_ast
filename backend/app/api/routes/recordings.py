@@ -1274,8 +1274,13 @@ def create_recordings_router(
         ))
         if session is None:
             raise ApiError(404, "session_not_found", "记录不存在。")
-        if database.scalar(select(Recording.id).where(Recording.session_id == session.id)):
-            raise ApiError(409, "session_recording_already_exists", "该次记录已有录音。")
+        existing = list(database.scalars(
+            select(Recording)
+            .where(Recording.session_id == session.id, Recording.user_id == user_id)
+            .order_by(Recording.session_index, Recording.created_at, Recording.id)
+        ).all())
+        if any(item.ai_status != "pending" for item in existing):
+            raise ApiError(409, "recording_not_pending", "转写开始后不能再添加录音。")
         recordings = list(database.scalars(select(Recording).where(
             Recording.id.in_(payload.recording_ids),
             Recording.user_id == user_id,
@@ -1291,17 +1296,24 @@ def create_recordings_router(
         segments = [group_segments(database, item) for item in ordered]
         if any(len(items) != 1 for items in segments):
             raise ApiError(422, "recording_single_file_required", "每条录音必须且只能包含一个音频文件。")
-        if sum(items[0].size_bytes for items in segments) > 300 * 1024 * 1024:
+        if len(existing) + len(ordered) > 5:
+            raise ApiError(422, "recording_count_exceeded", "一次记录最多包含 5 条录音。")
+        existing_group_segments = group_segments(database, existing[0]) if existing else []
+        if len(existing_group_segments) != len(existing):
+            raise ApiError(422, "recording_single_file_required", "每条录音必须且只能包含一个音频文件。")
+        total_size = sum(item.size_bytes for item in existing_group_segments)
+        total_size += sum(items[0].size_bytes for items in segments)
+        if total_size > 300 * 1024 * 1024:
             raise ApiError(422, "recording_total_size_exceeded", "所选录音总大小不能超过 300MB。")
         now = utc_now()
-        for position, item in enumerate(ordered, 1):
+        for position, item in enumerate(ordered, len(existing) + 1):
             item.session_id = session.id
             item.session_index = position
             item.archive_status = "archived"
             item.updated_at = now
             upsert_duration_entry(database, item, profile_type=profile.type)
         database.commit()
-        return serialize_recording(database, ordered[0])
+        return serialize_recording(database, existing[0] if existing else ordered[0])
 
     @router.get("/recordings/{recording_id}/transcript")
     def get_transcript(
