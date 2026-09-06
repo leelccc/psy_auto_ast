@@ -144,6 +144,20 @@ def test_bailian_provider_can_send_a_presigned_minio_url() -> None:
     assert result.segments[0]["end_ms"] == 2400
 
 
+def test_adjacent_sentences_from_the_same_speaker_become_one_turn() -> None:
+    merged = BailianRecordingAIProvider.merge_adjacent_speaker_segments([
+        {"start_ms": 0, "end_ms": 3_000, "speaker_key": "speaker_0", "text": "第一句。"},
+        {"start_ms": 3_500, "end_ms": 7_000, "speaker_key": "speaker_0", "text": "还是同一次发言。"},
+        {"start_ms": 7_200, "end_ms": 9_000, "speaker_key": "speaker_1", "text": "另一人回应。"},
+        {"start_ms": 9_300, "end_ms": 12_000, "speaker_key": "speaker_0", "text": "再次发言。"},
+    ])
+
+    assert len(merged) == 3
+    assert merged[0]["text"] == "第一句。 还是同一次发言。"
+    assert merged[0]["end_ms"] == 7_000
+    assert merged[1]["speaker_key"] == "speaker_1"
+
+
 def test_bailian_provider_rejects_base64_audio_over_model_limit() -> None:
     provider = BailianRecordingAIProvider(
         api_key="test-key",

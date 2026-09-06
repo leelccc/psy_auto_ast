@@ -337,7 +337,34 @@ class BailianRecordingAIProvider:
                 "speaker_key": "speaker_1",
                 "text": full_text,
             }]
+        else:
+            segments = BailianRecordingAIProvider.merge_adjacent_speaker_segments(segments)
         return full_text, speakers, segments
+
+    @staticmethod
+    def merge_adjacent_speaker_segments(
+        segments: list[dict[str, object]],
+        max_pause_ms: int = 2_000,
+    ) -> list[dict[str, object]]:
+        """把同一说话人的连续句子合并为一次完整发言。"""
+        merged: list[dict[str, object]] = []
+        for raw in sorted(segments, key=lambda item: int(item.get("start_ms", 0))):
+            item = dict(raw)
+            text = str(item.get("text", "")).strip()
+            if not text:
+                continue
+            if merged:
+                previous = merged[-1]
+                gap = int(item.get("start_ms", 0)) - int(previous.get("end_ms", 0))
+                if item.get("speaker_key") == previous.get("speaker_key") and gap <= max_pause_ms:
+                    previous["text"] = f"{str(previous.get('text', '')).rstrip()} {text}".strip()
+                    previous["end_ms"] = max(
+                        int(previous.get("end_ms", 0)),
+                        int(item.get("end_ms", 0)),
+                    )
+                    continue
+            merged.append(item)
+        return merged
 
     def _summarize(
         self,

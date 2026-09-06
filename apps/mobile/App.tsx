@@ -180,7 +180,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0906-2";
+const BUILD_TAG = "0906-3";
 
 const INPUT_LIMITS = {
   email: 254,
@@ -266,13 +266,15 @@ type ProfileCreateInput = {
   notes: string;
 };
 type EditableRecordSection = { title: string; content: string };
-type EditableChapter = { time: string; title: string; current?: boolean };
+type EditableChapter = { time: string; title: string; current?: boolean; startMs?: number; endMs?: number };
 type EditableTranscriptTurn = {
   id?: string;
   speakerKey?: string;
   time: string;
   speaker: string;
   text: string;
+  startMs?: number;
+  endMs?: number;
 };
 type RecordingItem = {
   id?: string;
@@ -761,12 +763,15 @@ export default function App() {
     setRecordingSummary(summary.mainSummary);
     setRecordingChapters(summary.chapterOverview.map((chapter, index) => {
       const startMs = Number(chapter.start_ms ?? 0);
+      const rawEndMs = Number(chapter.end_ms ?? 0);
       return {
         time: typeof chapter.time === "string"
           ? chapter.time
           : formatDuration(Math.max(0, Math.floor(startMs / 1000))),
         title: String(chapter.title ?? chapter.label ?? `章节 ${index + 1}`),
         current: index === 0,
+        startMs,
+        endMs: rawEndMs > startMs ? rawEndMs : undefined,
       };
     }));
     setRecordingTurns(transcript.segments.map((segment) => ({
@@ -775,6 +780,8 @@ export default function App() {
       time: formatDuration(Math.floor(segment.start_ms / 1000)),
       speaker: segment.speaker_label,
       text: segment.text,
+      startMs: segment.start_ms,
+      endMs: segment.end_ms,
     })));
     setRecordingHasEdits(summary.manualEdited || transcript.manualEdited);
   };
@@ -2050,6 +2057,7 @@ export default function App() {
                     recordingSummary,
                     recordingChapters.map((chapter) => ({
                       start_ms: parseDuration(chapter.time) * 1000,
+                      end_ms: chapter.endMs,
                       title: chapter.title,
                     })),
                   );
@@ -5106,7 +5114,19 @@ function RecordingDetailScreen({
   const [confirmRegeneration, setConfirmRegeneration] = useState(false);
   const [exportReady, setExportReady] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [selectedChapterIndex, setSelectedChapterIndex] = useState(0);
   const regenerationWarning = decideRecordingRegeneration(true, false).message;
+  const activeChapterIndex = Math.min(selectedChapterIndex, Math.max(0, chapters.length - 1));
+  const selectedChapter = chapters[activeChapterIndex];
+  const selectedStartMs = selectedChapter?.startMs ?? parseDuration(selectedChapter?.time ?? "00:00") * 1000;
+  const selectedEndMs = selectedChapter?.endMs
+    ?? chapters[activeChapterIndex + 1]?.startMs
+    ?? parseDuration(chapters[activeChapterIndex + 1]?.time ?? recording.duration) * 1000;
+  const chapterTurns = turns.filter((turn) => (
+    (turn.startMs ?? parseDuration(turn.time) * 1000) < selectedEndMs
+    && (turn.endMs ?? turn.startMs ?? parseDuration(turn.time) * 1000) >= selectedStartMs
+  ));
+  const previewTurns = chapterTurns.slice(0, 3);
   return (
     <View style={styles.stack}>
       <View style={styles.noticeCard}>
@@ -5167,31 +5187,44 @@ function RecordingDetailScreen({
 
       <SectionHeader title="章节速览" action="编辑" onAction={onOpenChapters} />
       <View style={styles.cardStack}>
-        {chapters.map((item) => (
-          <ChapterRow key={item.time} time={item.time} title={item.title} current={item.current} />
+        {chapters.map((item, index) => (
+          <ChapterRow
+            key={`${item.time}-${index}`}
+            time={item.time}
+            title={item.title}
+            current={index === activeChapterIndex}
+            onPress={() => setSelectedChapterIndex(index)}
+          />
         ))}
       </View>
 
-      <SectionHeader title="转写片段" action="完整文本" onAction={onOpenTranscript} />
+      <SectionHeader title="本章转写预览" action="完整文本" onAction={onOpenTranscript} />
       <View style={styles.transcriptTools}>
         <View style={styles.transcriptToolHeader}>
-          <Text style={styles.transcriptToolTitle}>转写校对</Text>
-          <Badge label="3 处待确认" tone="warm" />
+          <Text style={styles.transcriptToolTitle}>{selectedChapter?.title ?? "录音内容"}</Text>
+          <Badge label={`${chapterTurns.length} 次发言`} tone="blue" />
         </View>
         <View style={styles.speakerRow}>
           {speakers.map((speaker) => (
             <Text key={speaker.key} style={styles.speakerChip}>{speaker.label}</Text>
           ))}
         </View>
-        <Text style={styles.transcriptToolCopy}>可编辑发言人名称、逐段校对文本。修改后会同步影响纪要和本次记录草稿。</Text>
+        <Text style={styles.transcriptToolCopy}>这里只预览当前章节。进入完整文本后可修改发言人名称并逐段校对。</Text>
       </View>
       <View style={styles.transcriptCard}>
-        {turns.map((item) => (
-          <View key={item.time} style={styles.transcriptTurn}>
+        {previewTurns.map((item, index) => (
+          <View key={`${item.id ?? item.time}-${index}`} style={styles.transcriptTurn}>
             <Text style={styles.transcriptSpeaker}>{item.speaker} · {item.time}</Text>
-            <Text style={styles.transcriptText}>{item.text}</Text>
+            <Text style={styles.transcriptText} numberOfLines={4}>{item.text}</Text>
           </View>
         ))}
+        {previewTurns.length === 0 ? <Text style={styles.transcriptToolCopy}>本章暂无可预览的转写内容。</Text> : null}
+        {chapterTurns.length > previewTurns.length ? (
+          <TouchableOpacity style={styles.transcriptMoreButton} activeOpacity={0.78} onPress={onOpenTranscript}>
+            <Text style={styles.transcriptMoreText}>还有 {chapterTurns.length - previewTurns.length} 次发言，查看完整转写</Text>
+            <ChevronRight size={17} color={colors.clayDark} />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       <View style={styles.exportPanel}>
@@ -8578,16 +8611,16 @@ function DataRow({ icon: Icon, title, value, onPress }: { icon: typeof FileText;
   );
 }
 
-function ChapterRow({ time, title, current }: { time: string; title: string; current?: boolean }) {
+function ChapterRow({ time, title, current, onPress }: { time: string; title: string; current?: boolean; onPress?: () => void }) {
   return (
-    <View style={[styles.chapterRow, current && styles.chapterRowCurrent]}>
+    <TouchableOpacity style={[styles.chapterRow, current && styles.chapterRowCurrent]} activeOpacity={0.78} onPress={onPress}>
       <Text style={styles.chapterTime}>{time}</Text>
       <View style={styles.listBody}>
         <Text style={styles.listTitle}>{title}</Text>
         <Text style={styles.listMeta}>{current ? "当前定位章节" : "点击可跳转到对应转写"}</Text>
       </View>
       {current ? <Badge label="当前" tone="blue" /> : null}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -10553,6 +10586,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
     fontWeight: "600",
+  },
+  transcriptMoreButton: {
+    minHeight: 42,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  transcriptMoreText: {
+    flex: 1,
+    color: colors.clayDark,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
   },
   exportPanel: {
     borderRadius: radius.sm,
