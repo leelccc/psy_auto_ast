@@ -184,9 +184,25 @@ class DeterministicAIProvider:
         question: str,
         context_labels: list[str],
     ) -> str:
+        supervision_terms = (
+            "咨询", "来访", "督导", "个案", "治疗", "干预", "伦理", "风险", "危机",
+            "移情", "反移情", "关系", "情绪", "心理", "评估", "会谈", "诊断",
+        )
+        clearly_unrelated_terms = (
+            "写代码", "编程", "股票", "炒股", "天气", "旅游攻略", "做饭", "菜谱",
+            "体育比分", "娱乐八卦", "数学题", "翻译合同",
+        )
+        if any(term in question for term in clearly_unrelated_terms) and not any(
+            term in question for term in supervision_terms
+        ):
+            return (
+                "这个问题超出了心理咨询督导的工作范围，我不提供该领域的建议。"
+                "如果它与某次咨询有关，请补充来访者情境、你的困惑，以及希望讨论的咨询目标，"
+                "我可以从案例概念化、咨询关系、伦理风险或技术选择角度继续协助。"
+            )
         context = "、".join(context_labels) if context_labels else "未引用档案资料"
         return (
-            f"基于{context}，建议把督导问题分成三层：先澄清可观察事实，"
-            "再识别咨询师自身反应，最后明确风险评估与下一步可验证的工作假设。"
+            f"作为心理咨询实践督导助手，我将基于{context}，把问题分成三层：先澄清可观察事实，"
+            "再识别咨询师自身反应，最后明确伦理与风险评估，以及下一步可验证的工作假设。"
             f"当前问题是：{question}"
         )

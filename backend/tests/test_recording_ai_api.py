@@ -566,6 +566,12 @@ def test_pending_recording_group_can_append_an_unarchived_recording() -> None:
         },
     )
     assert first_archive.status_code == 200
+    sessions = api.get(
+        f"/api/v1/profiles/{CHEN_PROFILE_ID}/sessions",
+        headers=profile_access_headers(api),
+    )
+    selected_session = next(item for item in sessions.json()["items"] if item["id"] == session_id)
+    assert selected_session["recording_status"] == "pending"
 
     appended = api.post(
         "/api/v1/recordings/archive-batch",

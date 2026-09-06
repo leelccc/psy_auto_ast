@@ -813,7 +813,11 @@ def create_recordings_router(
     ) -> dict[str, object]:
         query = select(Recording).where(
             Recording.user_id == user_id,
-            or_(Recording.session_id.is_(None), Recording.session_index == 1),
+            or_(
+                Recording.session_id.is_(None),
+                Recording.session_index == 1,
+                Recording.session_index.is_(None),
+            ),
         )
         if archive_status:
             query = query.where(Recording.archive_status == archive_status)

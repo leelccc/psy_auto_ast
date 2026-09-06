@@ -225,9 +225,11 @@ test("backend session response maps without frontend sequence generation", () =>
     summary: "后端记录",
     tags: ["跟进"],
     record_status: "draft",
+    recording_status: "completed",
   });
   assert.equal(session.sequence, 7);
   assert.equal(session.record, "草稿");
+  assert.equal(session.recording, "转写完成");
 });
 
 test("next session formatter marks past dates as overdue", () => {

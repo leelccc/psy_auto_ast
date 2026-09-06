@@ -10,6 +10,7 @@ type BackendSession = {
   summary: string;
   tags: string[];
   record_status: string;
+  recording_status?: string;
 };
 
 export function mapBackendSession(session: BackendSession): SessionHistoryItem {
@@ -19,7 +20,15 @@ export function mapBackendSession(session: BackendSession): SessionHistoryItem {
     occurredAt: session.occurred_at,
     summary: session.summary,
     tags: session.tags,
-    recording: "未添加",
+    recording: session.recording_status === "completed"
+      ? "转写完成"
+      : session.recording_status === "processing"
+        ? "生成中"
+        : session.recording_status === "failed"
+          ? "处理失败"
+          : session.recording_status === "pending"
+            ? "待处理"
+            : "未添加",
     record: session.record_status === "formal" ? "正式版" : session.record_status === "draft" ? "草稿" : "待生成",
     scale: "未上传",
     homework: "未添加",

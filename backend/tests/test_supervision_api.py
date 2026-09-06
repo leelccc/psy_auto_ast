@@ -108,3 +108,24 @@ def test_supervision_context_messages_citations_risk_and_deletion() -> None:
         assert database.query(SupervisionContextRef).filter_by(
             conversation_id=conversation_id
         ).count() == 0
+
+
+def test_supervision_redirects_clearly_unrelated_questions() -> None:
+    api = TestClient(create_app())
+    created = api.post(
+        "/api/v1/supervision/conversations",
+        headers=auth_headers(),
+        json={"title": "范围测试"},
+    )
+    response = api.post(
+        f"/api/v1/supervision/conversations/{created.json()['id']}/messages",
+        headers=auth_headers(),
+        json={"content": "请帮我写代码并推荐股票"},
+    )
+    assert response.status_code == 202
+    detail = api.get(
+        f"/api/v1/supervision/conversations/{created.json()['id']}",
+        headers=auth_headers(),
+    )
+    assistant = [item for item in detail.json()["messages"] if item["role"] == "assistant"][-1]
+    assert "超出了心理咨询督导" in assistant["content"]

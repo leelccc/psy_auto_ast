@@ -180,7 +180,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0906-1";
+const BUILD_TAG = "0906-2";
 
 const INPUT_LIMITS = {
   email: 254,
@@ -1161,7 +1161,11 @@ export default function App() {
   };
   const openMaterials = async (category: MaterialCategory, sessionId: string, returnView: QuickView = "profileDetail") => {
     if (category === "recording") {
-      const sessionRecording = findRecordingForSession(recordingItems, sessionId);
+      const freshRecordings = await recordingService.list({ pageSize: 100 })
+        .then((response) => response.items.map(mapRecordingItem))
+        .catch(() => recordingItems);
+      setRecordingItems(freshRecordings);
+      const sessionRecording = findRecordingForSession(freshRecordings, sessionId);
       if (sessionRecording) {
         await openRecording(sessionRecording, returnView);
         return;
@@ -2258,7 +2262,11 @@ export default function App() {
               await reportService.update(activeRecordReportId, {
                 content: { blocks: recordEditorSections },
               });
-              await reportService.saveFormal(activeRecordReportId, true);
+              const report = await reportService.saveFormal(activeRecordReportId, true);
+              setActiveRecordReport(report);
+              setRecordEditorSections(sectionsFromReport(report, true));
+              setRecordFormal(true);
+              setRecordDirty(false);
               setSessionHistory((current) => current.map((session) => (
                 session.id === activeSessionId ? { ...session, record: "正式版" } : session
               )));
@@ -5843,7 +5851,6 @@ function RecordEditorScreen({
             if (pendingAction) return;
             setPendingAction("save");
             void onSaveFormal().then(() => {
-              onFormalChange(true);
               onDirtyChange(false);
               onNotice(`${recordType}已保存为正式版`, `本次${recordType}已进入档案；后续修改需先复制为草稿。`);
             }).catch((error) => onNotice("正式版保存失败", error instanceof Error ? error.message : "请稍后重试。"))
@@ -6558,8 +6565,12 @@ function SupervisionScreen({
       if (items[0]) {
         setConversation(items[0]);
       } else {
-        setConversation(null);
-        setShowConversations(true);
+        void supervisionService.createConversation("新的督导对话").then((created) => {
+          setConversations([created]);
+          setConversation(created);
+        }).catch((error) => {
+          onNotice("督导会话创建失败", error instanceof Error ? error.message : "请稍后重试。");
+        });
       }
     }).catch((error) => {
       onNotice("督导会话加载失败", error instanceof Error ? error.message : "请稍后重试。");
@@ -6660,30 +6671,44 @@ function SupervisionScreen({
   const composerDisabled = !input.trim() || generating || !conversation || composerBlockedByProfileAccess;
 
   return (
-    <View style={styles.stack}>
-      <View style={styles.aiPanel}>
-        <Sparkles size={24} color={colors.clayDark} />
-        <Text style={styles.aiTitle}>{selectedCount > 0 ? `已添加 ${selectedCount} 项资料` : "本次会话未添加资料"}</Text>
-        <Text style={styles.aiCopy}>{selectedCount > 0 ? "AI 仅可读取下方勾选资料，回答会逐项显示引用来源。" : "AI 不会读取任何档案内容。添加资料后，回答会显示引用来源。"}</Text>
-        <View style={styles.inlineActions}>
-          <GhostButton
-            icon={Plus}
-            label={showContexts ? "收起资料" : "添加资料"}
-            onPress={() => {
-              if (!conversation) {
-                setShowConversations(true);
-                onNotice("请先创建会话", "创建督导会话后才能添加档案资料。");
-                return;
-              }
-              setShowContexts((current) => !current);
-            }}
-          />
-          <GhostButton icon={History} label={showConversations ? "返回会话" : "会话列表"} onPress={() => setShowConversations((current) => !current)} />
+    <View style={styles.supervisionChatShell}>
+      <View style={styles.supervisionAgentHeader}>
+        <View style={styles.supervisionAgentAvatar}>
+          <ShieldCheck size={22} color="#FFF9F3" />
         </View>
+        <View style={styles.listBody}>
+          <Text style={styles.supervisionAgentName}>督导助手</Text>
+          <Text style={styles.supervisionAgentRole}>心理咨询实践督导 · 不替代现实督导与危机处置</Text>
+        </View>
+        <TouchableOpacity style={styles.supervisionHeaderButton} onPress={() => setShowConversations(true)} accessibilityLabel="查看督导会话">
+          <History size={19} color={colors.clayDark} />
+        </TouchableOpacity>
       </View>
 
+      {selectedCount > 0 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.supervisionContextChips}>
+          {conversation?.contextRefs.map((context) => (
+            <View key={context.id} style={styles.supervisionContextChip}>
+              <UserRound size={13} color={colors.sageDark} />
+              <Text style={styles.supervisionContextChipText}>{context.label}</Text>
+            </View>
+          ))}
+        </ScrollView>
+      ) : null}
+
       {showContexts ? (
-        <>
+        <Modal transparent visible animationType="slide" onRequestClose={() => setShowContexts(false)}>
+          <View style={styles.datePickerBackdrop}>
+            <View style={[styles.confirmCard, styles.supervisionPickerCard]}>
+              <View style={styles.recordingPickerHeader}>
+                <View style={styles.listBody}>
+                  <Text style={styles.confirmTitle}>选择讨论对象</Text>
+                  <Text style={styles.confirmCopy}>只读取你明确选择的档案，回答会标明引用来源。</Text>
+                </View>
+                <TouchableOpacity onPress={() => setShowContexts(false)} accessibilityLabel="关闭对象选择">
+                  <X size={20} color={colors.muted} />
+                </TouchableOpacity>
+              </View>
           {contextUnlock ? (
             <View style={styles.inlineCreateCard}>
               <Text style={styles.formPreviewTitle}>
@@ -6757,22 +6782,33 @@ function SupervisionScreen({
               </View>
             </View>
           ) : null}
-          <View style={styles.consentList}>
-            {contextOptions.map((context) => (
-              <ConsentItem
-                key={context.id}
-                title={context.title}
-                meta={`${context.type} · 仅用于本次会话`}
-                selected={conversation?.contextRefs.some((item) => item.resourceId === context.id) ?? false}
-                onPress={() => void toggleContext(context)}
-              />
-            ))}
+              <ScrollView style={styles.supervisionPickerList} contentContainerStyle={styles.consentList}>
+                {contextOptions.map((context) => (
+                  <ConsentItem
+                    key={context.id}
+                    title={context.title}
+                    meta={`${context.type} · 仅用于本次会话`}
+                    selected={conversation?.contextRefs.some((item) => item.resourceId === context.id) ?? false}
+                    onPress={() => void toggleContext(context)}
+                  />
+                ))}
+              </ScrollView>
+              <PrimaryButton icon={CheckCircle2} label="完成选择" onPress={() => setShowContexts(false)} wide />
+            </View>
           </View>
-        </>
+        </Modal>
       ) : null}
 
       {showConversations ? (
-        <View style={styles.cardStack}>
+        <Modal transparent visible animationType="slide" onRequestClose={() => setShowConversations(false)}>
+          <View style={styles.datePickerBackdrop}>
+            <View style={[styles.confirmCard, styles.supervisionPickerCard]}>
+              <View style={styles.recordingPickerHeader}>
+                <Text style={styles.confirmTitle}>督导会话</Text>
+                <TouchableOpacity onPress={() => setShowConversations(false)} accessibilityLabel="关闭会话列表">
+                  <X size={20} color={colors.muted} />
+                </TouchableOpacity>
+              </View>
           <View style={styles.inlineCreateCard}>
             <Text style={styles.formPreviewTitle}>新建督导会话</Text>
             <Text style={styles.listMeta}>每个会话的资料授权、消息和到期时间彼此独立。</Text>
@@ -6804,6 +6840,7 @@ function SupervisionScreen({
               <Text style={styles.emptySearchCopy}>填写上方名称即可开始一个新的独立会话。</Text>
             </View>
           ) : null}
+          <ScrollView style={styles.supervisionPickerList} contentContainerStyle={styles.cardStack}>
           {conversations.map((item) => (
             <View key={item.id} style={styles.conversationCard}>
               <TouchableOpacity style={styles.conversationSelect} activeOpacity={0.78} onPress={() => {
@@ -6843,9 +6880,19 @@ function SupervisionScreen({
               </TouchableOpacity>
             </View>
           ))}
-        </View>
-      ) : (
-        <>
+          </ScrollView>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+
+      <View style={styles.supervisionMessages}>
+          {(conversation?.messages.length ?? 0) === 0 ? (
+            <View style={styles.supervisionWelcome}>
+              <Text style={styles.supervisionWelcomeTitle}>我们从哪里开始？</Text>
+              <Text style={styles.supervisionWelcomeCopy}>你可以直接描述咨询中的卡点，或点击下方“+”选择一位来访者。我会围绕案例概念化、咨询关系、技术选择、伦理和风险与你讨论。</Text>
+            </View>
+          ) : null}
           {(conversation?.messages ?? []).map((message) => (
             <View key={message.id} style={styles.chatMessageGroup}>
               <ChatBubble align={chatBubbleAlignForRole(message.role)} text={message.content} />
@@ -6863,14 +6910,26 @@ function SupervisionScreen({
               <Text style={styles.listMeta}>正在基于 {selectedCount} 项已选资料生成回答</Text>
             </View>
           ) : null}
-        </>
-      )}
+      </View>
       <View style={styles.composer}>
+        <TouchableOpacity
+          style={styles.composerAddButton}
+          accessibilityLabel="选择讨论对象"
+          onPress={() => {
+            if (!conversation) {
+              onNotice("会话正在准备", "请稍后再选择讨论对象。");
+              return;
+            }
+            setShowContexts(true);
+          }}
+        >
+          <Plus size={21} color={colors.clayDark} />
+        </TouchableOpacity>
         <TextInput
           value={input}
           onChangeText={setInput}
           editable={!generating && !composerBlockedByProfileAccess}
-          placeholder={composerBlockedByProfileAccess ? "请先验证档案密码" : "输入想讨论的主题"}
+          placeholder={composerBlockedByProfileAccess ? "请先验证档案密码" : "描述你想讨论的咨询问题…"}
           placeholderTextColor={colors.subtle}
           style={styles.composerInput}
         />
@@ -11052,6 +11111,97 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "600",
   },
+  supervisionChatShell: {
+    minHeight: 560,
+    gap: 12,
+  },
+  supervisionAgentHeader: {
+    minHeight: 64,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+  },
+  supervisionAgentAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    backgroundColor: colors.sageDark,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  supervisionAgentName: {
+    color: colors.ink,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "700",
+  },
+  supervisionAgentRole: {
+    color: colors.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "600",
+  },
+  supervisionHeaderButton: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  supervisionContextChips: {
+    gap: 7,
+    paddingVertical: 2,
+  },
+  supervisionContextChip: {
+    minHeight: 30,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: "#E4EFE9",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  supervisionContextChipText: {
+    color: colors.sageDark,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  supervisionMessages: {
+    flex: 1,
+    minHeight: 360,
+    gap: 12,
+    justifyContent: "flex-end",
+  },
+  supervisionWelcome: {
+    alignSelf: "center",
+    maxWidth: 330,
+    paddingHorizontal: 18,
+    gap: 8,
+  },
+  supervisionWelcomeTitle: {
+    color: colors.ink,
+    fontSize: 20,
+    lineHeight: 27,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  supervisionWelcomeCopy: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  supervisionPickerCard: {
+    maxHeight: "84%",
+  },
+  supervisionPickerList: {
+    maxHeight: 360,
+  },
   chatBubble: {
     maxWidth: "82%",
     borderRadius: radius.sm,
@@ -11082,8 +11232,17 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
     flexDirection: "row",
     alignItems: "center",
-    paddingLeft: 14,
+    paddingLeft: 6,
     paddingRight: 6,
+    gap: 6,
+  },
+  composerAddButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
   },
   composerText: {
     flex: 1,

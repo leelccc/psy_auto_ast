@@ -28,6 +28,7 @@ from app.api.routes.supervision import router as supervision_router
 from app.core.config import DEV_JWT_SECRET, get_settings
 from app.db.session import get_db
 from app.models import Profile as DatabaseProfile
+from app.models import Recording as DatabaseRecording
 from app.models import Report
 from app.models import SessionRecord
 from app.services.calendar import sync_profile_next_session_event
@@ -435,9 +436,14 @@ def create_app(
             .order_by(SessionRecord.occurred_at.desc())
         ).all()
         status_by_session = derive_record_statuses(database, list(items), user_id)
+        recording_status_by_session = derive_recording_statuses(database, list(items), user_id)
         return {
             "items": [
-                serialize_session(session, status_by_session.get(session.id, "pending"))
+                serialize_session(
+                    session,
+                    status_by_session.get(session.id, "pending"),
+                    recording_status_by_session.get(session.id, "none"),
+                )
                 for session in items
             ]
         }
@@ -535,6 +541,7 @@ def create_app(
         return serialize_session(
             session,
             derive_record_statuses(database, [session], user_id).get(session.id, "pending"),
+            derive_recording_statuses(database, [session], user_id).get(session.id, "none"),
         )
 
     @app.delete("/api/v1/sessions/{session_id}")
@@ -625,9 +632,34 @@ def derive_record_statuses(
     return status_by_session
 
 
+def derive_recording_statuses(
+    database: DatabaseSession,
+    sessions: list[SessionRecord],
+    user_id: str,
+) -> dict[str, str]:
+    if not sessions:
+        return {}
+    rows = database.execute(
+        select(DatabaseRecording.session_id, DatabaseRecording.ai_status).where(
+            DatabaseRecording.user_id == user_id,
+            DatabaseRecording.session_id.in_([session.id for session in sessions]),
+        )
+    ).all()
+    priority = {"failed": 4, "processing": 3, "completed": 2, "pending": 1}
+    status_by_session: dict[str, str] = {}
+    for session_id, ai_status in rows:
+        if not session_id:
+            continue
+        current = status_by_session.get(session_id)
+        if current is None or priority.get(ai_status, 0) > priority.get(current, 0):
+            status_by_session[session_id] = ai_status
+    return status_by_session
+
+
 def serialize_session(
     session: SessionRecord,
     record_status: str | None = None,
+    recording_status: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": session.id,
@@ -641,6 +673,7 @@ def serialize_session(
         "summary": session.summary,
         "tags": session.tags,
         "record_status": record_status or "pending",
+        "recording_status": recording_status or "none",
         "created_at": iso(session.created_at),
         "updated_at": iso(session.updated_at),
     }
