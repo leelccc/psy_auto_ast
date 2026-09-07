@@ -626,7 +626,9 @@ App Store 和 Google Play 的正式签名仍需要项目所有者自己的 Apple
 
 ## 生产部署
 
-生产服务器：`47.96.89.215`（Ubuntu 24.04，Docker + compose v2），工作目录 `/opt/psy_auto_ast/`。完整上线前清单见 `docs/production-deployment.md`。下面是可直接照抄的「改完代码 → 上服务器」速查。
+> **部署命令已统一迁移到 `docs/deployment-runbook.md`。后端、Web、数据库迁移、线上验收和本地 APK 构建均以该文件为准。下方内容包含历史拓扑说明；如有冲突，不要照抄旧命令。**
+
+生产服务器：`47.96.89.215`（Ubuntu 24.04，Docker + compose v2），工作目录 `/opt/psy_auto_ast/`。完整上线前清单见 `docs/production-deployment.md`。下方为历史速查与拓扑背景，不再作为当前操作手册。
 
 ### 服务器拓扑（现状）
 
