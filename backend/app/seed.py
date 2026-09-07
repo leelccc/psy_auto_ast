@@ -288,6 +288,7 @@ def seed_demo_data(database: Session, storage: Storage | None = None) -> None:
             id=TRANSCRIPT_6_ID,
             user_id=DEMO_USER_ID,
             recording_id=RECORDING_6_ID,
+            session_id=SESSION_6_ID,
             speakers_json={"speaker_1": "咨询师", "speaker_2": "来访者"},
             segments_json=transcript_segments,
             manual_edited=False,
@@ -301,6 +302,7 @@ def seed_demo_data(database: Session, storage: Storage | None = None) -> None:
             id=SUMMARY_6_ID,
             user_id=DEMO_USER_ID,
             recording_id=RECORDING_6_ID,
+            session_id=SESSION_6_ID,
             main_summary="本次围绕睡眠下降、工作评价焦虑和关系议题展开。",
             chapter_overview=[
                 {"title": "近况回顾", "start_ms": 0, "end_ms": 120000},

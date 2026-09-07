@@ -180,7 +180,7 @@ LogBox.ignoreLogs(["SafeAreaView has been deprecated"]);
 
 // 每次发版手动递增，用于在手机端确认实际安装的是哪一次构建。
 // 出现「改了代码但手机上还是旧样子」时，先看这个标识。
-const BUILD_TAG = "0906-3";
+const BUILD_TAG = "0907-1";
 
 const INPUT_LIMITS = {
   email: 254,
@@ -401,7 +401,7 @@ function reportSourceGroups(sources: ReportSource[]) {
   const labels = new Set<string>();
   sources.forEach((source) => {
     if (source.resourceType === "session") labels.add("本次摘要");
-    else if (source.resourceType === "transcript" || source.resourceType === "recording_summary") labels.add("录音");
+    else if (source.resourceType === "recording_summary") labels.add("录音纪要");
     else if (source.resourceType === "profile") labels.add("基础档案");
     else if (source.resourceType === "report") labels.add("历史记录/报告");
     else if (source.label.includes("量表") || source.label.includes("scale")) labels.add("量表");
@@ -7987,7 +7987,7 @@ function ReportGenerationScreen({
         <View style={styles.emptySearchCard}>
           <Clock3 size={20} color={colors.subtle} />
           <Text style={styles.emptySearchTitle}>正在读取可用资料</Text>
-          <Text style={styles.emptySearchCopy}>正在确认本次历程可用于生成的录音、纪要、量表与作业。</Text>
+          <Text style={styles.emptySearchCopy}>正在确认本次历程可用于生成的录音纪要、量表与作业。</Text>
         </View>
       </View>
     );
@@ -8049,7 +8049,7 @@ function ReportGenerationScreen({
           <CircleAlert size={20} color={colors.danger} />
           <Text style={styles.emptySearchTitle}>暂无可用资料</Text>
           <Text style={styles.emptySearchCopy}>
-            生成{pending.recordType}需要录音转写、纪要、量表、作业等资料。请先在本次历程中归档录音或上传资料，再回来生成。
+            录音纪要是生成{pending.recordType}的必要资料。请先选择录音、完成统一转写并生成录音纪要。
           </Text>
         </View>
       )}

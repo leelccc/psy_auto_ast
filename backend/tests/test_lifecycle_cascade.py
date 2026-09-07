@@ -91,6 +91,10 @@ def test_session_delete_cascades_generated_resources_and_storage_objects() -> No
         headers=auth_headers(),
         json={"mode": "generic"},
     ).status_code == 202
+    sources = api.get(
+        f"/api/v1/reports/generation-sources?report_type=counseling_note&session_id={session_id}",
+        headers=unlocked_headers,
+    ).json()["items"]
 
     generated = api.post(
         "/api/v1/reports/generate",
@@ -100,7 +104,12 @@ def test_session_delete_cascades_generated_resources_and_storage_objects() -> No
             "profile_id": CHEN_PROFILE_ID,
             "session_id": session_id,
             "selected_sources": [
-                {"resource_type": "session", "resource_id": session_id}
+                {
+                    "resource_type": source["resource_type"],
+                    "resource_id": source["resource_id"],
+                }
+                for source in sources
+                if source["default_selected"]
             ],
         },
     )

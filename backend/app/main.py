@@ -33,6 +33,7 @@ from app.models import Report
 from app.models import SessionRecord
 from app.services.calendar import sync_profile_next_session_event
 from app.services.ai import RecordingAIProvider
+from app.services.ai.factory import ReportAIProvider
 from app.services.profile_codes import (
     assign_missing_profile_codes,
     ensure_profile_code_available,
@@ -124,6 +125,7 @@ def create_app(
     storage: Storage | None = None,
     recording_ai_provider: RecordingAIProvider | None = None,
     recording_audio_input_mode: str | None = None,
+    report_ai_provider: ReportAIProvider | None = None,
 ) -> FastAPI:
     settings = get_settings()
     if settings.environment == "production":
@@ -167,7 +169,7 @@ def create_app(
         recording_ai_provider,
         recording_audio_input_mode,
     ))
-    app.include_router(create_reports_router(storage))
+    app.include_router(create_reports_router(storage, report_ai_provider))
     app.include_router(create_privacy_router(storage))
 
     def get_profile(profile_id: str, user_id: str, database: DatabaseSession) -> DatabaseProfile:

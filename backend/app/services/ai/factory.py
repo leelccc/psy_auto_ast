@@ -55,6 +55,35 @@ def create_report_ai_provider(settings: Settings) -> ReportAIProvider:
     return DeterministicAIProvider()
 
 
+def create_report_ai_provider_from_config(config: AIModelConfig) -> ReportAIProvider:
+    """Create the report LLM from the runtime admin configuration.
+
+    The compatible-mode endpoint used by Bailian is OpenAI compatible, so the
+    same provider implementation also supports a custom OpenAI-compatible LLM.
+    """
+    if config.llm_provider == "deterministic":
+        return DeterministicAIProvider()
+    if config.llm_provider in {"bailian", "openai_compatible"}:
+        if not config.llm_api_key.strip():
+            raise ValueError("报告生成模型的 API Key 未配置。")
+        if not config.llm_base_url.strip():
+            raise ValueError("报告生成模型的接口地址未配置。")
+        return BailianRecordingAIProvider(
+            api_key=config.llm_api_key,
+            asr_model=config.asr_model,
+            local_asr_model=config.local_asr_model,
+            summary_model=config.summary_model,
+            base_url=config.asr_base_url,
+            report_model=config.report_model,
+            llm_api_key=config.llm_api_key,
+            llm_base_url=config.llm_base_url,
+            timeout_seconds=config.timeout_seconds,
+            poll_interval_seconds=config.poll_interval_seconds,
+            max_poll_attempts=config.max_poll_attempts,
+        )
+    raise ValueError(f"不支持的报告 AI Provider：{config.llm_provider}")
+
+
 def create_recording_ai_provider_from_config(config: AIModelConfig) -> RecordingAIProvider:
     if config.asr_provider == "deterministic":
         return DeterministicAIProvider()

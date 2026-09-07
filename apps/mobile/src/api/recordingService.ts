@@ -76,6 +76,7 @@ type BackendRecording = {
 export type RecordingTranscript = {
   transcriptId: string;
   recordingId: string;
+  sessionId: string | null;
   expiresAt: string;
   longTermAuthorizedAt: string | null;
   manualEdited: boolean;
@@ -93,6 +94,7 @@ export type RecordingTranscript = {
 export type RecordingSummary = {
   summaryId: string;
   recordingId: string;
+  sessionId: string | null;
   mainSummary: string;
   chapterOverview: Array<Record<string, unknown>>;
   manualEdited: boolean;
@@ -298,6 +300,7 @@ export function createRecordingService(client: ApiClient) {
       const value = await client.get<{
         transcript_id: string;
         recording_id: string;
+        session_id: string | null;
         expires_at: string;
         long_term_authorized_at: string | null;
         manual_edited: boolean;
@@ -307,6 +310,7 @@ export function createRecordingService(client: ApiClient) {
       return {
         transcriptId: value.transcript_id,
         recordingId: value.recording_id,
+        sessionId: value.session_id,
         expiresAt: value.expires_at,
         longTermAuthorizedAt: value.long_term_authorized_at,
         manualEdited: value.manual_edited,
@@ -327,6 +331,7 @@ export function createRecordingService(client: ApiClient) {
       const value = await client.get<{
         summary_id: string;
         recording_id: string;
+        session_id: string | null;
         main_summary: string;
         chapter_overview: Array<Record<string, unknown>>;
         manual_edited: boolean;
@@ -336,6 +341,7 @@ export function createRecordingService(client: ApiClient) {
       return {
         summaryId: value.summary_id,
         recordingId: value.recording_id,
+        sessionId: value.session_id,
         mainSummary: value.main_summary,
         chapterOverview: value.chapter_overview,
         manualEdited: value.manual_edited,

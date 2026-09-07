@@ -1,4 +1,5 @@
 from datetime import timedelta
+import logging
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -15,15 +16,20 @@ from app.models import (
     Profile,
     Recording,
     RecordingSummary,
-    RecordingTranscript,
     Report,
     SessionRecord,
     StoredFile,
 )
 from app.services.ai.report_prompts import (
     ReportPromptSource,
+    build_report_prompt,
     get_report_prompt_spec,
 )
+from app.services.ai.factory import (
+    ReportAIProvider,
+    create_report_ai_provider_from_config,
+)
+from app.core.config import get_settings
 from app.services.auth import utc_now
 from app.services.exports import render_docx, render_pdf
 from app.services.jobs import complete_job, create_job
@@ -35,6 +41,7 @@ from app.services.security import (
     require_profile_access_for_type,
 )
 from app.services.storage import Storage
+from app.services.system_config import get_ai_model_config
 
 
 REPORT_TYPES = {
@@ -43,6 +50,8 @@ REPORT_TYPES = {
     "supervision_note",
     "case_report",
 }
+
+logger = logging.getLogger(__name__)
 
 
 class SourceRef(BaseModel):
@@ -139,33 +148,19 @@ def list_sources(
             "analysis_status": "available",
             "default_selected": True,
         })
-        recording = database.scalar(
+        recordings = database.scalars(
             select(Recording).where(
                 Recording.session_id == session.id,
                 Recording.user_id == user_id,
             )
-        )
-        if recording:
-            transcript = database.scalar(
-                select(RecordingTranscript).where(
-                    RecordingTranscript.recording_id == recording.id,
-                    RecordingTranscript.destroyed_at.is_(None),
-                )
-            )
+        ).all()
+        if recordings:
             summary = database.scalar(
                 select(RecordingSummary).where(
-                    RecordingSummary.recording_id == recording.id,
+                    RecordingSummary.session_id == session.id,
                     RecordingSummary.destroyed_at.is_(None),
                 )
             )
-            if transcript:
-                items.append({
-                    "resource_type": "transcript",
-                    "resource_id": transcript.id,
-                    "label": f"第{session.sequence_no}次转写",
-                    "analysis_status": "available",
-                    "default_selected": True,
-                })
             if summary:
                 items.append({
                     "resource_type": "recording_summary",
@@ -235,6 +230,48 @@ def list_sources(
     return list(unique.values())
 
 
+def require_session_recording_summary(
+    database: Session,
+    *,
+    user_id: str,
+    session_id: str | None,
+) -> str | None:
+    if not session_id:
+        return None
+    summary = database.scalar(
+        select(RecordingSummary.id).where(
+            RecordingSummary.session_id == session_id,
+            RecordingSummary.user_id == user_id,
+            RecordingSummary.destroyed_at.is_(None),
+        )
+    )
+    if summary is None:
+        raise ApiError(
+            409,
+            "recording_summary_required",
+            "录音纪要是生成本次记录的必要资料，请先选择录音、完成统一转写并生成录音纪要。",
+        )
+    return summary
+
+
+def require_selected_recording_summary(
+    selected: list[dict[str, str]],
+    required_summary_id: str | None,
+) -> None:
+    if required_summary_id is None:
+        return
+    if not any(
+        source["resource_type"] == "recording_summary"
+        and source["resource_id"] == required_summary_id
+        for source in selected
+    ):
+        raise ApiError(
+            422,
+            "recording_summary_source_required",
+            "本次历程的录音纪要必须作为咨询记录的生成资料。",
+        )
+
+
 def validate_selected_sources(
     available: list[dict[str, object]],
     selected: list[SourceRef],
@@ -257,61 +294,6 @@ def validate_selected_sources(
             "label": str(item["label"]),
         })
     return result
-
-
-def build_skeleton_report_blocks(
-    *,
-    database: Session,
-    report: Report,
-    selected: list[dict[str, str]],
-) -> dict[str, object]:
-    """生成「只填系统事实、专业内容留白」的草稿骨架。
-
-    咨询师反馈：段落里预填大量代写或指令式文字没有价值，还要逐段删改。
-    因此草稿只自动填入系统已确切掌握的信息（档案、次数、时间、形式、资料来源），
-    其余需要专业判断的段落一律留空，由咨询师本人填写。
-    """
-    profile = database.scalar(select(Profile).where(Profile.id == report.profile_id))
-    session = (
-        database.scalar(select(SessionRecord).where(SessionRecord.id == report.session_id))
-        if report.session_id
-        else None
-    )
-    spec = get_report_prompt_spec(report.report_type)
-    occurred = session.occurred_at if session is not None else None
-    if occurred is not None:
-        local_occurred = occurred.astimezone() if occurred.tzinfo else occurred
-        occurred_text = local_occurred.strftime("%Y-%m-%d %H:%M")
-    else:
-        occurred_text = "未设置"
-    mode_text = "未填写"
-    if session is not None:
-        mode_text = {"online": "线上", "offline": "线下"}.get(
-            (session.mode or "").lower(), session.mode or "未填写"
-        )
-    source_text = "、".join(str(item["label"]) for item in selected) or "本次所选资料"
-    facts = [
-        f"档案：{profile.name if profile else '未填写'}"
-        + (f"（编号 {profile.code}）" if profile and getattr(profile, "code", None) else ""),
-        f"次数：第 {session.sequence_no} 次" if session is not None else "次数：未关联咨询",
-        f"时间：{occurred_text}",
-        f"形式：{mode_text}",
-        f"记录类型：{spec.display_name}",
-        f"本次资料来源：{source_text}",
-    ]
-    blocks = [
-        {
-            "title": section.title,
-            "content": "\n".join(facts) if index == 0 else "",
-        }
-        for index, section in enumerate(spec.sections)
-    ]
-    return {
-        "blocks": blocks,
-        "title": report.title,
-        "generated_by": "system-skeleton",
-        "prompt_version": spec.version if hasattr(spec, "version") else None,
-    }
 
 
 def compact_json_content(value: Any) -> str:
@@ -371,22 +353,6 @@ def source_content(
             f"标签：{'、'.join(session.tags) if session.tags else '无'}",
             f"摘要：{session.summary or '无'}",
         ])
-    if resource_type == "transcript":
-        transcript = database.scalar(
-            select(RecordingTranscript).where(
-                RecordingTranscript.id == resource_id,
-                RecordingTranscript.user_id == user_id,
-                RecordingTranscript.destroyed_at.is_(None),
-            )
-        )
-        if transcript is None:
-            return "转写不可用。"
-        speakers = transcript.speakers_json or {}
-        return "\n".join(
-            f"{speakers.get(segment.get('speaker_key'), segment.get('speaker_key', '发言人'))}：{segment.get('text', '')}"
-            for segment in sorted(transcript.segments_json, key=lambda item: item.get("start_ms", 0))
-            if isinstance(segment, dict)
-        )
     if resource_type == "recording_summary":
         summary = database.scalar(
             select(RecordingSummary).where(
@@ -453,8 +419,137 @@ def prompt_sources(
     ]
 
 
-def create_reports_router(storage: Storage) -> APIRouter:
+def report_scope_source(
+    database: Session,
+    *,
+    user_id: str,
+    profile_id: str | None,
+    session_id: str | None,
+) -> ReportPromptSource:
+    session = database.scalar(
+        select(SessionRecord).where(SessionRecord.id == session_id, SessionRecord.user_id == user_id)
+    ) if session_id else None
+    resolved_profile_id = profile_id or (session.profile_id if session else None)
+    profile = database.scalar(
+        select(Profile).where(Profile.id == resolved_profile_id, Profile.user_id == user_id)
+    ) if resolved_profile_id else None
+    lines = [
+        f"档案称呼：{profile.name if profile else '资料未提供'}",
+        f"档案编号：{profile.code if profile and profile.code else '资料未提供'}",
+        f"记录次数：第{session.sequence_no}次" if session else "记录次数：资料未提供",
+        f"记录时间：{session.occurred_at.isoformat()}" if session else "记录时间：资料未提供",
+        f"咨询形式：{session.mode or '资料未提供'}" if session else "咨询形式：资料未提供",
+        f"咨询师手填摘要：{session.summary or '资料未提供'}" if session else "咨询师手填摘要：资料未提供",
+    ]
+    return ReportPromptSource(
+        resource_type="system_context",
+        resource_id=session_id or profile_id or "report",
+        label="本次历程基本信息",
+        content="\n".join(lines),
+    )
+
+
+def validate_complete_report_draft(
+    value: dict[str, object],
+    *,
+    report_type: str,
+    fallback_title: str,
+) -> dict[str, object]:
+    raw_blocks = value.get("blocks")
+    if not isinstance(raw_blocks, list):
+        raise ValueError("模型未返回有效的记录段落。")
+    content_by_title: dict[str, str] = {}
+    for item in raw_blocks:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        content = str(item.get("content", "")).strip()
+        if title and content and title not in content_by_title:
+            content_by_title[title] = content
+    expected = get_report_prompt_spec(report_type).sections
+    missing = [section.title for section in expected if not content_by_title.get(section.title)]
+    if missing:
+        raise ValueError(f"模型生成内容不完整，缺少：{'、'.join(missing)}。")
+    result: dict[str, object] = {
+        "title": str(value.get("title", "")).strip() or fallback_title,
+        "blocks": [
+            {"title": section.title, "content": content_by_title[section.title]}
+            for section in expected
+        ],
+    }
+    for key in ("generated_by", "prompt_version"):
+        if value.get(key) is not None:
+            result[key] = value[key]
+    return result
+
+
+def create_reports_router(
+    storage: Storage,
+    report_ai_provider: ReportAIProvider | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
+
+    def generate_complete_draft(
+        database: Session,
+        *,
+        user_id: str,
+        report_type: str,
+        title: str,
+        profile_id: str | None,
+        session_id: str | None,
+        selected: list[dict[str, str]],
+    ) -> dict[str, object]:
+        provider = report_ai_provider
+        if provider is None:
+            config = get_ai_model_config(database)
+            if config.llm_provider == "deterministic" and get_settings().environment == "production":
+                raise ApiError(
+                    503,
+                    "report_ai_unavailable",
+                    "咨询记录生成服务尚未配置，请联系管理员完成模型配置。",
+                )
+            try:
+                provider = create_report_ai_provider_from_config(config)
+            except ValueError as error:
+                raise ApiError(503, "report_ai_unavailable", str(error)) from error
+        sources = [
+            report_scope_source(
+                database,
+                user_id=user_id,
+                profile_id=profile_id,
+                session_id=session_id,
+            ),
+            *prompt_sources(database, user_id=user_id, selected=selected),
+        ]
+        # The consultation record consumes only the session-level recording
+        # summary. Raw transcript text is deliberately excluded from this stage.
+        sources = [source for source in sources if source.resource_type != "transcript"]
+        prompt = build_report_prompt(
+            report_type=report_type,
+            title=title,
+            sources=sources,
+        )
+        try:
+            generated = provider.generate_report(
+                report_type=report_type,
+                title=title,
+                source_labels=[source.label for source in sources],
+                prompt=prompt,
+            )
+            return validate_complete_report_draft(
+                generated,
+                report_type=report_type,
+                fallback_title=title,
+            )
+        except ApiError:
+            raise
+        except Exception as error:
+            logger.exception("Report generation failed for session %s", session_id)
+            raise ApiError(
+                502,
+                "report_ai_generation_failed",
+                "咨询记录生成失败，原有草稿未被修改，请稍后重试。",
+            ) from error
 
     def require_report_access(
         database: Session,
@@ -564,6 +659,12 @@ def create_reports_router(storage: Storage) -> APIRouter:
             user_id=user_id,
             raw_grant=x_profile_access_grant,
         )
+        if report_type != "case_report":
+            require_session_recording_summary(
+                database,
+                user_id=user_id,
+                session_id=session_id,
+            )
         # 重新生成时前端需传 exclude_report_id，保证这里返回的清单
         # 与后端 regenerate 校验时使用的清单完全一致，避免选到自身导致 422。
         return {
@@ -598,6 +699,13 @@ def create_reports_router(storage: Storage) -> APIRouter:
             user_id=user_id,
             raw_grant=x_profile_access_grant,
         )
+        required_summary_id = None
+        if payload.report_type != "case_report":
+            required_summary_id = require_session_recording_summary(
+                database,
+                user_id=user_id,
+                session_id=payload.session_id,
+            )
         available = list_sources(
             database,
             user_id=user_id,
@@ -609,6 +717,7 @@ def create_reports_router(storage: Storage) -> APIRouter:
         selected = validate_selected_sources(available, payload.selected_sources)
         if not selected:
             raise ApiError(422, "report_sources_required", "请至少选择一项可用资料。")
+        require_selected_recording_summary(selected, required_summary_id)
         existing = database.scalar(
             select(Report).where(
                 Report.user_id == user_id,
@@ -631,6 +740,15 @@ def create_reports_router(storage: Storage) -> APIRouter:
             else None
         )
         title = report_title(payload.report_type, profile, session)
+        generated_draft = generate_complete_draft(
+            database,
+            user_id=user_id,
+            report_type=payload.report_type,
+            title=title,
+            profile_id=payload.profile_id,
+            session_id=payload.session_id,
+            selected=selected,
+        )
         now = utc_now()
         report = existing or Report(
             id=str(uuid4()),
@@ -653,12 +771,7 @@ def create_reports_router(storage: Storage) -> APIRouter:
         if existing is None:
             database.add(report)
         report.title = title
-        # 草稿只填系统事实、专业段落留白，避免预填大量代写或指令式文字。
-        report.draft_content = build_skeleton_report_blocks(
-            database=database,
-            report=report,
-            selected=selected,
-        )
+        report.draft_content = generated_draft
         report.selected_sources = selected
         report.generation_status = "completed"
         report.updated_at = now
@@ -785,6 +898,13 @@ def create_reports_router(storage: Storage) -> APIRouter:
         )
         if not payload.confirm_overwrite_draft:
             raise ApiError(409, "report_overwrite_confirmation_required", "重新生成草稿前需要确认。")
+        required_summary_id = None
+        if report.report_type != "case_report":
+            required_summary_id = require_session_recording_summary(
+                database,
+                user_id=user_id,
+                session_id=report.session_id,
+            )
         available = list_sources(
             database,
             user_id=user_id,
@@ -800,13 +920,19 @@ def create_reports_router(storage: Storage) -> APIRouter:
                 "report_sources_required",
                 "所选资料已全部不可用（可能已超过 14 天保存期或被删除）。请在资料中选择其他可用项后重试。",
             )
-        # 草稿只填系统事实、专业段落留白（与 /generate 保持一致）。
-        # 此前这里硬编码 DeterministicAIProvider，产出的是「请核对…」指令式文字。
-        report.draft_content = build_skeleton_report_blocks(
-            database=database,
-            report=report,
+        require_selected_recording_summary(selected, required_summary_id)
+        generated_draft = generate_complete_draft(
+            database,
+            user_id=user_id,
+            report_type=report.report_type,
+            title=report.title,
+            profile_id=report.profile_id,
+            session_id=report.session_id,
             selected=selected,
         )
+        # Only mutate after the provider and completeness checks succeed. A
+        # timeout or malformed response therefore leaves the current draft intact.
+        report.draft_content = generated_draft
         report.selected_sources = selected
         report.updated_at = utc_now()
         job = create_job(

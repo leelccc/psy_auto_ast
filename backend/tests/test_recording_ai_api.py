@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.db.session import SessionLocal
 from app.main import create_app
+from app.models import Recording, RecordingSummary, RecordingTranscript
 from app.seed import CHEN_PROFILE_ID, seed_demo_data
 from app.services.ai import BailianAIError, RecordingAIResult, RecordingSummaryResult
 from tests.fake_storage import FakeStorage
@@ -94,6 +95,24 @@ def create_bound_recording(
         headers=auth_headers(),
         json={"file_id": created["file_id"], "duration_seconds": 60},
     )
+    with SessionLocal() as database:
+        seed_demo_data(database)
+    session = api.post(
+        f"/api/v1/profiles/{CHEN_PROFILE_ID}/sessions",
+        headers=profile_access_headers(api),
+        json={"session_type": "counseling", "title": "模型处理测试历程"},
+    )
+    assert session.status_code == 201
+    archived = api.post(
+        f"/api/v1/recordings/{recording_id}/archive",
+        headers=auth_headers(),
+        json={
+            "profile_type": "client",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": session.json()["id"],
+        },
+    )
+    assert archived.status_code == 200
     return recording_id
 
 
@@ -186,11 +205,11 @@ def test_recording_processing_reads_minio_bytes_for_bailian_base64_mode() -> Non
     assert provider.calls[0]["audio_url"] is None
     transcript = api.get(
         f"/api/v1/recordings/{recording_id}/transcript",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
     ).json()
     summary = api.get(
         f"/api/v1/recordings/{recording_id}/summary",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
     ).json()
     assert transcript["segments"][0]["text"] == "真实模型转写内容。"
     assert summary["main_summary"] == "根据真实转写生成的录音纪要。"
@@ -263,18 +282,18 @@ def test_summary_regeneration_uses_current_transcript_without_retranscribing() -
     )
     transcript = api.get(
         f"/api/v1/recordings/{recording_id}/transcript",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
     ).json()
     segment_id = transcript["segments"][0]["id"]
     api.patch(
         f"/api/v1/transcript-segments/{segment_id}",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
         json={"text": "这是人工修订后需要保留的转写。"},
     )
 
     regenerated = api.post(
         f"/api/v1/recordings/{recording_id}/summary/regenerate",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
         json={"confirm_overwrite": True},
     )
 
@@ -285,11 +304,11 @@ def test_summary_regeneration_uses_current_transcript_without_retranscribing() -
     )
     current_transcript = api.get(
         f"/api/v1/recordings/{recording_id}/transcript",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
     ).json()
     current_summary = api.get(
         f"/api/v1/recordings/{recording_id}/summary",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
     ).json()
     assert current_transcript["segments"][0]["text"] == "这是人工修订后需要保留的转写。"
     assert current_transcript["manual_edited"] is True
@@ -345,6 +364,20 @@ def test_recording_upload_process_edit_archive_and_retry_boundaries() -> None:
         "duration_seconds": 3050,
     }]
 
+    archived_before_processing = api.post(
+        f"/api/v1/recordings/{recording_id}/archive",
+        headers=auth_headers(),
+        json={
+            "profile_type": "client",
+            "profile_id": CHEN_PROFILE_ID,
+            "create_session": {
+                "started_at": "2026-06-09T10:00:00+08:00",
+                "mode": "offline",
+            },
+        },
+    )
+    assert archived_before_processing.status_code == 200
+
     processing = api.post(
         f"/api/v1/recordings/{recording_id}/processing",
         headers=auth_headers(),
@@ -357,7 +390,7 @@ def test_recording_upload_process_edit_archive_and_retry_boundaries() -> None:
 
     transcript = api.get(
         f"/api/v1/recordings/{recording_id}/transcript",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
     )
     assert transcript.status_code == 200
     assert len(transcript.json()["segments"]) >= 3
@@ -365,12 +398,12 @@ def test_recording_upload_process_edit_archive_and_retry_boundaries() -> None:
 
     speaker = api.patch(
         f"/api/v1/recordings/{recording_id}/speakers",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
         json={"speaker_key": "speaker_2", "speaker_label": "陈雨"},
     )
     corrected = api.patch(
         f"/api/v1/transcript-segments/{segment_id}",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
         json={"text": "修订后的开场内容。"},
     )
     assert speaker.status_code == 200
@@ -379,7 +412,7 @@ def test_recording_upload_process_edit_archive_and_retry_boundaries() -> None:
 
     summary = api.get(
         f"/api/v1/recordings/{recording_id}/summary",
-        headers=auth_headers(),
+        headers=profile_access_headers(api),
     )
     assert summary.status_code == 200
     assert summary.json()["main_summary"]
@@ -397,7 +430,7 @@ def test_recording_upload_process_edit_archive_and_retry_boundaries() -> None:
         },
     )
     assert archived.status_code == 200
-    assert archived.json()["sequence_no"] == 7
+    assert archived.json()["sequence_no"] == archived_before_processing.json()["sequence_no"]
     assert archived.json()["recommended_speaker_roles"] == ["咨询师", "来访者"]
     archived_stats = api.get(
         "/api/v1/recording-duration-statistics",
@@ -538,6 +571,13 @@ def test_multiple_segments_can_reorder_then_transcribe_as_one_recording() -> Non
     assert len(transcript["segments"]) == 2
     assert transcript["segments"][0]["speaker_key"].startswith("segment_1_")
     assert transcript["segments"][1]["start_ms"] == 90_000
+    with SessionLocal() as database:
+        transcripts = database.query(RecordingTranscript).filter_by(session_id=session_id).all()
+        summaries = database.query(RecordingSummary).filter_by(session_id=session_id).all()
+        members = database.query(Recording).filter_by(session_id=session_id).all()
+        assert len(transcripts) == 1
+        assert len(summaries) == 1
+        assert {item.ai_status for item in members} == {"completed"}
     locked = api.delete(
         f"/api/v1/recordings/{recording_id}/segments/{segment_ids[0]}",
         headers=auth_headers(),
@@ -588,7 +628,7 @@ def test_pending_recording_group_can_append_an_unarchived_recording() -> None:
     assert [item["filename"] for item in appended.json()["segments"]] == ["first.m4a", "second.m4a"]
 
 
-def test_segment_processing_requires_at_least_one_segment() -> None:
+def test_unarchived_recording_cannot_start_processing() -> None:
     storage = FakeStorage()
     api = TestClient(create_app(storage=storage))
     recording_id = api.post(
@@ -601,7 +641,8 @@ def test_segment_processing_requires_at_least_one_segment() -> None:
         headers=auth_headers(),
         json={"mode": "generic"},
     )
-    assert response.status_code == 400
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "recording_archive_required"
 
 
 def test_failed_multi_segment_retry_retranscribes_every_segment() -> None:

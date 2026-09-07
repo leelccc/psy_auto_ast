@@ -13,9 +13,40 @@ from app.models import (
     SupervisionConversation,
     SupervisionMessage,
 )
-from app.seed import CASE_REPORT_ID, CHEN_PROFILE_ID, SESSION_6_ID, seed_demo_data
+from app.seed import CASE_REPORT_ID, CHEN_PROFILE_ID, SESSION_6_ID, SUMMARY_6_ID, seed_demo_data
 from tests.fake_storage import FakeStorage
 from tests.helpers import auth_headers, profile_access_headers
+
+
+class CapturingReportProvider:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def generate_report(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(kwargs)
+        prompt = kwargs["prompt"]
+        return {
+            "title": kwargs["title"],
+            "generated_by": "test-report-provider",
+            "prompt_version": prompt.version,
+            "blocks": [
+                {
+                    "title": section.title,
+                    "content": f"根据本次历程资料生成的{section.title}。",
+                }
+                for section in prompt.sections
+            ],
+        }
+
+
+class FailingReportProvider:
+    def generate_report(self, **_: object) -> dict[str, object]:
+        raise RuntimeError("model unavailable")
+
+
+class IncompleteReportProvider:
+    def generate_report(self, **_: object) -> dict[str, object]:
+        return {"blocks": [{"title": "基本信息", "content": "只有一个段落。"}]}
 
 
 def seed_generated_sources() -> None:
@@ -42,7 +73,8 @@ def test_report_generation_formal_copy_and_real_exports() -> None:
     with SessionLocal() as database:
         seed_demo_data(database)
     storage = FakeStorage()
-    api = TestClient(create_app(storage=storage))
+    provider = CapturingReportProvider()
+    api = TestClient(create_app(storage=storage, report_ai_provider=provider))
     unlocked_headers = profile_access_headers(api)
 
     sources = api.get(
@@ -51,6 +83,8 @@ def test_report_generation_formal_copy_and_real_exports() -> None:
     )
     assert sources.status_code == 200
     assert any(item["resource_type"] == "session" for item in sources.json()["items"])
+    assert any(item["resource_type"] == "recording_summary" for item in sources.json()["items"])
+    assert not any(item["resource_type"] == "transcript" for item in sources.json()["items"])
     assert not any(item["resource_type"] in {"profile", "report"} for item in sources.json()["items"])
     attachment_sources = [
         item for item in sources.json()["items"]
@@ -73,6 +107,7 @@ def test_report_generation_formal_copy_and_real_exports() -> None:
             "session_id": SESSION_6_ID,
             "selected_sources": [
                 {"resource_type": "session", "resource_id": SESSION_6_ID},
+                {"resource_type": "recording_summary", "resource_id": SUMMARY_6_ID},
                 {"resource_type": "attachment", "resource_id": "attachment-scale-6"},
                 {"resource_type": "attachment", "resource_id": "attachment-homework-6"},
                 {"resource_type": "attachment", "resource_id": "attachment-other-6"},
@@ -91,10 +126,13 @@ def test_report_generation_formal_copy_and_real_exports() -> None:
         "评估与风险",
         "后续计划",
     ]
-    assert "第6次记录摘要" in generated_detail.json()["draft_content"]["prompt_user"]
-    assert "SAS 焦虑自评量表.pdf" in generated_detail.json()["draft_content"]["prompt_user"]
-    assert "睡前想法记录.png" in generated_detail.json()["draft_content"]["prompt_user"]
-    assert "暂无解析文本" in generated_detail.json()["draft_content"]["prompt_user"]
+    assert all(block["content"] for block in generated_detail.json()["draft_content"]["blocks"])
+    prompt = provider.calls[0]["prompt"]
+    assert {source.resource_type for source in prompt.sources} >= {
+        "system_context", "session", "recording_summary", "attachment",
+    }
+    assert all(source.resource_type != "transcript" for source in prompt.sources)
+    assert any("本次围绕睡眠下降" in source.content for source in prompt.sources)
 
     updated = api.patch(
         f"/api/v1/reports/{report_id}",
@@ -144,6 +182,187 @@ def test_report_generation_formal_copy_and_real_exports() -> None:
     assert listed.status_code == 200
     assert listed.json()["total"] == 1
     assert listed.json()["items"][0]["id"] == report_id
+
+
+def test_report_generation_failure_does_not_create_blank_draft() -> None:
+    with SessionLocal() as database:
+        seed_demo_data(database)
+    api = TestClient(create_app(
+        storage=FakeStorage(),
+        report_ai_provider=FailingReportProvider(),
+    ))
+    unlocked_headers = profile_access_headers(api)
+
+    response = api.post(
+        "/api/v1/reports/generate",
+        headers=unlocked_headers,
+        json={
+            "report_type": "counseling_note",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": SESSION_6_ID,
+            "selected_sources": [
+                {"resource_type": "session", "resource_id": SESSION_6_ID},
+                {"resource_type": "recording_summary", "resource_id": SUMMARY_6_ID},
+            ],
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "report_ai_generation_failed"
+    listed = api.get(
+        f"/api/v1/reports?session_id={SESSION_6_ID}&report_type=counseling_note",
+        headers=unlocked_headers,
+    )
+    assert listed.json()["total"] == 0
+
+
+def test_incomplete_report_response_is_rejected_without_creating_draft() -> None:
+    with SessionLocal() as database:
+        seed_demo_data(database)
+    api = TestClient(create_app(
+        storage=FakeStorage(),
+        report_ai_provider=IncompleteReportProvider(),
+    ))
+    unlocked_headers = profile_access_headers(api)
+
+    response = api.post(
+        "/api/v1/reports/generate",
+        headers=unlocked_headers,
+        json={
+            "report_type": "counseling_note",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": SESSION_6_ID,
+            "selected_sources": [
+                {"resource_type": "recording_summary", "resource_id": SUMMARY_6_ID},
+            ],
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "report_ai_generation_failed"
+    listed = api.get(
+        f"/api/v1/reports?session_id={SESSION_6_ID}&report_type=counseling_note",
+        headers=unlocked_headers,
+    )
+    assert listed.json()["total"] == 0
+
+
+def test_report_generation_waits_for_session_recording_summary() -> None:
+    with SessionLocal() as database:
+        seed_demo_data(database)
+        summary = database.get(RecordingSummary, SUMMARY_6_ID)
+        assert summary is not None
+        summary.destroyed_at = datetime.now(UTC)
+        database.commit()
+    api = TestClient(create_app(
+        storage=FakeStorage(),
+        report_ai_provider=CapturingReportProvider(),
+    ))
+    response = api.get(
+        f"/api/v1/reports/generation-sources?report_type=counseling_note&session_id={SESSION_6_ID}",
+        headers=profile_access_headers(api),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "recording_summary_required"
+
+
+def test_report_generation_without_recordings_still_requires_a_summary() -> None:
+    with SessionLocal() as database:
+        seed_demo_data(database)
+    api = TestClient(create_app(
+        storage=FakeStorage(),
+        report_ai_provider=CapturingReportProvider(),
+    ))
+    unlocked_headers = profile_access_headers(api)
+    session = api.post(
+        f"/api/v1/profiles/{CHEN_PROFILE_ID}/sessions",
+        headers=unlocked_headers,
+        json={"session_type": "counseling", "title": "尚未添加录音的历程"},
+    )
+    assert session.status_code == 201
+
+    response = api.get(
+        f"/api/v1/reports/generation-sources?report_type=counseling_note&session_id={session.json()['id']}",
+        headers=unlocked_headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "recording_summary_required"
+
+
+def test_report_generation_cannot_omit_the_session_recording_summary() -> None:
+    with SessionLocal() as database:
+        seed_demo_data(database)
+    api = TestClient(create_app(
+        storage=FakeStorage(),
+        report_ai_provider=CapturingReportProvider(),
+    ))
+    response = api.post(
+        "/api/v1/reports/generate",
+        headers=profile_access_headers(api),
+        json={
+            "report_type": "counseling_note",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": SESSION_6_ID,
+            "selected_sources": [
+                {"resource_type": "session", "resource_id": SESSION_6_ID},
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "recording_summary_source_required"
+
+
+def test_report_regeneration_failure_preserves_existing_draft() -> None:
+    with SessionLocal() as database:
+        seed_demo_data(database)
+    storage = FakeStorage()
+    working_api = TestClient(create_app(
+        storage=storage,
+        report_ai_provider=CapturingReportProvider(),
+    ))
+    unlocked_headers = profile_access_headers(working_api)
+    created = working_api.post(
+        "/api/v1/reports/generate",
+        headers=unlocked_headers,
+        json={
+            "report_type": "counseling_note",
+            "profile_id": CHEN_PROFILE_ID,
+            "session_id": SESSION_6_ID,
+            "selected_sources": [
+                {"resource_type": "session", "resource_id": SESSION_6_ID},
+                {"resource_type": "recording_summary", "resource_id": SUMMARY_6_ID},
+            ],
+        },
+    ).json()
+    report_id = created["draft_report_id"]
+    original = working_api.get(
+        f"/api/v1/reports/{report_id}", headers=unlocked_headers
+    ).json()["draft_content"]
+
+    failing_api = TestClient(create_app(
+        storage=storage,
+        report_ai_provider=FailingReportProvider(),
+    ))
+    failed = failing_api.post(
+        f"/api/v1/reports/{report_id}/regenerate",
+        headers=unlocked_headers,
+        json={
+            "confirm_overwrite_draft": True,
+            "selected_sources": [
+                {"resource_type": "session", "resource_id": SESSION_6_ID},
+                {"resource_type": "recording_summary", "resource_id": SUMMARY_6_ID},
+            ],
+        },
+    )
+
+    assert failed.status_code == 502
+    current = failing_api.get(
+        f"/api/v1/reports/{report_id}", headers=unlocked_headers
+    ).json()["draft_content"]
+    assert current == original
 
 
 def test_case_report_generation_sources_exclude_existing_case_report() -> None:

@@ -82,12 +82,16 @@ class RecordingTranscript(Base):
     __tablename__ = "recording_transcripts"
     __table_args__ = (
         UniqueConstraint("recording_id", name="recording_transcripts_recording_unique"),
+        UniqueConstraint("session_id", name="recording_transcripts_session_unique"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     recording_id: Mapped[str] = mapped_column(
         ForeignKey("recordings.id", ondelete="CASCADE"), index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), nullable=True, index=True
     )
     speakers_json: Mapped[dict] = mapped_column(JSON, default=dict)
     segments_json: Mapped[list] = mapped_column(JSON, default=list)
@@ -103,12 +107,16 @@ class RecordingSummary(Base):
     __tablename__ = "recording_summaries"
     __table_args__ = (
         UniqueConstraint("recording_id", name="recording_summaries_recording_unique"),
+        UniqueConstraint("session_id", name="recording_summaries_session_unique"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     recording_id: Mapped[str] = mapped_column(
         ForeignKey("recordings.id", ondelete="CASCADE"), index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE"), nullable=True, index=True
     )
     main_summary: Mapped[str] = mapped_column(Text)
     chapter_overview: Mapped[list] = mapped_column(JSON, default=list)

@@ -74,7 +74,10 @@ def cleanup_session_resources(
     transcripts = (
         database.scalars(
             select(RecordingTranscript).where(
-                RecordingTranscript.recording_id.in_(recording_ids)
+                or_(
+                    RecordingTranscript.session_id == session.id,
+                    RecordingTranscript.recording_id.in_(recording_ids),
+                )
             )
         ).all()
         if recording_ids
@@ -83,7 +86,10 @@ def cleanup_session_resources(
     summaries = (
         database.scalars(
             select(RecordingSummary).where(
-                RecordingSummary.recording_id.in_(recording_ids)
+                or_(
+                    RecordingSummary.session_id == session.id,
+                    RecordingSummary.recording_id.in_(recording_ids),
+                )
             )
         ).all()
         if recording_ids
@@ -96,7 +102,9 @@ def cleanup_session_resources(
         )
     ).all()
     report_ids = [report.id for report in reports]
-    target_ids = [*recording_ids, *report_ids]
+    # Recording processing and summary regeneration are now session-level jobs.
+    # Keep legacy recording targets in the cleanup set during the migration.
+    target_ids = [session.id, *recording_ids, *report_ids]
     jobs = (
         database.scalars(
             select(AIJob).where(

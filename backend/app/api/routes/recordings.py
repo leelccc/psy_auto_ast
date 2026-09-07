@@ -172,6 +172,67 @@ def recording_group(database: Session, recording: Recording) -> list[Recording]:
     ).all())
 
 
+def require_archived_recording_group(
+    database: Session,
+    recording: Recording,
+) -> tuple[SessionRecord, list[Recording]]:
+    if not recording.session_id or recording.archive_status != "archived":
+        raise ApiError(
+            409,
+            "recording_archive_required",
+            "请先把录音归入一条咨询历程，选齐并调整顺序后再开始转写。",
+        )
+    session = database.scalar(
+        select(SessionRecord).where(
+            SessionRecord.id == recording.session_id,
+            SessionRecord.user_id == recording.user_id,
+        )
+    )
+    if session is None:
+        raise ApiError(404, "session_not_found", "录音所属历程不存在。")
+    members = recording_group(database, recording)
+    if not members:
+        raise ApiError(422, "recording_group_empty", "当前历程没有可处理的录音。")
+    return session, members
+
+
+def session_transcript(
+    database: Session,
+    session_id: str,
+) -> RecordingTranscript | None:
+    return database.scalar(
+        select(RecordingTranscript).where(
+            RecordingTranscript.session_id == session_id,
+            RecordingTranscript.destroyed_at.is_(None),
+        )
+    )
+
+
+def session_summary(
+    database: Session,
+    session_id: str,
+) -> RecordingSummary | None:
+    return database.scalar(
+        select(RecordingSummary).where(
+            RecordingSummary.session_id == session_id,
+            RecordingSummary.destroyed_at.is_(None),
+        )
+    )
+
+
+def set_recording_group_status(
+    members: list[Recording],
+    *,
+    status: str,
+    error: str | None,
+    updated_at: datetime,
+) -> None:
+    for member in members:
+        member.ai_status = status
+        member.processing_error = error
+        member.updated_at = updated_at
+
+
 def group_segments(database: Session, recording: Recording) -> list[RecordingSegment]:
     members = recording_group(database, recording)
     by_recording = {item.id: index for index, item in enumerate(members, 1)}
@@ -256,6 +317,8 @@ def process_recording(
     provider: RecordingAIProvider,
     audio_input_mode: str,
 ) -> AIJob:
+    session, members = require_archived_recording_group(database, recording)
+    recording = members[0]
     recording_segments = group_segments(database, recording)
     if recording_segments:
         return process_segmented_recording(
@@ -277,8 +340,8 @@ def process_recording(
     existing = database.scalar(
         select(AIJob).where(
             AIJob.user_id == user_id,
-            AIJob.target_type == "recording",
-            AIJob.target_id == recording.id,
+            AIJob.target_type == "session",
+            AIJob.target_id == session.id,
             AIJob.job_type == "recording_processing",
             AIJob.status.in_(("running", "completed")),
         ).order_by(AIJob.created_at.desc())
@@ -290,11 +353,12 @@ def process_recording(
         database,
         user_id=user_id,
         job_type="recording_processing",
-        target_type="recording",
-        target_id=recording.id,
+        target_type="session",
+        target_id=session.id,
     )
-    recording.ai_status = "processing"
-    recording.processing_error = None
+    set_recording_group_status(
+        members, status="processing", error=None, updated_at=utc_now()
+    )
     stored_file = get_owned_file(database, recording.audio_file_id, user_id)
     if not stored_file.storage_key:
         raise ApiError(409, "recording_file_unavailable", "录音文件字节不可用。")
@@ -313,8 +377,9 @@ def process_recording(
             mime_type=stored_file.mime_type,
         )
     except ValueError as error:
-        recording.ai_status = "failed"
-        recording.processing_error = str(error)
+        set_recording_group_status(
+            members, status="failed", error=str(error), updated_at=utc_now()
+        )
         fail_job(
             database,
             job,
@@ -325,8 +390,9 @@ def process_recording(
         database.commit()
         raise ApiError(422, "recording_ai_input_invalid", str(error)) from error
     except BailianAIError as error:
-        recording.ai_status = "failed"
-        recording.processing_error = str(error)
+        set_recording_group_status(
+            members, status="failed", error=str(error), updated_at=utc_now()
+        )
         fail_job(
             database,
             job,
@@ -338,11 +404,7 @@ def process_recording(
         raise ApiError(502, "recording_ai_service_failed", str(error)) from error
     now = utc_now()
     expires_at = now + timedelta(days=14)
-    transcript = database.scalar(
-        select(RecordingTranscript).where(
-            RecordingTranscript.recording_id == recording.id
-        )
-    )
+    transcript = session_transcript(database, session.id)
     segments = [
         {
             "id": str(uuid4()),
@@ -356,6 +418,7 @@ def process_recording(
             id=str(uuid4()),
             user_id=user_id,
             recording_id=recording.id,
+            session_id=session.id,
             speakers_json=result.speakers,
             segments_json=segments,
             manual_edited=False,
@@ -374,14 +437,13 @@ def process_recording(
         transcript.expires_at = expires_at
         transcript.destroyed_at = None
         transcript.updated_at = now
-    summary = database.scalar(
-        select(RecordingSummary).where(RecordingSummary.recording_id == recording.id)
-    )
+    summary = session_summary(database, session.id)
     if summary is None:
         summary = RecordingSummary(
             id=str(uuid4()),
             user_id=user_id,
             recording_id=recording.id,
+            session_id=session.id,
             main_summary=result.summary,
             chapter_overview=result.chapters,
             manual_edited=False,
@@ -409,8 +471,8 @@ def process_recording(
         display_name=f"{recording.title} 转写",
         expires_at=expires_at,
         can_long_term_preserve=True,
-        owner_type="recording",
-        owner_id=recording.id,
+        owner_type="session",
+        owner_id=session.id,
     )
     register_sensitive_resource(
         database,
@@ -420,12 +482,12 @@ def process_recording(
         display_name=f"{recording.title} 纪要",
         expires_at=expires_at,
         can_long_term_preserve=True,
-        owner_type="recording",
-        owner_id=recording.id,
+        owner_type="session",
+        owner_id=session.id,
     )
-    recording.ai_status = "completed"
-    recording.processing_error = None
-    recording.updated_at = now
+    set_recording_group_status(
+        members, status="completed", error=None, updated_at=now
+    )
     complete_job(
         database,
         job,
@@ -446,6 +508,8 @@ def process_segmented_recording(
     provider: RecordingAIProvider,
     audio_input_mode: str,
 ) -> AIJob:
+    session, members = require_archived_recording_group(database, recording)
+    recording = members[0]
     if allow_overwrite:
         if recording.ai_status != "failed":
             raise ApiError(409, "recording_retry_not_allowed", "只有处理失败的录音可以重新转写。")
@@ -479,8 +543,8 @@ def process_segmented_recording(
     existing = database.scalar(
         select(AIJob).where(
             AIJob.user_id == user_id,
-            AIJob.target_type == "recording",
-            AIJob.target_id == recording.id,
+            AIJob.target_type == "session",
+            AIJob.target_id == session.id,
             AIJob.job_type == "recording_processing",
             AIJob.status == "running",
         ).order_by(AIJob.created_at.desc())
@@ -492,11 +556,12 @@ def process_segmented_recording(
         database,
         user_id=user_id,
         job_type="recording_processing",
-        target_type="recording",
-        target_id=recording.id,
+        target_type="session",
+        target_id=session.id,
     )
-    recording.ai_status = "processing"
-    recording.processing_error = None
+    set_recording_group_status(
+        members, status="processing", error=None, updated_at=utc_now()
+    )
     for segment in recording_segments:
         segment.status = "uploaded"
         segment.transcript_json = None
@@ -586,8 +651,9 @@ def process_segmented_recording(
             failing.status = "failed"
             failing.processing_error = str(error)
             failing.updated_at = utc_now()
-        recording.ai_status = "failed"
-        recording.processing_error = str(error)
+        set_recording_group_status(
+            members, status="failed", error=str(error), updated_at=utc_now()
+        )
         fail_job(
             database,
             job,
@@ -602,9 +668,7 @@ def process_segmented_recording(
 
     completed_at = utc_now()
     expires_at = completed_at + timedelta(days=14)
-    transcript = database.scalar(
-        select(RecordingTranscript).where(RecordingTranscript.recording_id == recording.id)
-    )
+    transcript = session_transcript(database, session.id)
     final_segments = [{
         "id": str(uuid4()),
         **item,
@@ -613,6 +677,7 @@ def process_segmented_recording(
     if transcript is None:
         transcript = RecordingTranscript(
             id=str(uuid4()), user_id=user_id, recording_id=recording.id,
+            session_id=session.id,
             speakers_json=merged_speakers, segments_json=final_segments, manual_edited=False,
             generated_at=completed_at, expires_at=expires_at, destroyed_at=None,
             created_at=completed_at, updated_at=completed_at,
@@ -626,12 +691,11 @@ def process_segmented_recording(
         transcript.expires_at = expires_at
         transcript.destroyed_at = None
         transcript.updated_at = completed_at
-    summary = database.scalar(
-        select(RecordingSummary).where(RecordingSummary.recording_id == recording.id)
-    )
+    summary = session_summary(database, session.id)
     if summary is None:
         summary = RecordingSummary(
             id=str(uuid4()), user_id=user_id, recording_id=recording.id,
+            session_id=session.id,
             main_summary=summary_result.summary, chapter_overview=summary_result.chapters,
             manual_edited=False, generated_at=completed_at, expires_at=expires_at,
             destroyed_at=None, created_at=completed_at, updated_at=completed_at,
@@ -649,16 +713,16 @@ def process_segmented_recording(
     register_sensitive_resource(
         database, user_id=user_id, resource_type="transcript", resource_id=transcript.id,
         display_name=f"{recording.title} 转写", expires_at=expires_at,
-        can_long_term_preserve=True, owner_type="recording", owner_id=recording.id,
+        can_long_term_preserve=True, owner_type="session", owner_id=session.id,
     )
     register_sensitive_resource(
         database, user_id=user_id, resource_type="recording_summary", resource_id=summary.id,
         display_name=f"{recording.title} 纪要", expires_at=expires_at,
-        can_long_term_preserve=True, owner_type="recording", owner_id=recording.id,
+        can_long_term_preserve=True, owner_type="session", owner_id=session.id,
     )
-    recording.ai_status = "completed"
-    recording.processing_error = None
-    recording.updated_at = completed_at
+    set_recording_group_status(
+        members, status="completed", error=None, updated_at=completed_at
+    )
     job.progress = 100
     complete_job(database, job, {"transcript_id": transcript.id, "summary_id": summary.id})
     database.commit()
@@ -672,13 +736,9 @@ def regenerate_recording_summary(
     user_id: str,
     provider: RecordingAIProvider,
 ) -> AIJob:
-    transcript = database.scalar(
-        select(RecordingTranscript).where(
-            RecordingTranscript.recording_id == recording.id,
-            RecordingTranscript.user_id == user_id,
-            RecordingTranscript.destroyed_at.is_(None),
-        )
-    )
+    session, members = require_archived_recording_group(database, recording)
+    recording = members[0]
+    transcript = session_transcript(database, session.id)
     if transcript is None:
         raise ApiError(404, "transcript_not_found", "转写尚未生成或已销毁。")
     transcript_text = "\n".join(
@@ -691,13 +751,15 @@ def regenerate_recording_summary(
         database,
         user_id=user_id,
         job_type="recording_summary_regeneration",
-        target_type="recording",
-        target_id=recording.id,
+        target_type="session",
+        target_id=session.id,
     )
     try:
         result = provider.summarize_transcript(
             title=recording.title,
-            duration_seconds=recording.duration_seconds or 60,
+            duration_seconds=sum(
+                segment.duration_seconds for segment in group_segments(database, recording)
+            ) or 60,
             transcript=transcript_text,
         )
     except ValueError as error:
@@ -722,14 +784,13 @@ def regenerate_recording_summary(
         raise ApiError(502, "recording_ai_service_failed", str(error)) from error
 
     now = utc_now()
-    summary = database.scalar(
-        select(RecordingSummary).where(RecordingSummary.recording_id == recording.id)
-    )
+    summary = session_summary(database, session.id)
     if summary is None:
         summary = RecordingSummary(
             id=str(uuid4()),
             user_id=user_id,
             recording_id=recording.id,
+            session_id=session.id,
             main_summary=result.summary,
             chapter_overview=result.chapters,
             manual_edited=False,
@@ -757,8 +818,8 @@ def regenerate_recording_summary(
         display_name=f"{recording.title} 纪要",
         expires_at=summary.expires_at,
         can_long_term_preserve=True,
-        owner_type="recording",
-        owner_id=recording.id,
+        owner_type="session",
+        owner_id=session.id,
     )
     complete_job(database, job, {"summary_id": summary.id})
     database.commit()
@@ -850,18 +911,8 @@ def create_recordings_router(
         避免前端几秒一次轮询时拉取整张转写表。
         """
         recording = get_recording(database, recording_id, user_id)
-        transcript = database.scalar(
-            select(RecordingTranscript).where(
-                RecordingTranscript.recording_id == recording.id,
-                RecordingTranscript.destroyed_at.is_(None),
-            )
-        )
-        summary = database.scalar(
-            select(RecordingSummary).where(
-                RecordingSummary.recording_id == recording.id,
-                RecordingSummary.destroyed_at.is_(None),
-            )
-        )
+        transcript = session_transcript(database, recording.session_id) if recording.session_id else None
+        summary = session_summary(database, recording.session_id) if recording.session_id else None
         return {
             "recording_id": recording.id,
             "archive_status": recording.archive_status,
@@ -1326,20 +1377,15 @@ def create_recordings_router(
         database: Annotated[Session, Depends(get_db)],
         x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
-        get_recording(database, recording_id, user_id)
+        recording = get_recording(database, recording_id, user_id)
         require_recording_access(
             database,
             recording_id=recording_id,
             user_id=user_id,
             raw_grant=x_profile_access_grant,
         )
-        transcript = database.scalar(
-            select(RecordingTranscript).where(
-                RecordingTranscript.recording_id == recording_id,
-                RecordingTranscript.user_id == user_id,
-                RecordingTranscript.destroyed_at.is_(None),
-            )
-        )
+        _, _ = require_archived_recording_group(database, recording)
+        transcript = session_transcript(database, recording.session_id or "")
         if transcript is None:
             raise ApiError(404, "transcript_not_found", "转写尚未生成或已销毁。")
         return serialize_transcript(database, transcript)
@@ -1352,20 +1398,15 @@ def create_recordings_router(
         database: Annotated[Session, Depends(get_db)],
         x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
-        get_recording(database, recording_id, user_id)
+        recording = get_recording(database, recording_id, user_id)
         require_recording_access(
             database,
             recording_id=recording_id,
             user_id=user_id,
             raw_grant=x_profile_access_grant,
         )
-        transcript = database.scalar(
-            select(RecordingTranscript).where(
-                RecordingTranscript.recording_id == recording_id,
-                RecordingTranscript.user_id == user_id,
-                RecordingTranscript.destroyed_at.is_(None),
-            )
-        )
+        _, _ = require_archived_recording_group(database, recording)
+        transcript = session_transcript(database, recording.session_id or "")
         if transcript is None:
             raise ApiError(404, "transcript_not_found", "转写尚未生成或已销毁。")
         if payload.speaker_key not in transcript.speakers_json:
@@ -1433,20 +1474,15 @@ def create_recordings_router(
         database: Annotated[Session, Depends(get_db)],
         x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
-        get_recording(database, recording_id, user_id)
+        recording = get_recording(database, recording_id, user_id)
         require_recording_access(
             database,
             recording_id=recording_id,
             user_id=user_id,
             raw_grant=x_profile_access_grant,
         )
-        summary = database.scalar(
-            select(RecordingSummary).where(
-                RecordingSummary.recording_id == recording_id,
-                RecordingSummary.user_id == user_id,
-                RecordingSummary.destroyed_at.is_(None),
-            )
-        )
+        _, _ = require_archived_recording_group(database, recording)
+        summary = session_summary(database, recording.session_id or "")
         if summary is None:
             raise ApiError(404, "recording_summary_not_found", "录音纪要尚未生成或已销毁。")
         return serialize_summary(database, summary)
@@ -1459,20 +1495,15 @@ def create_recordings_router(
         database: Annotated[Session, Depends(get_db)],
         x_profile_access_grant: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
-        get_recording(database, recording_id, user_id)
+        recording = get_recording(database, recording_id, user_id)
         require_recording_access(
             database,
             recording_id=recording_id,
             user_id=user_id,
             raw_grant=x_profile_access_grant,
         )
-        summary = database.scalar(
-            select(RecordingSummary).where(
-                RecordingSummary.recording_id == recording_id,
-                RecordingSummary.user_id == user_id,
-                RecordingSummary.destroyed_at.is_(None),
-            )
-        )
+        _, _ = require_archived_recording_group(database, recording)
+        summary = session_summary(database, recording.session_id or "")
         if summary is None:
             raise ApiError(404, "recording_summary_not_found", "录音纪要尚未生成或已销毁。")
         summary.main_summary = payload.main_summary.strip()
@@ -1497,12 +1528,8 @@ def create_recordings_router(
             user_id=user_id,
             raw_grant=x_profile_access_grant,
         )
-        summary = database.scalar(
-            select(RecordingSummary).where(RecordingSummary.recording_id == recording.id)
-        )
-        transcript = database.scalar(
-            select(RecordingTranscript).where(RecordingTranscript.recording_id == recording.id)
-        )
+        _, _ = require_archived_recording_group(database, recording)
+        summary = session_summary(database, recording.session_id or "")
         if summary and summary.manual_edited and not payload.confirm_overwrite:
             raise ApiError(
                 409,
@@ -1650,6 +1677,7 @@ def serialize_transcript(
     return {
         "transcript_id": transcript.id,
         "recording_id": transcript.recording_id,
+        "session_id": transcript.session_id,
         "expires_at": transcript.expires_at.isoformat(),
         "long_term_authorized_at": (
             resource.long_term_authorized_at.isoformat()
@@ -1672,6 +1700,7 @@ def serialize_summary(database: Session, summary: RecordingSummary) -> dict[str,
     return {
         "summary_id": summary.id,
         "recording_id": summary.recording_id,
+        "session_id": summary.session_id,
         "main_summary": summary.main_summary,
         "chapter_overview": summary.chapter_overview,
         "manual_edited": summary.manual_edited,

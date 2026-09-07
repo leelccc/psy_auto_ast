@@ -259,6 +259,12 @@ def profile_type_for_transcript(
     user_id: str,
     transcript: RecordingTranscript,
 ) -> str | None:
+    if transcript.session_id:
+        return profile_type_for_session(
+            database,
+            user_id=user_id,
+            session_id=transcript.session_id,
+        )
     return profile_type_for_recording(
         database,
         user_id=user_id,
@@ -272,6 +278,12 @@ def profile_type_for_summary(
     user_id: str,
     summary: RecordingSummary,
 ) -> str | None:
+    if summary.session_id:
+        return profile_type_for_session(
+            database,
+            user_id=user_id,
+            session_id=summary.session_id,
+        )
     return profile_type_for_recording(
         database,
         user_id=user_id,
